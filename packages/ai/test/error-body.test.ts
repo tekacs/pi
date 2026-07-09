@@ -85,6 +85,29 @@ describe("normalizeProviderError", () => {
 		expect(norm.messageCarriesBody).toBe(true);
 	});
 
+	it("ignores a stream-like $response.body instead of dumping its internals", () => {
+		// Bedrock over HTTP/2 can leave a live ClientHttp2Stream on $response.body
+		// when the SDK cannot buffer the error body. Stringifying it would surface
+		// junk like {"_events":...,"_readableState":...} instead of the message.
+		class FakeHttp2Stream {
+			_events = { close: [null], error: [null, null] };
+			_readableState = { highWaterMark: 65536, buffer: [] };
+			authority = "bedrock-runtime.us-east-1.amazonaws.com";
+		}
+		const error = Object.assign(new Error("The provided model identifier is invalid."), {
+			name: "ValidationException",
+			$metadata: { httpStatusCode: 400 },
+			$response: { statusCode: 400, body: new FakeHttp2Stream() },
+		});
+
+		const norm = normalizeProviderError(error);
+
+		expect(norm.status).toBe(400);
+		expect(norm.body).toBeUndefined();
+		expect(norm.messageCarriesBody).toBe(true);
+		expect(norm.message).toBe("The provided model identifier is invalid.");
+	});
+
 	it("JSON-stringifies a non-Error thrown value", () => {
 		const norm = normalizeProviderError({ reason: "boom" });
 

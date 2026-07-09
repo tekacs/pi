@@ -83,11 +83,11 @@ function extractBody(error: SdkErrorShape): string | undefined {
 
 function pickBodyText(error: SdkErrorShape): string | undefined {
 	if (typeof error.body === "string") return error.body;
-	if (isNonEmptyObject(error.error)) return safeJsonStringify(error.error);
+	if (isNonEmptyPlainObject(error.error)) return safeJsonStringify(error.error);
 	const responseBody = error.$response?.body;
 	if (typeof responseBody === "string") return responseBody;
 	if (isReadableStreamLike(responseBody)) return undefined;
-	if (isNonEmptyObject(responseBody)) return safeJsonStringify(responseBody);
+	if (isNonEmptyPlainObject(responseBody)) return safeJsonStringify(responseBody);
 	return undefined;
 }
 
@@ -95,8 +95,17 @@ function isReadableStreamLike(value: unknown): boolean {
 	return typeof value === "object" && value !== null && "pipe" in value && typeof value.pipe === "function";
 }
 
-function isNonEmptyObject(value: unknown): boolean {
-	return typeof value === "object" && value !== null && Object.keys(value).length > 0;
+/**
+ * Only plain objects qualify as a parsed body. Bedrock's `$response.body` can be
+ * a live Node http/http2 stream when the SDK could not buffer the error body;
+ * stringifying that dumps internals (`_events`, `_readableState`, ...) instead
+ * of a usable message, so class instances are treated as no body.
+ */
+function isNonEmptyPlainObject(value: unknown): boolean {
+	if (typeof value !== "object" || value === null) return false;
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) return false;
+	return Object.keys(value).length > 0;
 }
 
 /**
