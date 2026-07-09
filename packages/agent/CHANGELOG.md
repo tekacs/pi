@@ -13,6 +13,7 @@
 ### Added
 
 - Added context-aware `read`, `write`, `edit`, and `bash` harness tools backed by `ExecutionEnv`, including async bash execution preparation.
+- Added provider-managed assistant message commits so completed intermediate segments become durable while the final response continues streaming.
 
 ### Changed
 

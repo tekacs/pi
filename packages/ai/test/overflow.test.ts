@@ -122,6 +122,16 @@ describe("isContextOverflow", () => {
 		};
 	}
 
+	it("prefers active-context usage over aggregate provider-loop usage", () => {
+		const message = createLengthStopMessage(500_000, 700_000, 1);
+		message.stopReason = "stop";
+		message.usage.contextTokens = 120_000;
+		expect(isContextOverflow(message, 200_000)).toBe(false);
+
+		message.usage.contextTokens = 210_000;
+		expect(isContextOverflow(message, 200_000)).toBe(true);
+	});
+
 	it("detects Xiaomi-style overflow (length stop with zero output and filled context)", () => {
 		const message = createLengthStopMessage(58, 1048512, 0);
 		expect(isContextOverflow(message, 1048576)).toBe(true);

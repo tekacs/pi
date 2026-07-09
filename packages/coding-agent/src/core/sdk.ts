@@ -5,6 +5,7 @@ import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { AgentSession } from "./agent-session.ts";
 import { formatNoModelsAvailableMessage } from "./auth-guidance.ts";
+import { isClaudeAgentSdkModel, streamClaudeAgentSdk } from "./claude-agent-sdk-stream.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { convertToLlm } from "./messages.ts";
@@ -300,6 +301,26 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
+			if (isClaudeAgentSdkModel(model)) {
+				const auth = await modelRuntime.getAuth(model, { apiKey: options?.apiKey, env: options?.env });
+				if (!auth) {
+					throw new Error(`Provider is not configured: ${model.provider}`);
+				}
+				return streamClaudeAgentSdk(model, context, {
+					...options,
+					apiKey: options?.apiKey ?? auth.auth.apiKey,
+					cwd,
+					systemPrompt: agent.state.systemPrompt,
+					tools: agent.state.tools,
+					agentContext: {
+						systemPrompt: agent.state.systemPrompt,
+						messages: agent.state.messages,
+						tools: agent.state.tools,
+					},
+					beforeToolCall: agent.beforeToolCall,
+					afterToolCall: agent.afterToolCall,
+				});
+			}
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
 			// SDKs treat timeout=0 as 0ms (immediate timeout), not "no timeout".

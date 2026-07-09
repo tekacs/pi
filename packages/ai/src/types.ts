@@ -369,6 +369,12 @@ export interface Usage {
 	 * providers that expose a reasoning breakdown; left undefined by providers that don't.
 	 */
 	reasoning?: number;
+	/**
+	 * Tokens occupying the active model context after the final request. Providers
+	 * that aggregate several internal requests into one Usage block set this so
+	 * context accounting can remain distinct from cumulative billing usage.
+	 */
+	contextTokens?: number;
 	totalTokens: number;
 	cost: {
 		input: number;
@@ -487,6 +493,12 @@ export interface Context {
  * - `done` carrying the final successful AssistantMessage, or
  * - `error` carrying the final AssistantMessage with stopReason "error" or "aborted"
  *   and errorMessage.
+ *
+ * Providers that execute tools internally may emit `tool_execution_*` events so
+ * hosts can render that lifecycle without adding executable tool calls to the
+ * final AssistantMessage. They may also commit completed assistant segments
+ * before the final message so hosts can persist long-running provider-managed
+ * turns without conflating live snapshot replacement with durable history.
  */
 export type AssistantMessageEvent =
 	| { type: "start"; partial: AssistantMessage }
@@ -499,6 +511,10 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_start"; contentIndex: number; partial: AssistantMessage }
 	| { type: "toolcall_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
+	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
+	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown }
+	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }
+	| { type: "assistant_message_commit"; message: AssistantMessage; alreadyStreamed?: boolean }
 	| { type: "done"; reason: Extract<StopReason, "stop" | "length" | "toolUse">; message: AssistantMessage }
 	| { type: "error"; reason: Extract<StopReason, "aborted" | "error">; error: AssistantMessage };
 

@@ -45,6 +45,7 @@
 - Added inherited OpenRouter OAuth PKCE login through `/login`, minting a user-controlled API key. See [OpenRouter](docs/providers.md#openrouter) ([#6927](https://github.com/earendil-works/pi/pull/6927) by [@rsaryev](https://github.com/rsaryev)).
 - Exposed `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` to commands run by built-in and factory-created bash tools. See [Bash Tool Session Environment](docs/environment-variables.md#bash-tool-session-environment).
 - Added streaming `bash_execution_update` events for direct RPC bash commands, correlated with request IDs. See [RPC bash events](docs/rpc.md#bash_execution_update) ([#6971](https://github.com/earendil-works/pi/pull/6971) by [@ananthakumaran](https://github.com/ananthakumaran)).
+- Added experimental Claude Agent SDK provider support that runs the SDK with Claude built-ins disabled and exposes pi's active tools through an in-process MCP server.
 
 ### Changed
 
@@ -69,6 +70,10 @@
 - Updated the packaged `protobufjs` dependency to 7.6.5 to address GHSA-j3f2-48v5-ccww ([#7005](https://github.com/earendil-works/pi/issues/7005)).
 - Fixed `/copy` on Wayland to fall back to X11 or OSC 52 when `wl-copy` fails ([#7009](https://github.com/earendil-works/pi/pull/7009) by [@rkfshakti](https://github.com/rkfshakti)).
 - Fixed `/model` to reload updated `models.json` configuration when opening the model picker ([#6999](https://github.com/earendil-works/pi/issues/6999)).
+- Disabled Claude Agent SDK native compaction so pi exclusively owns context summarization, routed SDK prompt-overflow termination through pi's compact-and-retry flow, streamed deduplicated inner-request usage into the live footer, separated active-context usage from aggregate SDK agent-loop usage, and reused the SDK process after compaction by clearing its native transcript before replay.
+- Fixed Claude Agent SDK thinking display to stream summarized reasoning instead of receiving empty signature-only thinking blocks.
+- Fixed Claude Agent SDK intermediate top-level and nested assistant text disappearing across message and tool-call boundaries.
+- Fixed Claude Agent SDK supersession to commit intermediate assistant segments to the live transcript and session history instead of deleting them when a later frame replaces the provider snapshot.
 
 ## [0.81.1] - 2026-07-21
 

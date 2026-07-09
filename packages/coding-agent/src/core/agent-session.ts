@@ -621,8 +621,10 @@ export class AgentSession {
 		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
 
-		// Handle session persistence
-		if (event.type === "message_end") {
+		// Handle session persistence. Provider-managed commits are immutable
+		// assistant segments; unlike message_end they do not pass through extension
+		// replacement hooks, but they must become durable immediately.
+		if (event.type === "message_end" || event.type === "message_commit") {
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
 				// Persist as CustomMessageEntry
@@ -642,8 +644,8 @@ export class AgentSession {
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-			// Track assistant message for auto-compaction (checked on agent_end)
-			if (event.message.role === "assistant") {
+			// Track the terminal assistant message for retry and auto-compaction.
+			if (event.type === "message_end" && event.message.role === "assistant") {
 				this._lastAssistantMessage = event.message;
 
 				const assistantMsg = event.message as AssistantMessage;
@@ -3159,6 +3161,8 @@ export class AgentSession {
 
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
+		const streaming = this.state.streamingMessage;
+		const activeMessages = streaming?.role === "assistant" ? [...this.messages, streaming] : this.messages;
 
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
@@ -3169,17 +3173,17 @@ export class AgentSession {
 		if (latestCompaction) {
 			// Check if there's a valid assistant usage after the compaction boundary
 			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
-			let hasPostCompactionUsage = false;
-			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
+			let hasPostCompactionUsage =
+				streaming?.role === "assistant" &&
+				streaming.stopReason !== "aborted" &&
+				streaming.stopReason !== "error" &&
+				calculateContextTokens(streaming.usage) > 0;
+			for (let i = branchEntries.length - 1; !hasPostCompactionUsage && i > compactionIndex; i--) {
 				const entry = branchEntries[i];
 				if (entry.type === "message" && entry.message.role === "assistant") {
 					const assistant = entry.message;
 					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
-						const contextTokens = calculateContextTokens(assistant.usage);
-						if (contextTokens > 0) {
-							hasPostCompactionUsage = true;
-							break;
-						}
+						hasPostCompactionUsage = calculateContextTokens(assistant.usage) > 0;
 					}
 				}
 			}
@@ -3189,7 +3193,7 @@ export class AgentSession {
 			}
 		}
 
-		const estimate = estimateContextTokens(this.messages);
+		const estimate = estimateContextTokens(activeMessages);
 		const percent = (estimate.tokens / contextWindow) * 100;
 
 		return {

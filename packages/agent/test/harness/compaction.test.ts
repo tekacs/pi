@@ -162,8 +162,11 @@ describe("harness compaction", () => {
 		nextId = 0;
 	});
 
-	it("calculates total context tokens from usage", () => {
+	it("calculates active context tokens from usage", () => {
 		expect(calculateContextTokens(createMockUsage(1000, 500, 200, 100))).toBe(1800);
+		const aggregate = createMockUsage(1_000_000, 20_000, 2_000_000, 100_000);
+		aggregate.contextTokens = 900_000;
+		expect(calculateContextTokens(aggregate)).toBe(900_000);
 		expect(calculateContextTokens(createMockUsage(0, 0, 0, 0))).toBe(0);
 	});
 

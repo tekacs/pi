@@ -84,7 +84,7 @@ const NON_OVERFLOW_PATTERNS = [
  * 1. Error-based overflow: Most providers return stopReason "error" with a
  *    specific error message pattern.
  * 2. Silent overflow: Some providers accept overflow requests and return
- *    successfully. For these, we check if usage.input exceeds the context window.
+ *    successfully. For these, we compare active context usage with the context window.
  *
  * ## Reliability by Provider
  *
@@ -139,10 +139,10 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 		}
 	}
 
-	// Case 2: Silent overflow (z.ai style) - successful but usage exceeds context
+	// Case 2: Silent overflow (z.ai style) - successful but active usage exceeds context
 	if (contextWindow && message.stopReason === "stop") {
-		const inputTokens = message.usage.input + message.usage.cacheRead;
-		if (inputTokens > contextWindow) {
+		const contextTokens = message.usage.contextTokens ?? message.usage.input + message.usage.cacheRead;
+		if (contextTokens > contextWindow) {
 			return true;
 		}
 	}
@@ -151,8 +151,8 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 	// to fit the context window, leaving no room for output. Returns stopReason "length"
 	// with output=0 and input+cacheRead filling the context window.
 	if (contextWindow && message.stopReason === "length" && message.usage.output === 0) {
-		const inputTokens = message.usage.input + message.usage.cacheRead;
-		if (inputTokens >= contextWindow * 0.99) {
+		const contextTokens = message.usage.contextTokens ?? message.usage.input + message.usage.cacheRead;
+		if (contextTokens >= contextWindow * 0.99) {
 			return true;
 		}
 	}

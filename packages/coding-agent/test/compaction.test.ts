@@ -196,6 +196,12 @@ describe("Token calculation", () => {
 		expect(calculateContextTokens(usage)).toBe(1800);
 	});
 
+	it("should prefer explicit active-context usage over aggregate usage", () => {
+		const usage = createMockUsage(1_000_000, 20_000, 2_000_000, 100_000);
+		usage.contextTokens = 900_000;
+		expect(calculateContextTokens(usage)).toBe(900_000);
+	});
+
 	it("should handle zero values", () => {
 		const usage = createMockUsage(0, 0, 0, 0);
 		expect(calculateContextTokens(usage)).toBe(0);

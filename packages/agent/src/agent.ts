@@ -536,6 +536,15 @@ export class Agent {
 				this._state.streamingMessage = event.message;
 				break;
 
+			case "message_commit": {
+				const streamingIndex = this._state.streamingMessage
+					? this._state.messages.lastIndexOf(this._state.streamingMessage)
+					: -1;
+				if (streamingIndex === -1) this._state.messages.push(event.message);
+				else this._state.messages.splice(streamingIndex, 0, event.message);
+				break;
+			}
+
 			case "message_end":
 				this._state.streamingMessage = undefined;
 				this._state.messages.push(event.message);
