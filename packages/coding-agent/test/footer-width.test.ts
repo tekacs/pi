@@ -26,6 +26,7 @@ function createSession(options: {
 	toolUsage?: AssistantUsage;
 	usingSubscription?: boolean;
 	routedModel?: { model: { id: string }; thinkingLevel?: string };
+	streamingUsage?: AssistantUsage;
 }): AgentSession {
 	const usage = options.usage;
 	const entries: Array<Record<string, unknown>> = [];
@@ -73,6 +74,7 @@ function createSession(options: {
 				reasoning: options.reasoning ?? false,
 			},
 			thinkingLevel: options.thinkingLevel ?? "off",
+			streamingMessage: options.streamingUsage ? { role: "assistant", usage: options.streamingUsage } : undefined,
 		},
 		sessionManager: {
 			getEntries: () => entries,
@@ -278,5 +280,41 @@ describe("FooterComponent width handling", () => {
 
 		expect(stats).toContain("$1.234");
 		expect(stats).not.toContain("(sub)");
+	});
+
+	it("includes provisional usage from the streaming assistant message", () => {
+		const session = createSession({
+			sessionName: "",
+			usage: {
+				input: 100,
+				output: 10,
+				cacheRead: 50,
+				cacheWrite: 50,
+				cost: { total: 0.001 },
+			},
+			streamingUsage: {
+				input: 200,
+				output: 20,
+				cacheRead: 100,
+				cacheWrite: 100,
+				cost: { total: 0.002 },
+			},
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+
+		const statsLine = stripAnsi(footer.render(120)[1]);
+		expect(statsLine).toContain("↑300");
+		expect(statsLine).toContain("↓30");
+		expect(statsLine).toContain("R150");
+		expect(statsLine).toContain("W150");
+		expect(statsLine).toContain("CH25.0%");
+		expect(statsLine).toContain("$0.003");
+
+		// Streaming updates do not move the session leaf or change entry count.
+		const streaming = session.state.streamingMessage;
+		if (!streaming || streaming.role !== "assistant") throw new Error("Missing stream");
+		streaming.usage.output = 40;
+		expect(stripAnsi(footer.render(120)[1])).toContain("↓50");
+		expect(stripAnsi(footer.render(120)[1])).toContain("↑300");
 	});
 });

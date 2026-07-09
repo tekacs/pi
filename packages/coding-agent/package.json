@@ -41,11 +41,13 @@
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"dependencies": {
+		"@anthropic-ai/claude-agent-sdk": "0.3.219",
 		"@earendil-works/pi-agent-core": "1.4.0",
 		"@earendil-works/pi-ai": "1.4.0",
 		"@earendil-works/pi-codemode": "1.4.0",
 		"@earendil-works/pi-mcp": "1.4.0",
 		"@earendil-works/pi-tui": "1.4.0",
+		"@modelcontextprotocol/sdk": "1.29.0",
 		"@silvia-odwyer/photon-node": "0.3.4",
 		"brace-expansion": "5.0.12",
 		"chalk": "6.0.0",
