@@ -60,6 +60,21 @@ describe("context token estimation", () => {
 		expect(buildBaseOptions(model, context).maxTokens).toBe(4_899);
 	});
 
+	it("uses explicit active-context usage instead of aggregate billing usage", () => {
+		const assistant = createAssistant(200, 3_000_000);
+		assistant.usage.contextTokens = 900_000;
+		const context: Context = {
+			messages: [assistant, { role: "user", content: "tail", timestamp: 300 }],
+		};
+
+		expect(estimateContextTokens(context)).toEqual({
+			tokens: 900_001,
+			usageTokens: 900_000,
+			trailingTokens: 1,
+			lastUsageIndex: 0,
+		});
+	});
+
 	it("uses assistant usage again after a response to the inserted context", () => {
 		const context: Context = {
 			messages: [

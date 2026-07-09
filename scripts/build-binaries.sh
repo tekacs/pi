@@ -97,16 +97,16 @@ fi
 if [[ "$SKIP_DEPS" == "false" ]]; then
     echo "==> Installing cross-platform native bindings..."
     CLIPBOARD_VERSION=$(node -p "require('./packages/coding-agent/package.json').optionalDependencies['@mariozechner/clipboard']")
-    # npm ci only installs optional deps for the current platform. Install the
-    # cross-platform packages in isolation so npm does not re-resolve and mutate
-    # the workspace dependency graph, which can trigger npm/arborist failures.
+    CLAUDE_AGENT_SDK_VERSION=$(node -p "require('./packages/coding-agent/package.json').dependencies['@anthropic-ai/claude-agent-sdk']")
+    # npm ci only installs optional deps for the current platform. Install all
+    # cross-platform bindings and SDK sidecars in isolation so npm does not
+    # re-resolve and mutate the workspace dependency graph.
     NATIVE_DEPS_DIR=$(mktemp -d)
     cleanup_native_deps() {
         rm -rf "$NATIVE_DEPS_DIR"
     }
     trap cleanup_native_deps EXIT
     printf '%s\n' '{"private":true}' > "$NATIVE_DEPS_DIR/package.json"
-    # Use --force to bypass platform checks (os/cpu restrictions in package.json).
     npm install --prefix "$NATIVE_DEPS_DIR" --include=optional --no-save --package-lock=false --force --ignore-scripts \
         @mariozechner/clipboard@"$CLIPBOARD_VERSION" \
         @mariozechner/clipboard-darwin-arm64@"$CLIPBOARD_VERSION" \
@@ -114,8 +114,14 @@ if [[ "$SKIP_DEPS" == "false" ]]; then
         @mariozechner/clipboard-linux-x64-gnu@"$CLIPBOARD_VERSION" \
         @mariozechner/clipboard-linux-arm64-gnu@"$CLIPBOARD_VERSION" \
         @mariozechner/clipboard-win32-x64-msvc@"$CLIPBOARD_VERSION" \
-        @mariozechner/clipboard-win32-arm64-msvc@"$CLIPBOARD_VERSION"
-    mkdir -p node_modules/@mariozechner
+        @mariozechner/clipboard-win32-arm64-msvc@"$CLIPBOARD_VERSION" \
+        @anthropic-ai/claude-agent-sdk-darwin-arm64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-darwin-x64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-linux-arm64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-linux-x64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-win32-arm64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-win32-x64@"$CLAUDE_AGENT_SDK_VERSION"
+    mkdir -p node_modules/@mariozechner node_modules/@anthropic-ai
     for package in \
         clipboard \
         clipboard-darwin-arm64 \
@@ -126,6 +132,16 @@ if [[ "$SKIP_DEPS" == "false" ]]; then
         clipboard-win32-arm64-msvc; do
         rm -rf "node_modules/@mariozechner/$package"
         cp -R "$NATIVE_DEPS_DIR/node_modules/@mariozechner/$package" node_modules/@mariozechner/
+    done
+    for package in \
+        claude-agent-sdk-darwin-arm64 \
+        claude-agent-sdk-darwin-x64 \
+        claude-agent-sdk-linux-arm64 \
+        claude-agent-sdk-linux-x64 \
+        claude-agent-sdk-win32-arm64 \
+        claude-agent-sdk-win32-x64; do
+        rm -rf "node_modules/@anthropic-ai/$package"
+        cp -R "$NATIVE_DEPS_DIR/node_modules/@anthropic-ai/$package" node_modules/@anthropic-ai/
     done
     cleanup_native_deps
     trap - EXIT
@@ -199,26 +215,38 @@ for platform in "${PLATFORMS[@]}"; do
         darwin-arm64)
             clipboard_native_package="clipboard-darwin-arm64"
             clipboard_native_file="clipboard.darwin-arm64.node"
+            claude_native_package="claude-agent-sdk-darwin-arm64"
+            claude_native_file="claude"
             ;;
         darwin-x64)
             clipboard_native_package="clipboard-darwin-x64"
             clipboard_native_file="clipboard.darwin-x64.node"
+            claude_native_package="claude-agent-sdk-darwin-x64"
+            claude_native_file="claude"
             ;;
         linux-x64)
             clipboard_native_package="clipboard-linux-x64-gnu"
             clipboard_native_file="clipboard.linux-x64-gnu.node"
+            claude_native_package="claude-agent-sdk-linux-x64"
+            claude_native_file="claude"
             ;;
         linux-arm64)
             clipboard_native_package="clipboard-linux-arm64-gnu"
             clipboard_native_file="clipboard.linux-arm64-gnu.node"
+            claude_native_package="claude-agent-sdk-linux-arm64"
+            claude_native_file="claude"
             ;;
         windows-x64)
             clipboard_native_package="clipboard-win32-x64-msvc"
             clipboard_native_file="clipboard.win32-x64-msvc.node"
+            claude_native_package="claude-agent-sdk-win32-x64"
+            claude_native_file="claude.exe"
             ;;
         windows-arm64)
             clipboard_native_package="clipboard-win32-arm64-msvc"
             clipboard_native_file="clipboard.win32-arm64-msvc.node"
+            claude_native_package="claude-agent-sdk-win32-arm64"
+            claude_native_file="claude.exe"
             ;;
     esac
     mkdir -p "$OUTPUT_DIR/$platform/node_modules/@mariozechner"
@@ -226,6 +254,13 @@ for platform in "${PLATFORMS[@]}"; do
     cp -r ../../node_modules/@mariozechner/$clipboard_native_package "$OUTPUT_DIR/$platform/node_modules/@mariozechner/"
     cp "../../node_modules/@mariozechner/$clipboard_native_package/$clipboard_native_file" \
         "$OUTPUT_DIR/$platform/node_modules/@mariozechner/clipboard/"
+
+    mkdir -p "$OUTPUT_DIR/$platform/native/claude-agent-sdk"
+    cp "../../node_modules/@anthropic-ai/$claude_native_package/$claude_native_file" \
+        "$OUTPUT_DIR/$platform/native/claude-agent-sdk/$claude_native_file"
+    if [[ "$platform" != windows-* ]]; then
+        chmod +x "$OUTPUT_DIR/$platform/native/claude-agent-sdk/$claude_native_file"
+    fi
 
     # Copy terminal input native helpers next to compiled binaries.
     if [[ "$platform" == darwin-* ]]; then

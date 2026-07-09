@@ -1,4 +1,5 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import type { Usage } from "@earendil-works/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
@@ -88,20 +89,23 @@ export class FooterComponent implements Component {
 		const usageTotals = createUsageTotals();
 		let latestCacheHitRate: number | undefined;
 
+		const addLatestUsage = (usage: Usage) => {
+			addUsageToTotals(usageTotals, usage);
+			const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+			if (promptTokens > 0) latestCacheHitRate = (usage.cacheRead / promptTokens) * 100;
+		};
+
 		for (const entry of this.session.sessionManager.getEntries()) {
 			if (entry.type === "message" && entry.message.role === "assistant") {
-				addUsageToTotals(usageTotals, entry.message.usage);
-
-				const latestPromptTokens =
-					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
-				latestCacheHitRate =
-					latestPromptTokens > 0 ? (entry.message.usage.cacheRead / latestPromptTokens) * 100 : undefined;
+				addLatestUsage(entry.message.usage);
 			} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
 				addUsageToTotals(usageTotals, entry.message.usage);
 			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 				addUsageToTotals(usageTotals, entry.usage);
 			}
 		}
+		const streaming = state.streamingMessage;
+		if (streaming?.role === "assistant") addLatestUsage(streaming.usage);
 
 		// Calculate context usage from session (handles compaction correctly).
 		// After compaction, tokens are unknown until the next LLM response.

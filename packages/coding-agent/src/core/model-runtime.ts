@@ -40,6 +40,7 @@ import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
+import { sdkProviders } from "./claude-agent-sdk-models.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
@@ -180,13 +181,16 @@ export class ModelRuntime implements Models {
 				? new FileModelsStore(options.modelsStorePath ?? join(dirname(modelsPath), "models-store.json"))
 				: new InMemoryCodingAgentModelsStore());
 		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
-		const providers = builtinProviderCatalog
-			.builtinProviders()
-			.map((provider) =>
-				provider.id === "radius"
-					? provider
-					: withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
-			);
+		const providers = [
+			...builtinProviderCatalog
+				.builtinProviders()
+				.map((provider) =>
+					provider.id === "radius"
+						? provider
+						: withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
+				),
+			...sdkProviders(),
+		];
 		const runtime = new ModelRuntime(
 			credentials,
 			config,

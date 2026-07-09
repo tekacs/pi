@@ -190,8 +190,14 @@ async function runLoop(
 			}
 
 			// Stream assistant response
-			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
-			newMessages.push(message);
+			const { message, committedMessages } = await streamAssistantResponse(
+				currentContext,
+				config,
+				signal,
+				emit,
+				streamFunction,
+			);
+			newMessages.push(...committedMessages, message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				await emit({ type: "turn_end", message, toolResults: [] });
@@ -284,7 +290,7 @@ async function streamAssistantResponse(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 	streamFunction: StreamFn,
-): Promise<AssistantMessage> {
+): Promise<{ message: AssistantMessage; committedMessages: AssistantMessage[] }> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
 	if (config.transformContext) {
@@ -313,6 +319,7 @@ async function streamAssistantResponse(
 
 	let partialMessage: AssistantMessage | null = null;
 	let addedPartial = false;
+	const committedMessages: AssistantMessage[] = [];
 
 	for await (const event of response) {
 		switch (event.type) {
@@ -321,6 +328,48 @@ async function streamAssistantResponse(
 				context.messages.push(partialMessage);
 				addedPartial = true;
 				await emit({ type: "message_start", message: { ...partialMessage } });
+				break;
+
+			case "assistant_message_commit": {
+				committedMessages.push(event.message);
+				const partialIndex = partialMessage ? context.messages.lastIndexOf(partialMessage) : -1;
+				if (partialIndex === -1) context.messages.push(event.message);
+				else context.messages.splice(partialIndex, 0, event.message);
+				await emit({
+					type: "message_commit",
+					message: event.message,
+					...(event.alreadyStreamed !== undefined ? { alreadyStreamed: event.alreadyStreamed } : {}),
+				});
+				break;
+			}
+
+			case "tool_execution_start":
+				await emit({
+					type: "tool_execution_start",
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					args: event.args,
+				});
+				break;
+
+			case "tool_execution_update":
+				await emit({
+					type: "tool_execution_update",
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					args: event.args,
+					partialResult: event.partialResult,
+				});
+				break;
+
+			case "tool_execution_end":
+				await emit({
+					type: "tool_execution_end",
+					toolCallId: event.toolCallId,
+					toolName: event.toolName,
+					result: event.result,
+					isError: event.isError,
+				});
 				break;
 
 			case "text_start":
@@ -355,7 +404,7 @@ async function streamAssistantResponse(
 					await emit({ type: "message_start", message: { ...finalMessage } });
 				}
 				await emit({ type: "message_end", message: finalMessage });
-				return finalMessage;
+				return { message: finalMessage, committedMessages };
 			}
 		}
 	}
@@ -368,7 +417,7 @@ async function streamAssistantResponse(
 		await emit({ type: "message_start", message: { ...finalMessage } });
 	}
 	await emit({ type: "message_end", message: finalMessage });
-	return finalMessage;
+	return { message: finalMessage, committedMessages };
 }
 
 /**

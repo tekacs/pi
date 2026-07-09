@@ -49,7 +49,16 @@ type _AiToolCallFieldsAccountedFor = Assert<
 type _AiUsageFieldsAccountedFor = Assert<
 	ExactKeys<
 		AiUsage,
-		"input" | "output" | "cacheRead" | "cacheWrite" | "cacheWrite1h" | "reasoning" | "totalTokens" | "cost"
+		| "input"
+		| "output"
+		| "cacheRead"
+		| "cacheWrite"
+		| "cacheWrite1h"
+		| "reasoning"
+		| "contextTokens"
+		| "entryPrompt"
+		| "totalTokens"
+		| "cost"
 	>
 >;
 type _AiUsageCostFieldsAccountedFor = Assert<
