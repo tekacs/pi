@@ -1183,8 +1183,10 @@ export class AgentSession {
 		await this._emitExtensionEvent(event);
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
 
-		// Handle session persistence
-		if (event.type === "message_end") {
+		// Handle session persistence. Provider-managed commits are immutable
+		// assistant segments; unlike message_end they do not pass through extension
+		// replacement hooks, but they must become durable immediately.
+		if (event.type === "message_end" || event.type === "message_commit") {
 			let entryId: string | undefined;
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
@@ -1207,7 +1209,8 @@ export class AgentSession {
 			if (entryId) this._entryIdsByMessage.set(event.message, entryId);
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-			if (event.message.role === "assistant") {
+			// Track the terminal assistant message for retry and auto-compaction.
+			if (event.type === "message_end" && event.message.role === "assistant") {
 				const assistantMsg = event.message as AssistantMessage;
 				this._lastAssistantMessage = assistantMsg;
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
@@ -4386,8 +4389,9 @@ export class AgentSession {
 		// After compaction, the last assistant usage reflects pre-compaction context size.
 		// We can only trust usage from an assistant that responded after the latest compaction.
 		// If no such assistant exists, context token count is unknown until the next LLM response.
-		const projection = this.sessionManager.buildSessionProjection();
-		const branch = this.sessionManager.getBranch();
+		// An in-flight assistant segment (provider-managed streams report usage before
+		// message_end) counts as the newest projected entry.
+		const { projection, branch } = this._activeProjection();
 		const latestCompaction = getLatestCompactionEntry(branch);
 
 		if (latestCompaction) {
@@ -4418,6 +4422,28 @@ export class AgentSession {
 			tokens: estimate.tokens,
 			contextWindow,
 			percent,
+		};
+	}
+
+	private _activeProjection(): { projection: SessionProjection; branch: SessionEntry[] } {
+		const projection = this.sessionManager.buildSessionProjection();
+		const branch = this.sessionManager.getBranch();
+		const streaming = this.state.streamingMessage;
+		if (streaming?.role !== "assistant") return { projection, branch };
+		const entry: SessionEntry = {
+			type: "message",
+			id: "<streaming>",
+			parentId: this.sessionManager.getLeafId(),
+			timestamp: new Date(streaming.timestamp).toISOString(),
+			message: streaming,
+		};
+		return {
+			projection: {
+				...projection,
+				entries: [...projection.entries, { sourceEntry: entry, messages: [streaming] }],
+				messages: [...projection.messages, streaming],
+			},
+			branch: [...branch, entry],
 		};
 	}
 
