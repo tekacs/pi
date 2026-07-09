@@ -8,6 +8,7 @@
 #
 # Options:
 #   --skip-install       Skip npm ci
+#   --skip-deps          Skip cross-platform SDK sidecar installation
 #   --skip-build         Skip the package build
 #   --offline-model-data Build with bundled model data instead of refreshing it
 #   --platform <name>    Build only for specified platform (darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64, windows-arm64)
@@ -27,6 +28,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SKIP_INSTALL=false
+SKIP_DEPS=false
 SKIP_BUILD=false
 OFFLINE_MODEL_DATA=false
 PLATFORM=""
@@ -36,6 +38,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --skip-install)
             SKIP_INSTALL=true
+            shift
+            ;;
+        --skip-deps)
+            SKIP_DEPS=true
             shift
             ;;
         --skip-build)
@@ -86,6 +92,40 @@ if [[ "$SKIP_INSTALL" == "false" ]]; then
     npm ci --ignore-scripts
 else
     echo "==> Skipping npm ci (--skip-install)"
+fi
+
+if [[ "$SKIP_DEPS" == "false" ]]; then
+    echo "==> Installing cross-platform SDK sidecars..."
+    CLAUDE_AGENT_SDK_VERSION=$(node -p "require('./packages/coding-agent/package.json').dependencies['@anthropic-ai/claude-agent-sdk']")
+    # Install sidecars in isolation without re-resolving the workspace graph.
+    NATIVE_DEPS_DIR=$(mktemp -d)
+    cleanup_native_deps() {
+        rm -rf "$NATIVE_DEPS_DIR"
+    }
+    trap cleanup_native_deps EXIT
+    printf '%s\n' '{"private":true}' > "$NATIVE_DEPS_DIR/package.json"
+    npm install --prefix "$NATIVE_DEPS_DIR" --include=optional --no-save --package-lock=false --force --ignore-scripts \
+        @anthropic-ai/claude-agent-sdk-darwin-arm64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-darwin-x64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-linux-arm64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-linux-x64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-win32-arm64@"$CLAUDE_AGENT_SDK_VERSION" \
+        @anthropic-ai/claude-agent-sdk-win32-x64@"$CLAUDE_AGENT_SDK_VERSION"
+    mkdir -p node_modules/@anthropic-ai
+    for package in \
+        claude-agent-sdk-darwin-arm64 \
+        claude-agent-sdk-darwin-x64 \
+        claude-agent-sdk-linux-arm64 \
+        claude-agent-sdk-linux-x64 \
+        claude-agent-sdk-win32-arm64 \
+        claude-agent-sdk-win32-x64; do
+        rm -rf "node_modules/@anthropic-ai/$package"
+        cp -R "$NATIVE_DEPS_DIR/node_modules/@anthropic-ai/$package" node_modules/@anthropic-ai/
+    done
+    cleanup_native_deps
+    trap - EXIT
+else
+    echo "==> Skipping cross-platform SDK sidecars (--skip-deps)"
 fi
 
 if [[ "$SKIP_BUILD" == "false" ]]; then
@@ -156,6 +196,18 @@ for platform in "${PLATFORMS[@]}"; do
     native_path="native/${native_platform%-*}/prebuilds"
     mkdir -p "$OUTPUT_DIR/$platform/$native_path"
     cp -R "../tui/$native_path/$native_platform" "$OUTPUT_DIR/$platform/$native_path/"
+
+    claude_native_package="claude-agent-sdk-$native_platform"
+    claude_native_file="claude"
+    if [[ "$platform" == windows-* ]]; then
+        claude_native_file="claude.exe"
+    fi
+    mkdir -p "$OUTPUT_DIR/$platform/native/claude-agent-sdk"
+    cp "../../node_modules/@anthropic-ai/$claude_native_package/$claude_native_file" \
+        "$OUTPUT_DIR/$platform/native/claude-agent-sdk/$claude_native_file"
+    if [[ "$platform" != windows-* ]]; then
+        chmod +x "$OUTPUT_DIR/$platform/native/claude-agent-sdk/$claude_native_file"
+    fi
 done
 
 # Create archives

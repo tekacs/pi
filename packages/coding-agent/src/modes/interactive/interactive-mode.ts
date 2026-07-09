@@ -475,6 +475,7 @@ export class InteractiveMode {
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private readonly entriesRenderedByBoundaryCompaction = new Set<string>();
 	private streamingMessage: AssistantMessage | undefined = undefined;
+	private streamingContentStart = 0;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -3411,6 +3412,7 @@ export class InteractiveMode {
 						this.getMarkdownTransformers(),
 					);
 					this.streamingMessage = event.message;
+					this.streamingContentStart = 0;
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
 					this.ui.requestRender();
@@ -3418,9 +3420,29 @@ export class InteractiveMode {
 				break;
 
 			case "message_update":
-				if (this.streamingComponent && event.message.role === "assistant") {
+				if (event.message.role === "assistant") {
 					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage, true);
+					const update = event.assistantMessageEvent;
+					if (!this.streamingComponent && (update.type === "text_start" || update.type === "thinking_start")) {
+						this.streamingContentStart = update.contentIndex;
+						this.streamingComponent = new AssistantMessageComponent(
+							undefined,
+							this.hideThinkingBlock,
+							this.getMarkdownThemeWithSettings(),
+							this.hiddenThinkingLabel,
+							this.outputPad,
+						);
+						this.chatContainer.addChild(this.streamingComponent);
+					}
+					if (this.streamingComponent) {
+						this.streamingComponent.updateContent(
+							{
+								...this.streamingMessage,
+								content: this.streamingMessage.content.slice(this.streamingContentStart),
+							},
+							true,
+						);
+					}
 
 					for (const content of this.streamingMessage.content) {
 						if (content.type === "toolCall") {
@@ -3452,9 +3474,31 @@ export class InteractiveMode {
 				}
 				break;
 
+			case "message_commit":
+				if (event.alreadyStreamed === false) {
+					const component = new AssistantMessageComponent(
+						event.message,
+						this.hideThinkingBlock,
+						this.getMarkdownThemeWithSettings(),
+						this.hiddenThinkingLabel,
+						this.outputPad,
+					);
+					const streamingIndex = this.streamingComponent
+						? this.chatContainer.children.indexOf(this.streamingComponent)
+						: -1;
+					if (streamingIndex === -1) this.chatContainer.addChild(component);
+					else this.chatContainer.children.splice(streamingIndex, 0, component);
+				} else {
+					// The segment is already visible in the streaming component. Freeze it
+					// in place; the next provider text/thinking start creates a new segment.
+					this.streamingComponent = undefined;
+				}
+				this.ui.requestRender();
+				break;
+
 			case "message_end":
 				if (event.message.role === "user") break;
-				if (this.streamingComponent && event.message.role === "assistant") {
+				if (event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
 					if (this.streamingMessage.stopReason === "aborted") {
@@ -3465,7 +3509,15 @@ export class InteractiveMode {
 								: "Operation aborted";
 						this.streamingMessage.errorMessage = errorMessage;
 					}
-					this.streamingComponent.updateContent(this.streamingMessage, false);
+					if (this.streamingComponent) {
+						this.streamingComponent.updateContent(
+							{
+								...this.streamingMessage,
+								content: this.streamingMessage.content.slice(this.streamingContentStart),
+							},
+							false,
+						);
+					}
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
 						if (!errorMessage) {
@@ -3489,6 +3541,7 @@ export class InteractiveMode {
 					}
 					this.streamingComponent = undefined;
 					this.streamingMessage = undefined;
+					this.streamingContentStart = 0;
 					this.footer.invalidate();
 				}
 				this.ui.requestRender();
@@ -3501,6 +3554,16 @@ export class InteractiveMode {
 			case "tool_execution_start": {
 				// Nested calls (from codemode scripts) are shown inside their parent's row.
 				if (event.parentToolCallId) break;
+				// Provider-managed tools can execute before the provider response ends.
+				// Freeze the preceding assistant segment so later text renders after the tool card.
+				if (this.streamingComponent && this.streamingMessage) {
+					const segment = this.streamingMessage.content.slice(this.streamingContentStart);
+					if (!segment.some((content) => content.type === "text" || content.type === "thinking")) {
+						this.chatContainer.removeChild(this.streamingComponent);
+					}
+					this.streamingComponent = undefined;
+				}
+
 				let component = this.pendingTools.get(event.toolCallId);
 				if (!component) {
 					component = new ToolExecutionComponent(
@@ -3551,8 +3614,9 @@ export class InteractiveMode {
 				if (this.streamingComponent) {
 					this.chatContainer.removeChild(this.streamingComponent);
 					this.streamingComponent = undefined;
-					this.streamingMessage = undefined;
 				}
+				this.streamingMessage = undefined;
+				this.streamingContentStart = 0;
 				this.pendingTools.clear();
 
 				this.ui.requestRender();

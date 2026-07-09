@@ -1,4 +1,5 @@
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import type { Usage } from "@earendil-works/pi-ai";
 import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
@@ -121,23 +122,23 @@ export class FooterComponent implements Component {
 		const usageTotals = createUsageTotals();
 		let latestCacheHitRate: number | undefined;
 
+		const addLatestUsage = (usage: Usage) => {
+			addUsageToTotals(usageTotals, usage);
+			const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+			if (promptTokens > 0) latestCacheHitRate = (usage.cacheRead / promptTokens) * 100;
+		};
+
 		for (const entry of sessionManager.getEntries()) {
 			if (entry.type === "usage") {
 				addUsageToTotals(usageTotals, entry.usage);
 			} else if (entry.type === "message" && entry.message.role === "assistant") {
-				addUsageToTotals(usageTotals, entry.message.usage);
-
-				const latestPromptTokens =
-					entry.message.usage.input + entry.message.usage.cacheRead + entry.message.usage.cacheWrite;
-				latestCacheHitRate =
-					latestPromptTokens > 0 ? (entry.message.usage.cacheRead / latestPromptTokens) * 100 : undefined;
+				addLatestUsage(entry.message.usage);
 			} else if (entry.type === "message" && entry.message.role === "toolResult" && entry.message.usage) {
 				addUsageToTotals(usageTotals, entry.message.usage);
 			} else if ((entry.type === "branch_summary" || entry.type === "compaction") && entry.usage) {
 				addUsageToTotals(usageTotals, entry.usage);
 			}
 		}
-
 		// Calculate context usage from session (handles compaction correctly).
 		// After compaction, tokens are unknown until the next LLM response.
 		const contextUsage = this.session.getContextUsage();
@@ -156,7 +157,18 @@ export class FooterComponent implements Component {
 
 	render(width: number): string[] {
 		const state = this.session.state;
-		const { usageTotals, latestCacheHitRate, contextUsage } = this.getSessionStats();
+		const stats = this.getSessionStats();
+		const usageTotals = { ...stats.usageTotals };
+		let latestCacheHitRate = stats.latestCacheHitRate;
+		const contextUsage = stats.contextUsage;
+		// Live usage changes without appending entries; never store it in the history cache.
+		const streaming = state.streamingMessage;
+		if (streaming?.role === "assistant") {
+			addUsageToTotals(usageTotals, streaming.usage);
+			const { input, cacheRead, cacheWrite } = streaming.usage;
+			const promptTokens = input + cacheRead + cacheWrite;
+			if (promptTokens > 0) latestCacheHitRate = (cacheRead / promptTokens) * 100;
+		}
 		const contextWindow = contextUsage?.contextWindow ?? state.model?.contextWindow ?? 0;
 		const contextPercentValue = contextUsage?.percent ?? 0;
 		const contextPercent = contextUsage?.percent !== null ? contextPercentValue.toFixed(1) : "?";
