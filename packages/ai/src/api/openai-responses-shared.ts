@@ -102,6 +102,28 @@ function convertToolResultOutput<TApi extends Api>(
 	return output;
 }
 
+function normalizeReasoningSummary(summary: ResponseReasoningItem["summary"]): {
+	text: string;
+	removedEmptyPlaceholder: boolean;
+} {
+	let removedEmptyPlaceholder = false;
+	const retainedParts = summary.filter(({ text }) => {
+		const part = text.trim();
+		const afterOpen = part.startsWith("**") ? part.slice(2) : undefined;
+		const close = afterOpen?.indexOf("**") ?? -1;
+		const body = close > 0 ? part.slice(close + 4) : part;
+		if (body.trim() !== "<!-- -->") return true;
+
+		removedEmptyPlaceholder = true;
+		return false;
+	});
+
+	return {
+		text: retainedParts.map((part) => part.text).join("\n\n"),
+		removedEmptyPlaceholder,
+	};
+}
+
 export interface OpenAIResponsesStreamOptions {
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 	grammarToolInputProperties?: ReadonlyMap<string, string>;
@@ -407,7 +429,7 @@ function appendCustomToolCallInput(block: StreamingToolCall, nextInput: string, 
 }
 
 type ResponsesOutputSlot =
-	| { type: "thinking"; block: ThinkingContent; contentIndex: number }
+	| { type: "thinking"; block: ThinkingContent; contentIndex: number; summaryPartCount: number }
 	| { type: "text"; block: TextContent; contentIndex: number }
 	| { type: "toolCall"; block: StreamingToolCall; contentIndex: number };
 
@@ -447,6 +469,7 @@ export async function processResponsesStream<TApi extends Api>(
 				type: "thinking",
 				block,
 				contentIndex: output.content.length - 1,
+				summaryPartCount: 0,
 			} satisfies ResponsesOutputSlot;
 			outputSlots.set(outputIndex, slot);
 			stream.push({ type: "thinking_start", contentIndex: slot.contentIndex, partial: output });
@@ -568,26 +591,25 @@ export async function processResponsesStream<TApi extends Api>(
 			output.responseId = event.response.id;
 		} else if (event.type === "response.output_item.added") {
 			createSlot(event.output_index, event.item);
-		} else if (event.type === "response.reasoning_summary_text.delta") {
-			const slot = getSlot(event.output_index, "thinking");
-			if (!slot) continue;
-			slot.block.thinking += event.delta;
-			stream.push({
-				type: "thinking_delta",
-				contentIndex: slot.contentIndex,
-				delta: event.delta,
-				partial: output,
-			});
 		} else if (event.type === "response.reasoning_summary_part.done") {
+			// Emit complete parts instead of raw deltas so placeholders never become visible mid-stream.
 			const slot = getSlot(event.output_index, "thinking");
 			if (!slot) continue;
-			slot.block.thinking += "\n\n";
-			stream.push({
-				type: "thinking_delta",
-				contentIndex: slot.contentIndex,
-				delta: "\n\n",
-				partial: output,
-			});
+			const summary = normalizeReasoningSummary([event.part]);
+			if (summary.removedEmptyPlaceholder) continue;
+
+			const separator = slot.summaryPartCount > 0 || slot.block.thinking.length > 0 ? "\n\n" : "";
+			const delta = separator + summary.text;
+			slot.summaryPartCount++;
+			slot.block.thinking += delta;
+			if (delta.length > 0) {
+				stream.push({
+					type: "thinking_delta",
+					contentIndex: slot.contentIndex,
+					delta,
+					partial: output,
+				});
+			}
 		} else if (event.type === "response.reasoning_text.delta") {
 			const slot = getSlot(event.output_index, "thinking");
 			if (!slot) continue;
@@ -651,9 +673,11 @@ export async function processResponsesStream<TApi extends Api>(
 			const slot = getOrCreateSlot(event.output_index, item);
 
 			if (item.type === "reasoning" && slot?.type === "thinking") {
-				const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
+				const summary = normalizeReasoningSummary(item.summary ?? []);
 				const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
-				slot.block.thinking = summaryText || contentText || slot.block.thinking;
+				slot.block.thinking = summary.removedEmptyPlaceholder
+					? summary.text
+					: summary.text || contentText || slot.block.thinking;
 				slot.block.thinkingSignature = JSON.stringify(item);
 				reasoningBlocksById.set(item.id, slot.block);
 				stream.push({

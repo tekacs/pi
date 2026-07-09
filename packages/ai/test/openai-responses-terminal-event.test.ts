@@ -153,6 +153,53 @@ async function* createFailedEvents(): AsyncIterable<ResponseStreamEvent> {
 	} as ResponseStreamEvent;
 }
 
+async function* createReasoningSummaryEvents(summaryTexts: string[]): AsyncIterable<ResponseStreamEvent> {
+	const summary = summaryTexts.map((text) => ({ type: "summary_text" as const, text }));
+	let sequenceNumber = 0;
+	yield {
+		type: "response.output_item.added",
+		sequence_number: sequenceNumber++,
+		output_index: 0,
+		item: { type: "reasoning", id: "rs_summary", summary: [] },
+	} as ResponseStreamEvent;
+
+	for (let summaryIndex = 0; summaryIndex < summary.length; summaryIndex++) {
+		const part = summary[summaryIndex];
+		yield {
+			type: "response.reasoning_summary_text.delta",
+			sequence_number: sequenceNumber++,
+			output_index: 0,
+			item_id: "rs_summary",
+			summary_index: summaryIndex,
+			delta: part.text,
+		} as ResponseStreamEvent;
+		yield {
+			type: "response.reasoning_summary_part.done",
+			sequence_number: sequenceNumber++,
+			output_index: 0,
+			item_id: "rs_summary",
+			summary_index: summaryIndex,
+			part,
+		} as ResponseStreamEvent;
+	}
+
+	yield {
+		type: "response.output_item.done",
+		sequence_number: sequenceNumber++,
+		output_index: 0,
+		item: { type: "reasoning", id: "rs_summary", summary, status: "completed" },
+	} as ResponseStreamEvent;
+	yield {
+		type: "response.completed",
+		sequence_number: sequenceNumber,
+		response: {
+			id: "resp_summary",
+			status: "completed",
+			usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+		},
+	} as ResponseStreamEvent;
+}
+
 describe("OpenAI Responses terminal event handling", () => {
 	it("rejects streams that end before a terminal response event", async () => {
 		const model = createModel();
@@ -229,5 +276,55 @@ describe("OpenAI Responses terminal event handling", () => {
 		await expect(processResponsesStream(createFailedEvents(), output, stream, model)).rejects.toThrow(
 			"server_error: boom",
 		);
+	});
+
+	it("removes placeholder-only reasoning summary parts", async () => {
+		const summaryTexts = ["**Checking the first thing**\n\n<!-- -->", "**Checking the second thing**\n\n<!-- -->"];
+		const model = createModel();
+		const output = createOutput(model);
+		const stream = new AssistantMessageEventStream();
+		const pushSpy = vi.spyOn(stream, "push");
+
+		await processResponsesStream(createReasoningSummaryEvents(summaryTexts), output, stream, model);
+
+		const thinkingDeltas = pushSpy.mock.calls.flatMap(([event]) =>
+			event.type === "thinking_delta" ? [event.delta] : [],
+		);
+		expect(thinkingDeltas).toEqual([]);
+		expect(output.content).toEqual([
+			{
+				type: "thinking",
+				thinking: "",
+				thinkingSignature: expect.any(String),
+			},
+		]);
+		const thinking = output.content[0];
+		if (thinking?.type !== "thinking" || !thinking.thinkingSignature) throw new Error("Expected signed thinking");
+		const signature = JSON.parse(thinking.thinkingSignature) as { summary: Array<{ text: string }> };
+		expect(signature.summary.map((part) => part.text)).toEqual(summaryTexts);
+	});
+
+	it("preserves real summaries and literal HTML comments while removing empty parts", async () => {
+		const model = createModel();
+		const output = createOutput(model);
+		const stream = new AssistantMessageEventStream();
+		const pushSpy = vi.spyOn(stream, "push");
+		const summaryTexts = [
+			"**Plan**\n\nUse `<!-- -->` in JSX.",
+			"**Checking tests**\n\n<!-- -->",
+			"**Result**\n\nTests passed",
+			"<!-- -->",
+		];
+
+		await processResponsesStream(createReasoningSummaryEvents(summaryTexts), output, stream, model);
+
+		const thinkingDeltas = pushSpy.mock.calls.flatMap(([event]) =>
+			event.type === "thinking_delta" ? [event.delta] : [],
+		);
+		expect(thinkingDeltas).toEqual(["**Plan**\n\nUse `<!-- -->` in JSX.", "\n\n**Result**\n\nTests passed"]);
+		expect(output.content[0]).toMatchObject({
+			type: "thinking",
+			thinking: "**Plan**\n\nUse `<!-- -->` in JSX.\n\n**Result**\n\nTests passed",
+		});
 	});
 });
