@@ -164,21 +164,14 @@ describe("agentLoop with AgentMessage", () => {
 			toolsAdded: [],
 			timestamp: 1,
 		};
-		const context: AgentContext = {
-			messages: [],
-			tools: [],
-		};
-		const config: AgentLoopConfig = {
-			model: createModel(),
-			convertToLlm: identityConverter,
-		};
+		const context: AgentContext = { messages: [], tools: [] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
 		const stream = agentLoop(
 			[initialSystem, createUserMessage("Hello")],
 			context,
 			config,
 			undefined,
 			(_model, providerContext) => {
-				// The provider receives a transcript: no top-level prompt or tool fields.
 				expect(Object.keys(providerContext)).toEqual(["messages"]);
 				expect(providerContext.messages[0]).toBe(initialSystem);
 				const response = createAssistantMessageEventStream();
@@ -192,8 +185,32 @@ describe("agentLoop with AgentMessage", () => {
 				return response;
 			},
 		);
-
 		await stream.result();
+	});
+
+	it("commits provider-managed assistant segments before the final message", async () => {
+		const context: AgentContext = { messages: [], tools: [] };
+		const committed = createAssistantMessage([{ type: "text", text: "Checking tests" }]);
+		const final = createAssistantMessage([{ type: "text", text: "Done" }]);
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+		const streamFn = () => {
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				stream.push({ type: "start", partial: createAssistantMessage([]) });
+				stream.push({ type: "assistant_message_commit", message: committed, alreadyStreamed: false });
+				stream.push({ type: "done", reason: "stop", message: final });
+			});
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const stream = agentLoop([createUserMessage("Run tests")], context, config, undefined, streamFn);
+		for await (const event of stream) events.push(event);
+
+		expect(events.filter((event) => event.type === "message_commit")).toEqual([
+			{ type: "message_commit", message: committed, alreadyStreamed: false },
+		]);
+		expect(await stream.result()).toEqual([expect.objectContaining({ role: "user" }), committed, final]);
 	});
 
 	it("should handle custom message types via convertToLlm", async () => {
@@ -451,6 +468,75 @@ describe("agentLoop with AgentMessage", () => {
 		expect(ran?.durationMs).toBeLessThan(100);
 		expect(blocked?.isError).toBe(true);
 		expect(blocked).not.toHaveProperty("durationMs");
+	});
+
+	it("should forward provider-managed tool execution events without executing tools again", async () => {
+		let executions = 0;
+		const toolSchema = Type.Object({ value: Type.String() });
+		const tool: AgentTool<typeof toolSchema> = {
+			name: "echo",
+			label: "Echo",
+			description: "Echo tool",
+			parameters: toolSchema,
+			async execute() {
+				executions++;
+				return { content: [], details: {} };
+			},
+		};
+		const context: AgentContext = { messages: [], tools: [tool] };
+		const config: AgentLoopConfig = { model: createModel(), convertToLlm: identityConverter };
+		const managedResult = { content: [{ type: "text" as const, text: "echoed" }], details: {} };
+		const stream = agentLoop([createUserMessage("echo")], context, config, undefined, () => {
+			const mockStream = createAssistantMessageEventStream();
+			queueMicrotask(() => {
+				const message = createAssistantMessage([{ type: "text", text: "done" }]);
+				mockStream.push({ type: "start", partial: createAssistantMessage([]) });
+				mockStream.push({
+					type: "tool_execution_start",
+					toolCallId: "managed-1",
+					toolName: "echo",
+					args: { value: "hello" },
+				});
+				mockStream.push({
+					type: "tool_execution_update",
+					toolCallId: "managed-1",
+					toolName: "echo",
+					args: { value: "hello" },
+					partialResult: { content: [{ type: "text", text: "working" }], details: {} },
+				});
+				mockStream.push({
+					type: "tool_execution_end",
+					toolCallId: "managed-1",
+					toolName: "echo",
+					result: managedResult,
+					isError: false,
+				});
+				mockStream.push({ type: "done", reason: "stop", message });
+			});
+			return mockStream;
+		});
+
+		const events: AgentEvent[] = [];
+		for await (const event of stream) events.push(event);
+
+		expect(executions).toBe(0);
+		expect(events.filter((event) => event.type.startsWith("tool_execution_"))).toEqual([
+			{ type: "tool_execution_start", toolCallId: "managed-1", toolName: "echo", args: { value: "hello" } },
+			{
+				type: "tool_execution_update",
+				toolCallId: "managed-1",
+				toolName: "echo",
+				args: { value: "hello" },
+				partialResult: { content: [{ type: "text", text: "working" }], details: {} },
+			},
+			{
+				type: "tool_execution_end",
+				toolCallId: "managed-1",
+				toolName: "echo",
+				result: managedResult,
+				isError: false,
+			},
+		]);
 	});
 
 	it("should not execute tool calls from a length-truncated assistant message", async () => {
