@@ -32,7 +32,11 @@ const APP_KEYBINDINGS = {
 	},
 	"app.thinking.cycle": {
 		defaultKeys: "shift+tab",
-		description: "Cycle thinking level",
+		description: "Cycle thinking level forward",
+	},
+	"app.thinking.cycleBackward": {
+		defaultKeys: [],
+		description: "Cycle thinking level backward",
 	},
 	"app.thinking.save": {
 		defaultKeys: "ctrl+s",
