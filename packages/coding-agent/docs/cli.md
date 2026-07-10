@@ -72,6 +72,8 @@ See [Choose a Model](models.md) for model selection and [Providers](providers.md
   Sets a comma-separated scope for startup and cycling. It accepts exact IDs, fuzzy matches, case-insensitive globs, and optional `:<thinking>` suffixes. A model offered by several providers is added for each, with a warning.
 - `--list-models [search]`<br>
   Lists available models, optionally filtered by a fuzzy search, then exits.
+- `--list-scoped-models [search]`<br>
+  Lists the models in the configured `--models` scope, optionally filtered by a fuzzy search, then exits.
 
 <a id="session-options"></a>
 
