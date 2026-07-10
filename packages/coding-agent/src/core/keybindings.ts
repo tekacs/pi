@@ -16,6 +16,7 @@ export interface AppKeybindings {
 	"app.exit": true;
 	"app.suspend": true;
 	"app.thinking.cycle": true;
+	"app.thinking.cycleBackward": true;
 	"app.model.cycleForward": true;
 	"app.model.cycleBackward": true;
 	"app.model.select": true;
@@ -72,7 +73,11 @@ export const KEYBINDINGS = {
 	},
 	"app.thinking.cycle": {
 		defaultKeys: "shift+tab",
-		description: "Cycle thinking level",
+		description: "Cycle thinking level forward",
+	},
+	"app.thinking.cycleBackward": {
+		defaultKeys: [],
+		description: "Cycle thinking level backward",
 	},
 	"app.model.cycleForward": {
 		defaultKeys: "ctrl+p",

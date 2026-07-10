@@ -143,7 +143,8 @@ This routing remains configurable through the ordinary action bindings. For exam
 | `app.model.select` | `ctrl+l` | Open model selector |
 | `app.model.cycleForward` | `ctrl+p` | Cycle to next model |
 | `app.model.cycleBackward` | `shift+ctrl+p` | Cycle to previous model |
-| `app.thinking.cycle` | `shift+tab` | Cycle thinking level |
+| `app.thinking.cycle` | `shift+tab` | Cycle thinking level forward |
+| `app.thinking.cycleBackward` | *(none)* | Cycle thinking level backward |
 | `app.thinking.toggle` | `ctrl+t` | Collapse or expand thinking blocks |
 
 ### Display and Message Queue
