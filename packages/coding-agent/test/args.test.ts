@@ -157,6 +157,18 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("model listing flags", () => {
+		test("parses --list-models with optional search", () => {
+			expect(parseArgs(["--list-models"]).listModels).toBe(true);
+			expect(parseArgs(["--list-models", "sonnet"]).listModels).toBe("sonnet");
+		});
+
+		test("parses --list-scoped-models with optional search", () => {
+			expect(parseArgs(["--list-scoped-models"]).listScopedModels).toBe(true);
+			expect(parseArgs(["--list-scoped-models", "sonnet"]).listScopedModels).toBe("sonnet");
+		});
+	});
+
 	describe("--name flag", () => {
 		test("parses --name flag with value", () => {
 			const result = parseArgs(["--name", "my-session"]);

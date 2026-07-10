@@ -26,23 +26,28 @@ function formatTokenCount(count: number): string {
 /**
  * List available models, optionally filtered by search pattern
  */
-export async function listModels(modelRuntime: ModelRuntime, searchPattern?: string): Promise<void> {
+export async function listModels(
+	modelRuntime: ModelRuntime,
+	searchPattern?: string,
+	models?: readonly Model<Api>[],
+	emptyMessage = formatNoModelsAvailableMessage(),
+): Promise<void> {
 	const loadError = modelRuntime.getError();
 	if (loadError) {
 		console.error(chalk.yellow(`Warning: errors loading models.json:\n${loadError}`));
 	}
 
-	const models = [...(await modelRuntime.getAvailable())];
+	models ??= await modelRuntime.getAvailable();
 
 	if (models.length === 0) {
-		console.log(formatNoModelsAvailableMessage());
+		console.log(emptyMessage);
 		return;
 	}
 
 	// Apply fuzzy filter if search pattern provided
-	let filteredModels: Model<Api>[] = models;
+	let filteredModels: readonly Model<Api>[] = models;
 	if (searchPattern) {
-		filteredModels = fuzzyFilter(models, searchPattern, (m) => `${m.provider} ${m.id}`);
+		filteredModels = fuzzyFilter([...models], searchPattern, (m) => `${m.provider} ${m.id}`);
 	}
 
 	if (filteredModels.length === 0) {
@@ -51,14 +56,14 @@ export async function listModels(modelRuntime: ModelRuntime, searchPattern?: str
 	}
 
 	// Sort by provider, then by model id
-	filteredModels.sort((a, b) => {
+	const sortedModels = [...filteredModels].sort((a, b) => {
 		const providerCmp = a.provider.localeCompare(b.provider);
 		if (providerCmp !== 0) return providerCmp;
 		return a.id.localeCompare(b.id);
 	});
 
 	// Calculate column widths
-	const rows = filteredModels.map((m) => ({
+	const rows = sortedModels.map((m) => ({
 		provider: m.provider,
 		model: m.id,
 		context: formatTokenCount(m.contextWindow),

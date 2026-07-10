@@ -559,6 +559,7 @@ cat README.md | pi -p "Summarize this text"
 | `--thinking <level>` | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
 | `--models <patterns>` | Comma-separated patterns for Ctrl+P cycling |
 | `--list-models [search]` | List available models |
+| `--list-scoped-models [search]` | List models in the configured scope |
 
 ### Session Options
 

@@ -115,7 +115,11 @@ function toPrintOutputMode(appMode: AppMode): Exclude<Mode, "rpc"> {
 }
 
 function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
-	return !parsed.print && parsed.mode === undefined && (parsed.help === true || parsed.listModels !== undefined);
+	return (
+		!parsed.print &&
+		parsed.mode === undefined &&
+		(parsed.help === true || parsed.listModels !== undefined || parsed.listScopedModels !== undefined)
+	);
 }
 
 async function prepareInitialMessage(
@@ -267,7 +271,7 @@ async function createSessionManager(
 	sessionDir: string | undefined,
 	settingsManager: SettingsManager,
 ): Promise<SessionManager> {
-	if (parsed.noSession || parsed.help || parsed.listModels !== undefined) {
+	if (parsed.noSession || parsed.help || parsed.listModels !== undefined || parsed.listScopedModels !== undefined) {
 		return SessionManager.inMemory(cwd, parsed.sessionId !== undefined ? { id: parsed.sessionId } : undefined);
 	}
 
@@ -560,7 +564,13 @@ export async function main(args: string[], options?: MainOptions) {
 
 	// Experimental first-time setup: theme choice and analytics opt-in.
 	// Runs before any runtime services are created so the chosen settings apply everywhere.
-	if (appMode === "interactive" && !parsed.help && parsed.listModels === undefined && shouldRunFirstTimeSetup()) {
+	if (
+		appMode === "interactive" &&
+		!parsed.help &&
+		parsed.listModels === undefined &&
+		parsed.listScopedModels === undefined &&
+		shouldRunFirstTimeSetup()
+	) {
 		await showFirstTimeSetup(startupSettingsManager);
 		time("firstTimeSetup");
 	}
@@ -760,6 +770,17 @@ export async function main(args: string[], options?: MainOptions) {
 	if (parsed.listModels !== undefined) {
 		const searchPattern = typeof parsed.listModels === "string" ? parsed.listModels : undefined;
 		await listModels(modelRuntime, searchPattern);
+		process.exit(0);
+	}
+
+	if (parsed.listScopedModels !== undefined) {
+		const searchPattern = typeof parsed.listScopedModels === "string" ? parsed.listScopedModels : undefined;
+		await listModels(
+			modelRuntime,
+			searchPattern,
+			session.scopedModels.map(({ model }) => model),
+			"No scoped models configured. Pass --models <patterns> or set enabledModels.",
+		);
 		process.exit(0);
 	}
 
