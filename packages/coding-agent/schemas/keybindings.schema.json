@@ -213,7 +213,11 @@
     },
     "app.thinking.cycle": {
       "$ref": "#/$defs/KeybindingValue",
-      "description": "Cycle thinking level"
+      "description": "Cycle thinking level forward"
+    },
+    "app.thinking.cycleBackward": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Cycle thinking level backward"
     },
     "app.thinking.save": {
       "$ref": "#/$defs/KeybindingValue",
