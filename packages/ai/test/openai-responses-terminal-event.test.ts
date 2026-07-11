@@ -492,7 +492,7 @@ describe("OpenAI Responses terminal event handling", () => {
 		expect(output.rawStopReason).toBe("failed");
 	});
 
-	it("removes placeholder-only reasoning summary parts", async () => {
+	it("removes empty placeholders while preserving their status headings", async () => {
 		const summaryTexts = ["**Checking the first thing**\n\n<!-- -->", "**Checking the second thing**\n\n<!-- -->"];
 		const model = createModel();
 		const output = createOutput(model);
@@ -504,11 +504,11 @@ describe("OpenAI Responses terminal event handling", () => {
 		const thinkingDeltas = pushSpy.mock.calls.flatMap(([event]) =>
 			event.type === "thinking_delta" ? [event.delta] : [],
 		);
-		expect(thinkingDeltas).toEqual([]);
+		expect(thinkingDeltas).toEqual(["**Checking the first thing**", "\n\n**Checking the second thing**"]);
 		expect(output.content).toEqual([
 			{
 				type: "thinking",
-				thinking: "",
+				thinking: "**Checking the first thing**\n\n**Checking the second thing**",
 				thinkingSignature: expect.any(String),
 			},
 		]);
@@ -535,10 +535,14 @@ describe("OpenAI Responses terminal event handling", () => {
 		const thinkingDeltas = pushSpy.mock.calls.flatMap(([event]) =>
 			event.type === "thinking_delta" ? [event.delta] : [],
 		);
-		expect(thinkingDeltas).toEqual(["**Plan**\n\nUse `<!-- -->` in JSX.", "\n\n**Result**\n\nTests passed"]);
+		expect(thinkingDeltas).toEqual([
+			"**Plan**\n\nUse `<!-- -->` in JSX.",
+			"\n\n**Checking tests**",
+			"\n\n**Result**\n\nTests passed",
+		]);
 		expect(output.content[0]).toMatchObject({
 			type: "thinking",
-			thinking: "**Plan**\n\nUse `<!-- -->` in JSX.\n\n**Result**\n\nTests passed",
+			thinking: "**Plan**\n\nUse `<!-- -->` in JSX.\n\n**Checking tests**\n\n**Result**\n\nTests passed",
 		});
 	});
 });
