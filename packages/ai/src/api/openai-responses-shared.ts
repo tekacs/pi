@@ -107,19 +107,20 @@ function normalizeReasoningSummary(summary: ResponseReasoningItem["summary"]): {
 	removedEmptyPlaceholder: boolean;
 } {
 	let removedEmptyPlaceholder = false;
-	const retainedParts = summary.filter(({ text }) => {
+	const retainedParts = summary.flatMap(({ text }) => {
 		const part = text.trim();
 		const afterOpen = part.startsWith("**") ? part.slice(2) : undefined;
 		const close = afterOpen?.indexOf("**") ?? -1;
-		const body = close > 0 ? part.slice(close + 4) : part;
-		if (body.trim() !== "<!-- -->") return true;
+		const headerEnd = close > 0 ? close + 4 : 0;
+		const body = headerEnd > 0 ? part.slice(headerEnd) : part;
+		if (body.trim() !== "<!-- -->") return [text];
 
 		removedEmptyPlaceholder = true;
-		return false;
+		return headerEnd > 0 ? [part.slice(0, headerEnd)] : [];
 	});
 
 	return {
-		text: retainedParts.map((part) => part.text).join("\n\n"),
+		text: retainedParts.join("\n\n"),
 		removedEmptyPlaceholder,
 	};
 }
@@ -596,7 +597,7 @@ export async function processResponsesStream<TApi extends Api>(
 			const slot = getSlot(event.output_index, "thinking");
 			if (!slot) continue;
 			const summary = normalizeReasoningSummary([event.part]);
-			if (summary.removedEmptyPlaceholder) continue;
+			if (!summary.text) continue;
 
 			const separator = slot.summaryPartCount > 0 || slot.block.thinking.length > 0 ? "\n\n" : "";
 			const delta = separator + summary.text;

@@ -43,7 +43,7 @@
 - Fixed OpenAI and Anthropic provider retry waits to honor abort signals and configured delay limits ([#6980](https://github.com/earendil-works/pi/pull/6980) by [@petrroll](https://github.com/petrroll)).
 - Fixed OpenRouter Anthropic cache breakpoints to advance through tool results and enabled cache control for `~anthropic/*-latest` aliases ([#6941](https://github.com/earendil-works/pi/pull/6941) by [@mteam88](https://github.com/mteam88)).
 - Fixed Bedrock error normalization to ignore stream-like `$response.body` objects, so validation errors surface the actual message instead of a JSON dump of HTTP/2 stream internals.
-- Fixed OpenAI Responses reasoning summaries to omit empty `<!-- -->` placeholder parts and their orphaned status headings.
+- Fixed OpenAI Responses reasoning summaries to remove empty `<!-- -->` placeholders while preserving their status headings.
 
 ## [0.81.1] - 2026-07-21
 
