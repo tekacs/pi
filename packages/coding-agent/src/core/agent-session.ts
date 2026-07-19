@@ -3341,6 +3341,7 @@ export class AgentSession {
 				setLabel: (entryId, label) => {
 					this.sessionManager.appendLabelChange(entryId, label);
 				},
+				navigateTree: (targetId, options) => this.navigateTree(targetId, options),
 				getActiveTools: () => this.getActiveToolNames(),
 				getAllTools: () => this.getAllTools(),
 				getSettings: () => this.settingsManager.getSettings(),
