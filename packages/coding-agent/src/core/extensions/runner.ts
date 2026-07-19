@@ -390,6 +390,9 @@ export class ExtensionRunner {
 	private readonly reportedMcpServers = new Set<string>();
 	private newSessionHandler: NewSessionHandler = async () => ({ cancelled: false });
 	private forkHandler: ForkHandler = async () => ({ cancelled: false });
+	private coreNavigate: NavigateTreeHandler = async () => {
+		throw new Error("pi.navigateTree() is unavailable before session startup");
+	};
 	private navigateTreeHandler: NavigateTreeHandler = async () => ({ cancelled: false });
 	private switchSessionHandler: SwitchSessionHandler = async () => ({ cancelled: false });
 	private reloadHandler: ReloadHandler = async () => {};
@@ -433,6 +436,8 @@ export class ExtensionRunner {
 		this.runtime.setSessionName = actions.setSessionName;
 		this.runtime.getSessionName = actions.getSessionName;
 		this.runtime.setLabel = actions.setLabel;
+		this.coreNavigate = actions.navigateTree;
+		this.bindNavigation(this.coreNavigate);
 		this.runtime.getActiveTools = actions.getActiveTools;
 		this.runtime.getAllTools = actions.getAllTools;
 		this.runtime.getSettings = actions.getSettings;
@@ -551,12 +556,22 @@ export class ExtensionRunner {
 		};
 	}
 
+	private bindNavigation(navigate: NavigateTreeHandler): void {
+		this.runtime.navigateTree = (targetId, options) => {
+			if (!this.isIdleFn()) {
+				return Promise.reject(new Error("pi.navigateTree() requires an idle session"));
+			}
+			return navigate(targetId, options);
+		};
+	}
+
 	bindCommandContext(actions?: ExtensionCommandContextActions): void {
 		if (actions) {
 			this.waitForIdleFn = actions.waitForIdle;
 			this.newSessionHandler = actions.newSession;
 			this.forkHandler = actions.fork;
 			this.navigateTreeHandler = actions.navigateTree;
+			this.bindNavigation(actions.navigateTree);
 			this.switchSessionHandler = actions.switchSession;
 			this.reloadHandler = actions.reload;
 			return;
@@ -566,6 +581,7 @@ export class ExtensionRunner {
 		this.newSessionHandler = async () => ({ cancelled: false });
 		this.forkHandler = async () => ({ cancelled: false });
 		this.navigateTreeHandler = async () => ({ cancelled: false });
+		this.bindNavigation(this.coreNavigate);
 		this.switchSessionHandler = async () => ({ cancelled: false });
 		this.reloadHandler = async () => {};
 	}
