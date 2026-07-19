@@ -46,6 +46,7 @@
 - Exposed `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` to commands run by built-in and factory-created bash tools. See [Bash Tool Session Environment](docs/environment-variables.md#bash-tool-session-environment).
 - Added streaming `bash_execution_update` events for direct RPC bash commands, correlated with request IDs. See [RPC bash events](docs/rpc.md#bash_execution_update) ([#6971](https://github.com/earendil-works/pi/pull/6971) by [@ananthakumaran](https://github.com/ananthakumaran)).
 - Added experimental Claude Agent SDK provider support that runs the SDK with Claude built-ins disabled and exposes pi's active tools through an in-process MCP server.
+- Added `pi.navigateTree()` for lifecycle-aware session navigation from idle external extension callbacks.
 
 ### Changed
 

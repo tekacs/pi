@@ -1488,6 +1488,21 @@ const label = ctx.sessionManager.getLabel(entryId);
 
 Labels persist in the session and survive restarts. Use them to mark important points (turns, checkpoints) in the conversation tree.
 
+### pi.navigateTree(targetId, options?)
+
+Navigate the live session to an earlier tree entry from an external callback, while preserving Pi's session hooks, model context, and interactive UI state.
+
+```typescript
+const checkpoint = ctx.sessionManager.getEntries().find(
+  (entry) => ctx.sessionManager.getLabel(entry.id) === "before-refactor",
+);
+if (checkpoint && ctx.isIdle()) {
+  await pi.navigateTree(checkpoint.id, { summarize: false });
+}
+```
+
+The session must be idle. Use this API from callbacks that run outside Pi's extension-event dispatch, such as a socket or file-watcher callback. Do not await it from an event handler. In a registered command, use `ctx.navigateTree()` instead.
+
 ### pi.registerCommand(name, options)
 
 Register a command.

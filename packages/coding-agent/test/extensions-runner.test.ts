@@ -78,6 +78,7 @@ describe("ExtensionRunner", () => {
 		setSessionName: () => {},
 		getSessionName: () => undefined,
 		setLabel: () => {},
+		navigateTree: async () => ({ cancelled: false }),
 		getActiveTools: () => [],
 		getAllTools: () => [],
 		setActiveTools: () => {},
@@ -910,6 +911,47 @@ describe("ExtensionRunner", () => {
 
 			await commandContext.fork("entry-2", { position: "at" });
 			expect(fork).toHaveBeenLastCalledWith("entry-2", { position: "at" });
+		});
+
+		it("exposes idle mode-bound navigation through ExtensionAPI", async () => {
+			const extensionPath = path.join(extensionsDir, "navigate.ts");
+			fs.writeFileSync(
+				extensionPath,
+				`export default function(pi) {
+	pi.registerCommand("api-navigate", {
+		handler: async (targetId) => pi.navigateTree(targetId, { summarize: false }),
+	});
+}`,
+			);
+			const result = await loadExtensions([extensionPath], tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			let idle = true;
+			const coreNavigate = vi.fn(async () => ({ cancelled: false }));
+			runner.bindCore(
+				{ ...extensionActions, navigateTree: coreNavigate },
+				{ ...extensionContextActions, isIdle: () => idle },
+			);
+			const command = runner.getCommand("api-navigate");
+			if (!command) throw new Error("api-navigate command was not registered");
+			await command.handler("sdk", runner.createCommandContext());
+			expect(coreNavigate).toHaveBeenCalledWith("sdk", { summarize: false });
+
+			const modeNavigate = vi.fn(async () => ({ cancelled: false }));
+			runner.bindCommandContext({
+				waitForIdle: async () => {},
+				newSession: async () => ({ cancelled: false }),
+				fork: async () => ({ cancelled: false }),
+				navigateTree: modeNavigate,
+				switchSession: async () => ({ cancelled: false }),
+				reload: async () => {},
+			});
+			await command.handler("checkpoint", runner.createCommandContext());
+			expect(modeNavigate).toHaveBeenCalledWith("checkpoint", { summarize: false });
+
+			idle = false;
+			await expect(command.handler("busy", runner.createCommandContext())).rejects.toThrow(
+				"pi.navigateTree() requires an idle session",
+			);
 		});
 	});
 
