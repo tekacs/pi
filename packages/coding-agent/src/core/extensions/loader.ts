@@ -173,6 +173,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		setSessionName: notInitialized,
 		getSessionName: notInitialized,
 		setLabel: notInitialized,
+		navigateTree: () => Promise.reject(new Error("Extension runtime not initialized")),
 		getActiveTools: notInitialized,
 		getAllTools: notInitialized,
 		getSettings: notInitialized,
@@ -406,6 +407,11 @@ function createExtensionAPI(
 		setLabel(entryId: string, label: string | undefined): void {
 			assertActive();
 			runtime.setLabel(entryId, label);
+		},
+
+		navigateTree(entryId, options) {
+			runtime.assertActive();
+			return runtime.navigateTree(entryId, options);
 		},
 
 		exec(command: string, args: string[], options?: ExecOptions) {
