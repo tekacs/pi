@@ -1,7 +1,49 @@
 import { describe, expect, test, vi } from "vitest";
+import { PROJECTION_TYPE } from "../src/core/session-manager.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 
 describe("InteractiveMode compaction events", () => {
+	test("defers projection rebuilds until the active agent run ends", async () => {
+		const fakeThis = {
+			isInitialized: true,
+			projectionDirty: false,
+			footer: { invalidate: vi.fn() },
+			session: { isStreaming: true },
+			addCustomEntryToChat: vi.fn(),
+			rebuildChatFromMessages: vi.fn(),
+			settingsManager: { getShowTerminalProgress: () => false },
+			clearStatusIndicator: vi.fn(),
+			streamingComponent: undefined,
+			streamingMessage: undefined,
+			streamingContentStart: 0,
+			pendingTools: new Map(),
+			chatContainer: { removeChild: vi.fn() },
+			ui: { requestRender: vi.fn(), terminal: { setProgress: vi.fn() } },
+		};
+		const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
+			this: typeof fakeThis,
+			event: { type: string; entry?: unknown },
+		) => Promise<void>;
+
+		await handleEvent.call(fakeThis, {
+			type: "entry_appended",
+			entry: {
+				type: "custom",
+				id: "projection",
+				parentId: "source",
+				timestamp: "2025-01-01T00:00:00Z",
+				customType: PROJECTION_TYPE,
+				data: { key: "test", sourceEntryIds: ["source"], replacement: null },
+			},
+		});
+		expect(fakeThis.projectionDirty).toBe(true);
+		expect(fakeThis.rebuildChatFromMessages).not.toHaveBeenCalled();
+		expect(fakeThis.addCustomEntryToChat).not.toHaveBeenCalled();
+
+		await handleEvent.call(fakeThis, { type: "agent_end" });
+		expect(fakeThis.rebuildChatFromMessages).toHaveBeenCalledTimes(1);
+	});
+
 	test("rebuilds chat and appends a synthetic compaction summary at the bottom", async () => {
 		const fakeThis = {
 			isInitialized: true,

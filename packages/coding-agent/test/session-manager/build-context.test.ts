@@ -4,8 +4,10 @@ import {
 	buildContextEntries,
 	buildSessionContext,
 	type CompactionEntry,
+	type ContextProjection,
 	type CustomEntry,
 	type ModelChangeEntry,
+	PROJECTION_TYPE,
 	type SessionEntry,
 	type SessionMessageEntry,
 	type ThinkingLevelChangeEntry,
@@ -56,6 +58,10 @@ function branchSummary(id: string, parentId: string | null, summary: string, fro
 
 function custom(id: string, parentId: string | null, customType: string, data?: unknown): CustomEntry {
 	return { type: "custom", id, parentId, timestamp: "2025-01-01T00:00:00Z", customType, data };
+}
+
+function projection(id: string, parentId: string | null, data: ContextProjection): CustomEntry<ContextProjection> {
+	return custom(id, parentId, PROJECTION_TYPE, data) as CustomEntry<ContextProjection>;
 }
 
 function thinkingLevel(id: string, parentId: string | null, level: string): ThinkingLevelChangeEntry {
@@ -205,6 +211,77 @@ describe("buildSessionContext", () => {
 			const ctx = buildSessionContext(entries);
 			expect(ctx.thinkingLevel).toBe("high");
 			expect(ctx.messages.map((message) => message.role)).toEqual(["compactionSummary", "user"]);
+		});
+	});
+
+	describe("with projections", () => {
+		it("replaces arbitrary source entries at their first position", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "search attempt"),
+				msg("2", "1", "assistant", "raw output"),
+				msg("3", "2", "user", "retained work"),
+				projection("4", "3", {
+					key: "test:archive",
+					sourceEntryIds: ["1", "2"],
+					replacement: {
+						customType: "test-archive",
+						content: "The search established the final location.",
+						display: true,
+						details: { sourceCount: 2 },
+					},
+				}),
+				msg("5", "4", "user", "current work"),
+			];
+
+			const projected = buildContextEntries(entries);
+			expect(projected.map((entry) => entry.id)).toEqual(["4", "3", "5"]);
+			expect(projected[0]).toMatchObject({
+				type: "custom_message",
+				customType: "test-archive",
+				content: "The search established the final location.",
+				display: true,
+			});
+			expect(buildSessionContext(entries).messages.map((message) => message.role)).toEqual([
+				"custom",
+				"user",
+				"user",
+			]);
+		});
+
+		it("lets a newer overlapping projection own the shared range", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "second"),
+				msg("3", "2", "user", "third"),
+				projection("4", "3", {
+					key: "test:older",
+					sourceEntryIds: ["1", "2"],
+					replacement: { customType: "older", content: "older summary", display: true },
+				}),
+				projection("5", "4", {
+					key: "test:newer",
+					sourceEntryIds: ["2", "3"],
+					replacement: { customType: "newer", content: "newer summary", display: true },
+				}),
+			];
+
+			expect(buildContextEntries(entries).map((entry) => entry.id)).toEqual(["1", "5"]);
+		});
+
+		it("restores sources when a later directive clears the projection", () => {
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "first"),
+				msg("2", "1", "assistant", "second"),
+				projection("3", "2", {
+					key: "test:archive",
+					sourceEntryIds: ["1", "2"],
+					replacement: { customType: "test-archive", content: "summary", display: true },
+				}),
+				projection("4", "3", { key: "test:archive", sourceEntryIds: [], replacement: null }),
+			];
+
+			expect(buildContextEntries(entries).map((entry) => entry.id)).toEqual(["1", "2"]);
+			expect(buildContextEntries(entries, "2").map((entry) => entry.id)).toEqual(["1", "2"]);
 		});
 	});
 

@@ -268,6 +268,21 @@ Extension state persistence. Does NOT participate in LLM context.
 
 Use `customType` to identify your extension's entries on reload. Interactive mode can render custom entries via `pi.registerEntryRenderer(customType, renderer)`, but they still do not participate in LLM context.
 
+The reserved `PROJECTION_TYPE` (`pi.context-projection`) is the exception. Its append-only metadata replaces arbitrary source entries in both model context and the interactive transcript without modifying the original entries. A later directive with the same key and `replacement: null` clears the projection:
+
+```typescript
+pi.appendEntry(PROJECTION_TYPE, {
+  key: "my-extension:archive-1",
+  sourceEntryIds: ["a1b2c3d4", "b2c3d4e5"],
+  replacement: {
+    customType: "my-extension-archive",
+    content: "Continuation-complete summary",
+    display: true,
+    details: { ... },
+  },
+});
+```
+
 ### CustomMessageEntry
 
 Extension-injected messages that DO participate in LLM context.
@@ -325,7 +340,8 @@ Entries form a tree:
    - If `retainedTail` is present, it acts as a self-contained checkpoint and entries after the compaction are included
    - Otherwise entries from `firstKeptEntryId` to the compaction are included
    - Then entries after compaction are included
-3. Preserves non-message entries in the selected range so interactive mode can render them
+3. Resolves the latest `PROJECTION_TYPE` directive per key, suppresses its source entries, and inserts its custom-message replacement at the first source position
+4. Preserves other non-message entries in the selected range so interactive mode can render them
 
 `buildSessionContext()` builds on that entry list to produce the message list for the LLM:
 

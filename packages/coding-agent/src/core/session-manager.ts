@@ -98,13 +98,38 @@ export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
  * Purpose: Persist extension state across session reloads. On reload, extensions can
  * scan entries for their customType and reconstruct internal state.
  *
- * Does NOT participate in LLM context (ignored by buildSessionContext).
- * For injecting content into context, see CustomMessageEntry.
+ * Does NOT participate in LLM context (ignored by buildSessionContext), except
+ * for the reserved PROJECTION_TYPE metadata interpreted by buildContextEntries().
+ * For injecting ordinary content into context, see CustomMessageEntry.
  */
 export interface CustomEntry<T = unknown> extends SessionEntryBase {
 	type: "custom";
 	customType: string;
 	data?: T;
+}
+
+/** Reserved custom entry type for append-only context/display range projections. */
+export const PROJECTION_TYPE = "pi.context-projection";
+
+export interface ProjectionReplacement<T = unknown> {
+	customType: string;
+	content: string | (TextContent | ImageContent)[];
+	display: boolean;
+	details?: T;
+}
+
+/**
+ * Metadata stored in a PROJECTION_TYPE custom entry.
+ * A replacement of null clears the latest projection with the same key.
+ */
+export interface ContextProjection<T = unknown> {
+	key: string;
+	sourceEntryIds: string[];
+	replacement: ProjectionReplacement<T> | null;
+}
+
+export function isProjectionEntry(entry: SessionEntry): entry is CustomEntry<ContextProjection> {
+	return entry.type === "custom" && entry.customType === PROJECTION_TYPE;
 }
 
 /** Label entry for user-defined bookmarks/markers on entries. */
@@ -407,13 +432,91 @@ export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage
 	return [];
 }
 
+function readProjection(entry: SessionEntry): ContextProjection | undefined {
+	if (!isProjectionEntry(entry) || typeof entry.data !== "object" || entry.data === null) return undefined;
+	const data = entry.data as Partial<ContextProjection>;
+	if (typeof data.key !== "string" || data.key.length === 0) return undefined;
+	if (!Array.isArray(data.sourceEntryIds) || data.sourceEntryIds.some((id) => typeof id !== "string")) {
+		return undefined;
+	}
+	if (data.replacement === null) return data as ContextProjection;
+	if (typeof data.replacement !== "object" || data.replacement === null) return undefined;
+	const replacement = data.replacement as Partial<ProjectionReplacement>;
+	if (
+		typeof replacement.customType !== "string" ||
+		replacement.customType.length === 0 ||
+		(typeof replacement.content !== "string" && !Array.isArray(replacement.content)) ||
+		typeof replacement.display !== "boolean"
+	) {
+		return undefined;
+	}
+	return data as ContextProjection;
+}
+
+function applyProjections(entries: SessionEntry[]): SessionEntry[] {
+	const latest = new Map<string, { entry: CustomEntry<ContextProjection>; data: ContextProjection; index: number }>();
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index];
+		const data = readProjection(entry);
+		if (data && isProjectionEntry(entry)) latest.set(data.key, { entry, data, index });
+	}
+	if (latest.size === 0) return entries;
+
+	const positions = new Map(entries.map((entry, index) => [entry.id, index]));
+	const claimed = new Set<string>();
+	const accepted: Array<{
+		entry: CustomEntry<ContextProjection>;
+		data: ContextProjection & { replacement: ProjectionReplacement };
+		first: number;
+	}> = [];
+
+	for (const projection of [...latest.values()].sort((left, right) => right.index - left.index)) {
+		const replacement = projection.data.replacement;
+		if (!replacement || projection.data.sourceEntryIds.length === 0) continue;
+		const found = projection.data.sourceEntryIds.filter((id) => positions.has(id));
+		if (found.length === 0 || found.some((id) => claimed.has(id))) continue;
+		for (const id of found) claimed.add(id);
+		accepted.push({
+			entry: projection.entry,
+			data: { ...projection.data, replacement },
+			first: Math.min(...found.map((id) => positions.get(id)!)),
+		});
+	}
+
+	const replacements = new Map<number, CustomMessageEntry>();
+	for (const projection of accepted) {
+		const replacement = projection.data.replacement;
+		replacements.set(projection.first, {
+			type: "custom_message",
+			id: projection.entry.id,
+			parentId: projection.entry.parentId,
+			timestamp: projection.entry.timestamp,
+			customType: replacement.customType,
+			content: replacement.content,
+			display: replacement.display,
+			details: replacement.details,
+		});
+	}
+
+	const projected: SessionEntry[] = [];
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index];
+		const replacement = replacements.get(index);
+		if (replacement) projected.push(replacement);
+		if (isProjectionEntry(entry) || claimed.has(entry.id)) continue;
+		projected.push(entry);
+	}
+	return projected;
+}
+
 /**
  * Build the active, compaction-aware session entry list.
  *
  * This follows the current leaf path. If the path contains compaction entries,
  * the latest compaction is represented by the compaction entry itself, followed
  * by the kept entries starting at firstKeptEntryId and all entries after the
- * compaction entry. Older summarized entries are omitted.
+ * compaction entry. Older summarized entries are omitted. Active append-only
+ * projection metadata then replaces arbitrary source-entry sets in that result.
  */
 export function buildContextEntries(
 	entries: SessionEntry[],
@@ -430,12 +533,12 @@ export function buildContextEntries(
 	}
 
 	if (!compaction) {
-		return path;
+		return applyProjections(path);
 	}
 
 	const compactionIdx = path.findIndex((entry) => entry.id === compaction.id);
 	if (compactionIdx < 0) {
-		return path;
+		return applyProjections(path);
 	}
 
 	const contextEntries: SessionEntry[] = [compaction];
@@ -450,7 +553,7 @@ export function buildContextEntries(
 		}
 	}
 	contextEntries.push(...path.slice(compactionIdx + 1));
-	return contextEntries;
+	return applyProjections(contextEntries);
 }
 
 /**

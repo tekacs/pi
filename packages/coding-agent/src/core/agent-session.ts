@@ -98,7 +98,12 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
-import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
+import {
+	CURRENT_SESSION_VERSION,
+	getLatestCompactionEntry,
+	isProjectionEntry,
+	type SessionHeader,
+} from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
@@ -2381,6 +2386,9 @@ export class AgentSession {
 					const entryId = this.sessionManager.appendCustomEntry(customType, data);
 					const entry = this.sessionManager.getEntry(entryId);
 					if (entry) {
+						if (isProjectionEntry(entry)) {
+							this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+						}
 						this._emit({ type: "entry_appended", entry });
 					}
 				},
