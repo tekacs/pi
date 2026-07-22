@@ -543,6 +543,9 @@ export interface SystemMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+/** In-memory provider cache boundary. Symbols survive message transforms but cannot leak into JSON payloads. */
+export const CACHE_CHECKPOINT: unique symbol = Symbol("pi.cache-checkpoint");
+
 export interface UserMessage {
 	role: "user";
 	content: string | (TextContent | ImageContent)[];
@@ -613,7 +616,9 @@ export type ToolResultMessage<TDetails = JsonValue> = IsJsonCompatible<TDetails>
 		}
 	: never;
 
-export type Message = SystemMessage | UserMessage | AssistantMessage | ToolResultMessage;
+export type Message = (SystemMessage | UserMessage | AssistantMessage | ToolResultMessage) & {
+	[CACHE_CHECKPOINT]?: true;
+};
 
 export type ImagesInputContent = TextContent | ImageContent;
 export type ImagesOutputContent = TextContent | ImageContent;
@@ -864,7 +869,7 @@ export interface OpenAICompletionsCompat {
 	supportsMidConvoToolAdditions?: boolean;
 	/** Whether the provider supports the `strict` field in tool definitions. Default: false; generated capable models enable it explicitly. */
 	supportsStrictMode?: boolean;
-	/** Cache control convention for prompt caching. "anthropic" applies Anthropic-style `cache_control` markers to the system prompt, last tool definition, and last user, assistant, or tool-result text content. */
+	/** Cache control convention for prompt caching. "anthropic" marks the system prompt, last tool, stable-prefix checkpoints, and latest conversation content. */
 	cacheControlFormat?: "anthropic";
 	/** Whether to send session-affinity data from `options.sessionId`. Default: true for OpenRouter endpoints, false otherwise. */
 	sendSessionAffinityHeaders?: boolean;

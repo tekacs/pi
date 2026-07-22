@@ -230,16 +230,26 @@ describe("openai-completions prompt caching", () => {
 		expect(headers["x-session-affinity"]).toBeUndefined();
 	});
 
-	it("omits OpenRouter session-affinity data when disabled", async () => {
+	it("enables OpenRouter session affinity by default", async () => {
 		const model = createModel({
 			provider: "openrouter",
 			baseUrl: "https://openrouter.ai/api/v1",
-			compat: { sendSessionAffinityHeaders: false },
 		});
 		const { payload, headers } = await captureRequest({ sessionId: "session-openrouter" }, model);
 
 		expect(payload?.session_id).toBeUndefined();
 		expect(payload?.prompt_cache_key).toBeUndefined();
+		expect(headers["x-session-id"]).toBe("session-openrouter");
+	});
+
+	it("allows OpenRouter session affinity to be disabled explicitly", async () => {
+		const model = createModel({
+			provider: "openrouter",
+			baseUrl: "https://openrouter.ai/api/v1",
+			compat: { sendSessionAffinityHeaders: false },
+		});
+		const { headers } = await captureRequest({ sessionId: "session-openrouter" }, model);
+
 		expect(headers["x-session-id"]).toBeUndefined();
 	});
 

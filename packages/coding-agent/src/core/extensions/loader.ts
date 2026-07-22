@@ -268,6 +268,8 @@ function createExtensionAPI(
 	};
 
 	const api = {
+		contextProjectionVersion: 2,
+
 		// Registration methods - write to extension
 		on(event: string, handler: HandlerFn): () => void {
 			assertActive();
