@@ -13,6 +13,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
+import { PROJECTION_TYPE } from "../../src/core/session-manager.ts";
 import { createHarness, getUserTexts, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
@@ -800,6 +801,192 @@ describe("AgentSession compaction characterization", () => {
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
 
 		await expect(sessionInternals._runAutoCompaction("threshold", false)).resolves.toBe(true);
+	});
+
+	it("routes a recoverable length-limited response through overflow compaction", async () => {
+		const harness = await createHarness({
+			settings: { compaction: { enabled: true, reserveTokens: 20 } },
+			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 100 }],
+		});
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+		const runAutoCompaction = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
+
+		await sessionInternals._checkCompaction(
+			createAssistant(harness, { stopReason: "length", totalTokens: 90, timestamp: Date.now() }),
+		);
+
+		expect(runAutoCompaction).toHaveBeenCalledWith("overflow", true);
+	});
+
+	it("lets an extension suppress native threshold compaction", async () => {
+		const reasons: string[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 20 } },
+			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 100 }],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", (event) => {
+						reasons.push(event.reason);
+						return { contextRepair: { resolution: "suppressed" } };
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		const continued = await sessionInternals._checkCompaction(
+			createAssistant(harness, { stopReason: "stop", totalTokens: 90, timestamp: Date.now() }),
+		);
+
+		expect(continued).toBe(false);
+		expect(reasons).toEqual(["threshold"]);
+		expect(harness.sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+	});
+
+	it("applies extension context repair for manual compaction and exposes progress", async () => {
+		const events: string[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
+			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 100 }],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", (event, ctx) => {
+						if (event.reason !== "manual") return undefined;
+						ctx.reportContextRepair?.({ stage: "counting", message: "Relieving context: measuring" });
+						const sources = event.branchEntries.filter((entry) => entry.type === "message");
+						pi.appendEntry(PROJECTION_TYPE, {
+							version: 2,
+							key: "test:manual-repair",
+							generation: 1,
+							fingerprint: "manual-repair-1",
+							directives: [
+								{
+									key: "source",
+									sourceEntryIds: sources.map((source) => source.id),
+									replacement: { customType: "test-repair", content: "manually repaired", display: true },
+								},
+							],
+						});
+						return { contextRepair: { resolution: "repaired", projectedTokens: 25, targetTokens: 30 } };
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		harness.session.subscribe((event) => {
+			if (event.type === "context_repair_progress") events.push(`${event.stage}:${event.message}`);
+			if (event.type === "compaction_end" && event.contextRepair) {
+				expect(harness.session.isCompacting).toBe(false);
+				events.push(event.contextRepair.resolution);
+			}
+		});
+
+		const result = await harness.session.compact();
+
+		expect(result.estimatedTokensAfter).toBe(25);
+		expect(events).toEqual(["counting:Relieving context: measuring", "repaired"]);
+		expect(harness.session.agent.state.messages).toMatchObject([
+			{ role: "custom", customType: "test-repair", content: "manually repaired" },
+		]);
+		expect(harness.sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+	});
+
+	it("rebuilds extension-repaired context before retrying an overflow", async () => {
+		const harness = await createHarness({
+			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
+			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 100 }],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", (event) => {
+						if (event.reason !== "overflow") return undefined;
+						const sources = event.branchEntries.filter(
+							(entry) =>
+								entry.type === "message" &&
+								(entry.message.role !== "assistant" || entry.message.stopReason !== "error"),
+						);
+						if (sources.length === 0) {
+							return { contextRepair: { resolution: "failed", errorMessage: "missing source" } };
+						}
+						pi.appendEntry(PROJECTION_TYPE, {
+							version: 2,
+							key: "test:repair",
+							generation: 1,
+							fingerprint: "repair-1",
+							directives: [
+								{
+									key: "source",
+									sourceEntryIds: sources.map((source) => source.id),
+									replacement: { customType: "test-repair", content: "repaired context", display: true },
+								},
+							],
+						});
+						return { contextRepair: { resolution: "repaired", projectedTokens: 25, targetTokens: 30 } };
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		const now = Date.now();
+		harness.sessionManager.appendMessage({ role: "user", content: "oversized source", timestamp: now - 1 });
+		const overflow = createAssistant(harness, {
+			stopReason: "error",
+			errorMessage: "prompt is too long",
+			timestamp: now,
+		});
+		harness.sessionManager.appendMessage(overflow);
+		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		const continued = await sessionInternals._checkCompaction(overflow);
+
+		expect(continued).toBe(true);
+		expect(harness.session.agent.state.messages).toMatchObject([
+			{ role: "custom", customType: "test-repair", content: "repaired context" },
+		]);
+		expect(harness.sessionManager.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+	});
+
+	it("does not retry a repair that misses its declared target", async () => {
+		const errors: string[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
+			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 100 }],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", () => {
+						pi.appendEntry("test:invalid-repair", {});
+						return { contextRepair: { resolution: "repaired", projectedTokens: 31, targetTokens: 30 } };
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		harness.session.subscribe((event) => {
+			if (event.type === "compaction_end" && event.errorMessage) errors.push(event.errorMessage);
+		});
+		const now = Date.now();
+		harness.sessionManager.appendMessage({ role: "user", content: "oversized source", timestamp: now - 1 });
+		const overflow = createAssistant(harness, {
+			stopReason: "error",
+			errorMessage: "prompt is too long",
+			timestamp: now,
+		});
+		harness.sessionManager.appendMessage(overflow);
+		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
+
+		const continued = await sessionInternals._checkCompaction(overflow);
+
+		expect(continued).toBe(false);
+		expect(errors).toContain(
+			"Context overflow recovery failed: Context repair missed or returned an invalid target (31 projected, 30 target)",
+		);
 	});
 
 	it("does not retry overflow recovery more than once", async () => {

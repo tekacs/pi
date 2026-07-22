@@ -40,6 +40,10 @@ import type {
 	CompactOptions,
 	ContextEvent,
 	ContextEventResult,
+	ContextRepairProgress,
+	ContextTokenCandidate,
+	ContextTokenCount,
+	ContextTokenCountOptions,
 	ContextUsage,
 	ContextWithSystemEvent,
 	EntryRenderer,
@@ -380,6 +384,16 @@ export class ExtensionRunner {
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
+	private countContextTokensFn: (
+		candidate: AgentMessage[] | ContextTokenCandidate,
+		options?: ContextTokenCountOptions,
+	) => Promise<ContextTokenCount> = async () => ({
+		ok: false,
+		method: "provider-preflight",
+		overflow: false,
+		message: "Provider context counting is unavailable before session startup",
+	});
+	private reportContextRepairFn: (progress: ContextRepairProgress) => void = () => {};
 	private compactFn: (options?: CompactOptions) => void = () => {};
 	private getSystemPromptFn: () => string = () => "";
 	private getSystemPromptOptionsFn: () => BuildSystemPromptOptions = () =>
@@ -459,6 +473,8 @@ export class ExtensionRunner {
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
 		this.shutdownHandler = contextActions.shutdown;
 		this.getContextUsageFn = contextActions.getContextUsage;
+		this.countContextTokensFn = contextActions.countContextTokens;
+		this.reportContextRepairFn = contextActions.reportContextRepair;
 		this.compactFn = contextActions.compact;
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 		this.getSystemPromptOptionsFn =
@@ -939,6 +955,10 @@ export class ExtensionRunner {
 				runner.assertActive();
 				return runner.runtime.getThinkingLevel();
 			},
+			get contextProjectionVersion() {
+				runner.assertActive();
+				return 2;
+			},
 			isIdle: () => {
 				runner.assertActive();
 				return runner.isIdleFn();
@@ -966,6 +986,14 @@ export class ExtensionRunner {
 			getContextUsage: () => {
 				runner.assertActive();
 				return runner.getContextUsageFn();
+			},
+			countContextTokens: (candidate, options) => {
+				runner.assertActive();
+				return runner.countContextTokensFn(candidate, options);
+			},
+			reportContextRepair: (progress) => {
+				runner.assertActive();
+				runner.reportContextRepairFn(progress);
 			},
 			compact: (options) => {
 				runner.assertActive();

@@ -107,10 +107,53 @@ describe("ExtensionRunner", () => {
 		hasPendingMessages: () => false,
 		shutdown: () => {},
 		getContextUsage: () => undefined,
+		countContextTokens: async () => ({
+			ok: false,
+			method: "provider-preflight",
+			overflow: false,
+			message: "not available in runner fixture",
+		}),
+		reportContextRepair: () => {},
 		compact: () => {},
 		getSystemPrompt: () => "",
 		getScopedModels: () => [],
 	};
+
+	describe("projection capability", () => {
+		it("advertises atomic projection v2 at registration and handler time", async () => {
+			const runtime = createExtensionRuntime();
+			let registrationVersion: number | undefined;
+			const extension = await loadExtensionFromFactory(
+				(pi) => {
+					registrationVersion = pi.contextProjectionVersion;
+				},
+				tempDir,
+				createEventBus(),
+				runtime,
+			);
+			const runner = new ExtensionRunner([extension], runtime, tempDir, sessionManager, modelRegistry);
+
+			expect(registrationVersion).toBe(2);
+			expect(runner.createContext().contextProjectionVersion).toBe(2);
+		});
+
+		it("forwards a caller-owned abort signal to provider context counting", async () => {
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const controller = new AbortController();
+			const countContextTokens = vi.fn(async () => ({
+				ok: false as const,
+				method: "provider-preflight" as const,
+				overflow: false,
+				message: "cancelled",
+			}));
+			runner.bindCore(extensionActions, { ...extensionContextActions, countContextTokens });
+
+			await runner.createContext().countContextTokens?.([], { signal: controller.signal });
+
+			expect(countContextTokens).toHaveBeenCalledWith([], { signal: controller.signal });
+		});
+	});
 
 	describe("scopedModels", () => {
 		it("reflects the getScopedModels context action on ctx.scopedModels", async () => {

@@ -311,6 +311,49 @@ export interface ContextUsage {
 	percent: number | null;
 }
 
+export interface ContextRepairProgress {
+	stage: "counting" | "seat" | "transaction" | "recount" | "handoff";
+	message: string;
+	round?: number;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+}
+
+export interface PromptTokenUsage {
+	input: number;
+	cacheRead: number;
+	cacheWrite: number;
+}
+
+/** A hypothetical session branch to materialize through Pi's normal context projection pipeline. */
+export interface ContextTokenCandidate {
+	entries: SessionEntry[];
+	leafId?: string | null;
+}
+
+export interface ContextTokenCountOptions {
+	signal?: AbortSignal;
+}
+
+export type ContextTokenCount =
+	| {
+			ok: true;
+			exact: true;
+			method: "provider-preflight";
+			tokens: number;
+			contextWindow: number;
+			usage: PromptTokenUsage;
+	  }
+	| {
+			ok: false;
+			method: "provider-preflight";
+			overflow: boolean;
+			tokens?: number;
+			contextWindow?: number;
+			usage?: PromptTokenUsage;
+			message: string;
+	  };
+
 export interface CompactOptions {
 	customInstructions?: string;
 	onComplete?: (result: CompactionResult) => void;
@@ -344,6 +387,8 @@ export interface ExtensionContext {
 	scopedModels: readonly ScopedModel[];
 	/** Current thinking level, when provided by the session runtime. */
 	thinkingLevel?: ThinkingLevel;
+	/** Highest atomic context-projection frame version supported by this Pi runtime. */
+	contextProjectionVersion?: number;
 	/** Whether the agent is idle (not streaming) */
 	isIdle(): boolean;
 	/** Whether project-local trust is active for this context. */
@@ -358,6 +403,16 @@ export interface ExtensionContext {
 	shutdown(): void;
 	/** Get current context usage for the active model. */
 	getContextUsage(): ContextUsage | undefined;
+	/**
+	 * Measure an explicit candidate transcript with the active provider.
+	 * This performs a non-persisted one-output-token preflight request and may consume provider quota.
+	 */
+	countContextTokens?(
+		candidate: AgentMessage[] | ContextTokenCandidate,
+		options?: ContextTokenCountOptions,
+	): Promise<ContextTokenCount>;
+	/** Update the inspectable compaction/repair stage shown by Pi. */
+	reportContextRepair?(progress: ContextRepairProgress): void;
 	/** Trigger compaction without awaiting completion. */
 	compact(options?: CompactOptions): void;
 	/** Get the current effective system prompt. */
@@ -1508,9 +1563,16 @@ export interface SessionBeforeForkResult {
 	skipConversationRestore?: boolean;
 }
 
+export type ContextRepairResult =
+	| { resolution: "suppressed" }
+	| { resolution: "repaired"; projectedTokens: number; targetTokens: number }
+	| { resolution: "failed"; errorMessage: string };
+
 export interface SessionBeforeCompactResult {
 	cancel?: boolean;
 	compaction?: CompactionResult;
+	/** Extension-owned projection repair; unlike cancellation, a validated repair may retry an overflowed turn. */
+	contextRepair?: ContextRepairResult;
 }
 
 export interface SessionBeforeTreeResult {
@@ -1590,6 +1652,9 @@ export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContex
  * ExtensionAPI passed to extension factory functions.
  */
 export interface ExtensionAPI {
+	/** Highest atomic context-projection frame version supported by this Pi runtime. */
+	readonly contextProjectionVersion?: number;
+
 	// =========================================================================
 	// Event Subscription
 	// =========================================================================
@@ -2225,6 +2290,11 @@ export interface ExtensionContextActions {
 	hasPendingMessages: () => boolean;
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
+	countContextTokens: (
+		candidate: AgentMessage[] | ContextTokenCandidate,
+		options?: ContextTokenCountOptions,
+	) => Promise<ContextTokenCount>;
+	reportContextRepair: (progress: ContextRepairProgress) => void;
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
 	getSystemPromptOptions?: () => BuildSystemPromptOptions;

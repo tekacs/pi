@@ -9,7 +9,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import type { BuildSystemPromptOptions, ExtensionAPI } from "../../src/index.ts";
+import type { BuildSystemPromptOptions, ContextTokenCount, ExtensionAPI, SessionEntry } from "../../src/index.ts";
 import { createHarness, getAssistantTexts, type Harness } from "./harness.ts";
 
 describe("AgentSession model and extension characterization", () => {
@@ -396,6 +396,93 @@ describe("AgentSession model and extension characterization", () => {
 		if (storedUserMessage?.role === "user") {
 			expect(storedUserMessage.content).toEqual([{ type: "text", text: "original" }]);
 		}
+	});
+
+	it("lets extensions measure an explicit candidate context without persisting the provider preflight", async () => {
+		let count: ContextTokenCount | undefined;
+		let providerText = "";
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("context", async (event) => ({
+						messages: event.messages.map((message) =>
+							message.role === "user"
+								? { ...message, content: [{ type: "text", text: "rewritten candidate" }] }
+								: message,
+						),
+					}));
+					pi.registerCommand("count-context", {
+						description: "Count one candidate context",
+						handler: async (_args, ctx) => {
+							if (!ctx.countContextTokens) throw new Error("context counting unavailable");
+							count = await ctx.countContextTokens([
+								{ role: "user", content: [{ type: "text", text: "candidate" }], timestamp: 1 },
+							]);
+						},
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			(context) => {
+				providerText = JSON.stringify(context.messages);
+				return fauxAssistantMessage("probe");
+			},
+		]);
+		const messageCount = harness.session.messages.length;
+
+		await harness.session.prompt("/count-context");
+
+		expect(providerText).toContain("rewritten candidate");
+		expect(count).toMatchObject({ ok: true, exact: true, method: "provider-preflight" });
+		if (!count?.ok) throw new Error("expected counted provider context");
+		expect(count.tokens).toBeGreaterThan(0);
+		expect(count.tokens).toBe(count.usage.input + count.usage.cacheRead + count.usage.cacheWrite);
+		expect(harness.session.messages).toHaveLength(messageCount);
+	});
+
+	it("materializes a hypothetical session branch before provider context counting", async () => {
+		let count: ContextTokenCount | undefined;
+		let providerText = "";
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.registerCommand("count-branch", {
+						description: "Count one hypothetical branch",
+						handler: async (_args, ctx) => {
+							if (!ctx.countContextTokens) throw new Error("context counting unavailable");
+							const entries: SessionEntry[] = [
+								{
+									type: "custom_message",
+									id: "candidate-carrier",
+									parentId: null,
+									timestamp: "2026-08-02T00:00:00.000Z",
+									customType: "test.candidate",
+									content: "hypothetical branch candidate",
+									display: false,
+								},
+							];
+							count = await ctx.countContextTokens({ entries, leafId: "candidate-carrier" });
+						},
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			(context) => {
+				providerText = JSON.stringify(context.messages);
+				return fauxAssistantMessage("probe");
+			},
+		]);
+		const messageCount = harness.session.messages.length;
+
+		await harness.session.prompt("/count-branch");
+
+		expect(providerText).toContain("hypothetical branch candidate");
+		expect(count).toMatchObject({ ok: true, exact: true, method: "provider-preflight" });
+		expect(harness.session.messages).toHaveLength(messageCount);
 	});
 
 	it("allows extension input handlers to transform or handle input", async () => {

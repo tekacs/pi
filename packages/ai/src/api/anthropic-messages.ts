@@ -37,6 +37,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { CACHE_CHECKPOINT } from "../types.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
@@ -1230,7 +1231,7 @@ function buildParams(
 			{
 				type: "text",
 				text: "You are Claude Code, Anthropic's official CLI for Claude.",
-				...(cacheControl ? { cache_control: cacheControl } : {}),
+				...(cacheControl && !initialSystemText ? { cache_control: cacheControl } : {}),
 			},
 		];
 		if (initialSystemText) {
@@ -1350,6 +1351,25 @@ interface ConvertedAnthropicMessages {
 	assistantLevels: Map<number, AnthropicEffort>;
 }
 
+function addCacheControlCheckpoint(message: MessageParam, cacheControl: CacheControlEphemeral): void {
+	if (typeof message.content === "string") {
+		message.content = [{ type: "text", text: message.content, cache_control: cacheControl }];
+		return;
+	}
+	for (let index = message.content.length - 1; index >= 0; index--) {
+		const block = message.content[index];
+		if (
+			block.type === "text" ||
+			block.type === "image" ||
+			block.type === "tool_result" ||
+			block.type === "tool_use"
+		) {
+			(block as typeof block & { cache_control?: CacheControlEphemeral }).cache_control = cacheControl;
+			return;
+		}
+	}
+}
+
 function convertMessages(
 	transformedMessages: Message[],
 	isOAuthToken: boolean,
@@ -1404,6 +1424,7 @@ function convertMessages(
 						role: "user",
 						content: sanitizeSurrogates(msg.content),
 					});
+					if (msg[CACHE_CHECKPOINT] && cacheControl) addCacheControlCheckpoint(params.at(-1)!, cacheControl);
 				}
 			} else {
 				const blocks: ContentBlockParam[] = msg.content.map((item) => {
@@ -1427,6 +1448,7 @@ function convertMessages(
 					role: "user",
 					content: filteredBlocks,
 				});
+				if (msg[CACHE_CHECKPOINT] && cacheControl) addCacheControlCheckpoint(params.at(-1)!, cacheControl);
 			}
 		} else if (msg.role === "assistant") {
 			flushPendingSystemMessages();
@@ -1497,6 +1519,7 @@ function convertMessages(
 			) {
 				assistantLevels.set(messageIndex, msg.providerThinkingLevel);
 			}
+			if (msg[CACHE_CHECKPOINT] && cacheControl) addCacheControlCheckpoint(params.at(-1)!, cacheControl);
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint.
 			const toolResults: ContentBlockParam[] = [];
@@ -1507,7 +1530,11 @@ function convertMessages(
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
 				const toolMsg = transformedMessages[j] as ToolResultMessage;
 				const split = splitErrorToolResultImages(toolMsg);
-				toolResults.push(convertToolResult(toolMsg, split?.content));
+				const converted = convertToolResult(toolMsg, split?.content);
+				if (transformedMessages[j][CACHE_CHECKPOINT] && cacheControl) {
+					(converted as typeof converted & { cache_control?: CacheControlEphemeral }).cache_control = cacheControl;
+				}
+				toolResults.push(converted);
 				if (split) {
 					errorImages.push({ type: "text", text: split.caption }, ...split.images.map(convertImageBlock));
 				}

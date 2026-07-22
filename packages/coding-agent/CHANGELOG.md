@@ -5,6 +5,10 @@
 ### Added
 
 - Added a Models Configuration reference generated from the `models.json` schema, listing all provider, model, model override, and compatibility fields ([#10790](https://github.com/earendil-works/pi/issues/10790))
+- Added atomic v2 context-projection frames, provider-exact hypothetical branch counting, and versioned projection capability checks for extension-owned context systems.
+- Added extension-owned context repair for manual and automatic compaction, with inspectable progress, cancellation, selected-branch rebuild, and overflow retry.
+- Added public AgentSession service factories for isolated in-process sessions, projection-boundary cache checkpoints, and stable OpenRouter session affinity.
+- Added `ctx.countContextTokens()` for non-persisted, provider-reported preflight of candidate messages or hypothetical session branches from extensions.
 
 ### Changed
 

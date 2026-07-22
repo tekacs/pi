@@ -567,6 +567,9 @@ export interface SystemMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+/** In-memory provider cache boundary. Symbols survive message transforms but cannot leak into JSON payloads. */
+export const CACHE_CHECKPOINT: unique symbol = Symbol("pi.cache-checkpoint");
+
 export interface UserMessage {
 	role: "user";
 	content: string | (TextContent | ImageContent)[];
@@ -647,7 +650,9 @@ export type ToolResultMessage<TDetails = JsonValue> = IsJsonCompatible<TDetails>
 		}
 	: never;
 
-export type Message = SystemMessage | UserMessage | AssistantMessage | ToolResultMessage;
+export type Message = (SystemMessage | UserMessage | AssistantMessage | ToolResultMessage) & {
+	[CACHE_CHECKPOINT]?: true;
+};
 
 export type ImagesInputContent = TextContent | ImageContent;
 export type ImagesOutputContent = TextContent | ImageContent;
