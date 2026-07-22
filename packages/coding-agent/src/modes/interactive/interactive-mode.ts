@@ -91,7 +91,12 @@ import { CredentialSynchronizationError } from "../../core/model-runtime.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
-import { type SessionEntry, SessionManager, sessionEntryToContextMessages } from "../../core/session-manager.ts";
+import {
+	isProjectionEntry,
+	type SessionEntry,
+	SessionManager,
+	sessionEntryToContextMessages,
+} from "../../core/session-manager.ts";
 import type { FullscreenExitOutput, TuiMode } from "../../core/settings-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
@@ -435,6 +440,7 @@ export class InteractiveMode {
 	private streamingComponent: AssistantMessageComponent | undefined = undefined;
 	private streamingMessage: AssistantMessage | undefined = undefined;
 	private streamingContentStart = 0;
+	private projectionDirty = false;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -3103,7 +3109,10 @@ export class InteractiveMode {
 				break;
 
 			case "entry_appended":
-				if (event.entry.type === "custom") {
+				if (isProjectionEntry(event.entry)) {
+					if (this.session.isStreaming) this.projectionDirty = true;
+					else this.rebuildChatFromMessages();
+				} else if (event.entry.type === "custom") {
 					this.addCustomEntryToChat(event.entry);
 					this.ui.requestRender();
 				}
@@ -3340,6 +3349,7 @@ export class InteractiveMode {
 				this.streamingMessage = undefined;
 				this.streamingContentStart = 0;
 				this.pendingTools.clear();
+				if (this.projectionDirty) this.rebuildChatFromMessages();
 
 				this.ui.requestRender();
 				break;
@@ -3807,6 +3817,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
+		this.projectionDirty = false;
 		this.chatContainer.clear();
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
 	}
