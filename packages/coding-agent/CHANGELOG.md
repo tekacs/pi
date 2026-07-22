@@ -47,7 +47,7 @@
 - Added streaming `bash_execution_update` events for direct RPC bash commands, correlated with request IDs. See [RPC bash events](docs/rpc.md#bash_execution_update) ([#6971](https://github.com/earendil-works/pi/pull/6971) by [@ananthakumaran](https://github.com/ananthakumaran)).
 - Added experimental Claude Agent SDK provider support that runs the SDK with Claude built-ins disabled and exposes pi's active tools through an in-process MCP server.
 - Added `pi.navigateTree()` for lifecycle-aware session navigation from idle external extension callbacks.
-- Added append-only context projection metadata so extensions can replace arbitrary session ranges consistently in model context and the interactive transcript.
+- Added append-only context projection metadata so extensions can replace arbitrary session ranges consistently in model context and the interactive transcript; replacements may be ordered message sequences that preserve tool protocols across range boundaries.
 
 ### Changed
 

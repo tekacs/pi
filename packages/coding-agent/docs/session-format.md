@@ -268,20 +268,26 @@ Extension state persistence. Does NOT participate in LLM context.
 
 Use `customType` to identify your extension's entries on reload. Interactive mode can render custom entries via `pi.registerEntryRenderer(customType, renderer)`, but they still do not participate in LLM context.
 
-The reserved `PROJECTION_TYPE` (`pi.context-projection`) is the exception. Its append-only metadata replaces arbitrary source entries in both model context and the interactive transcript without modifying the original entries. A later directive with the same key and `replacement: null` clears the projection:
+The reserved `PROJECTION_TYPE` (`pi.context-projection`) is the exception. Its append-only metadata replaces arbitrary source entries in both model context and the interactive transcript without modifying the original entries. A replacement is an ordered message sequence, so an extension can preserve provider protocols across a projected boundary—for example, a synthetic tool result, a summary, and a synthetic tool call. A later directive with the same key and `replacement: null` clears the projection:
 
 ```typescript
 pi.appendEntry(PROJECTION_TYPE, {
   key: "my-extension:archive-1",
   sourceEntryIds: ["a1b2c3d4", "b2c3d4e5"],
   replacement: {
-    customType: "my-extension-archive",
-    content: "Continuation-complete summary",
-    display: true,
-    details: { ... },
+    messages: [{
+      role: "custom",
+      customType: "my-extension-archive",
+      content: "Continuation-complete summary",
+      display: true,
+      details: { ... },
+      timestamp: Date.now(),
+    }],
   },
 });
 ```
+
+Existing append-only records using the original single custom-message replacement shape remain readable.
 
 ### CustomMessageEntry
 

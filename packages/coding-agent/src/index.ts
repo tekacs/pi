@@ -235,6 +235,8 @@ export {
 	migrateSessionEntries,
 	type NewSessionOptions,
 	PROJECTION_TYPE,
+	type ProjectionCustomMessage,
+	type ProjectionMessage,
 	type ProjectionReplacement,
 	parseSessionEntries,
 	type SessionContext,

@@ -111,21 +111,30 @@ export interface CustomEntry<T = unknown> extends SessionEntryBase {
 /** Reserved custom entry type for append-only context/display range projections. */
 export const PROJECTION_TYPE = "pi.context-projection";
 
-export interface ProjectionReplacement<T = unknown> {
+export interface ProjectionCustomMessage<T = unknown> {
 	customType: string;
 	content: string | (TextContent | ImageContent)[];
 	display: boolean;
 	details?: T;
 }
 
+/** A provider-visible message emitted by a context projection. */
+export type ProjectionMessage = AgentMessage | CustomMessage;
+
+/** Ordered replacement messages inserted at the first projected source position. */
+export interface ProjectionReplacement {
+	messages: ProjectionMessage[];
+}
+
 /**
  * Metadata stored in a PROJECTION_TYPE custom entry.
  * A replacement of null clears the latest projection with the same key.
+ * The single custom-message shape remains readable for append-only compatibility.
  */
 export interface ContextProjection<T = unknown> {
 	key: string;
 	sourceEntryIds: string[];
-	replacement: ProjectionReplacement<T> | null;
+	replacement: ProjectionReplacement | ProjectionCustomMessage<T> | null;
 }
 
 export function isProjectionEntry(entry: SessionEntry): entry is CustomEntry<ContextProjection> {
@@ -432,16 +441,60 @@ export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage
 	return [];
 }
 
-function readProjection(entry: SessionEntry): ContextProjection | undefined {
+interface ResolvedContextProjection {
+	key: string;
+	sourceEntryIds: string[];
+	replacement: ProjectionMessage[] | null;
+}
+
+function projectionMessage(value: unknown): ProjectionMessage | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const message = value as Record<string, unknown>;
+	if (typeof message.role !== "string" || typeof message.timestamp !== "number") return undefined;
+	if (message.role === "custom") {
+		return typeof message.customType === "string" &&
+			message.customType.length > 0 &&
+			(typeof message.content === "string" || Array.isArray(message.content)) &&
+			typeof message.display === "boolean"
+			? (value as CustomMessage)
+			: undefined;
+	}
+	if (message.role === "user") {
+		return typeof message.content === "string" || Array.isArray(message.content)
+			? (value as ProjectionMessage)
+			: undefined;
+	}
+	if (message.role === "assistant") {
+		return Array.isArray(message.content) ? (value as ProjectionMessage) : undefined;
+	}
+	if (message.role === "toolResult") {
+		return typeof message.toolCallId === "string" &&
+			typeof message.toolName === "string" &&
+			Array.isArray(message.content)
+			? (value as ProjectionMessage)
+			: undefined;
+	}
+	return undefined;
+}
+
+function readProjection(entry: SessionEntry): ResolvedContextProjection | undefined {
 	if (!isProjectionEntry(entry) || typeof entry.data !== "object" || entry.data === null) return undefined;
 	const data = entry.data as Partial<ContextProjection>;
 	if (typeof data.key !== "string" || data.key.length === 0) return undefined;
 	if (!Array.isArray(data.sourceEntryIds) || data.sourceEntryIds.some((id) => typeof id !== "string")) {
 		return undefined;
 	}
-	if (data.replacement === null) return data as ContextProjection;
+	if (data.replacement === null) return { key: data.key, sourceEntryIds: data.sourceEntryIds, replacement: null };
 	if (typeof data.replacement !== "object" || data.replacement === null) return undefined;
-	const replacement = data.replacement as Partial<ProjectionReplacement>;
+
+	const replacement = data.replacement as Partial<ProjectionReplacement & ProjectionCustomMessage>;
+	if (Array.isArray(replacement.messages)) {
+		const messages = replacement.messages.map(projectionMessage);
+		return messages.every((message): message is ProjectionMessage => message !== undefined)
+			? { key: data.key, sourceEntryIds: data.sourceEntryIds, replacement: messages }
+			: undefined;
+	}
+
 	if (
 		typeof replacement.customType !== "string" ||
 		replacement.customType.length === 0 ||
@@ -450,11 +503,54 @@ function readProjection(entry: SessionEntry): ContextProjection | undefined {
 	) {
 		return undefined;
 	}
-	return data as ContextProjection;
+	return {
+		key: data.key,
+		sourceEntryIds: data.sourceEntryIds,
+		replacement: [
+			createCustomMessage(
+				replacement.customType,
+				replacement.content,
+				replacement.display,
+				replacement.details,
+				entry.timestamp,
+			),
+		],
+	};
+}
+
+function replacementEntry(
+	projection: CustomEntry<ContextProjection>,
+	message: ProjectionMessage,
+	index: number,
+	count: number,
+): SessionEntry {
+	const id = count === 1 || index === 0 ? projection.id : `${projection.id}:${index}`;
+	const parentId = index === 0 ? projection.parentId : index === 1 ? projection.id : `${projection.id}:${index - 1}`;
+	const timestamp = new Date(message.timestamp).toISOString();
+	if (message.role === "custom") {
+		return {
+			type: "custom_message",
+			id,
+			parentId,
+			timestamp,
+			customType: message.customType,
+			content: message.content,
+			display: message.display,
+			details: message.details,
+		};
+	}
+	return { type: "message", id, parentId, timestamp, message };
 }
 
 function applyProjections(entries: SessionEntry[]): SessionEntry[] {
-	const latest = new Map<string, { entry: CustomEntry<ContextProjection>; data: ContextProjection; index: number }>();
+	const latest = new Map<
+		string,
+		{
+			entry: CustomEntry<ContextProjection>;
+			data: ResolvedContextProjection;
+			index: number;
+		}
+	>();
 	for (let index = 0; index < entries.length; index++) {
 		const entry = entries[index];
 		const data = readProjection(entry);
@@ -466,43 +562,38 @@ function applyProjections(entries: SessionEntry[]): SessionEntry[] {
 	const claimed = new Set<string>();
 	const accepted: Array<{
 		entry: CustomEntry<ContextProjection>;
-		data: ContextProjection & { replacement: ProjectionReplacement };
+		messages: ProjectionMessage[];
 		first: number;
 	}> = [];
 
 	for (const projection of [...latest.values()].sort((left, right) => right.index - left.index)) {
-		const replacement = projection.data.replacement;
-		if (!replacement || projection.data.sourceEntryIds.length === 0) continue;
+		const messages = projection.data.replacement;
+		if (!messages || projection.data.sourceEntryIds.length === 0) continue;
 		const found = projection.data.sourceEntryIds.filter((id) => positions.has(id));
 		if (found.length === 0 || found.some((id) => claimed.has(id))) continue;
 		for (const id of found) claimed.add(id);
 		accepted.push({
 			entry: projection.entry,
-			data: { ...projection.data, replacement },
+			messages,
 			first: Math.min(...found.map((id) => positions.get(id)!)),
 		});
 	}
 
-	const replacements = new Map<number, CustomMessageEntry>();
+	const replacements = new Map<number, SessionEntry[]>();
 	for (const projection of accepted) {
-		const replacement = projection.data.replacement;
-		replacements.set(projection.first, {
-			type: "custom_message",
-			id: projection.entry.id,
-			parentId: projection.entry.parentId,
-			timestamp: projection.entry.timestamp,
-			customType: replacement.customType,
-			content: replacement.content,
-			display: replacement.display,
-			details: replacement.details,
-		});
+		replacements.set(
+			projection.first,
+			projection.messages.map((message, index) =>
+				replacementEntry(projection.entry, message, index, projection.messages.length),
+			),
+		);
 	}
 
 	const projected: SessionEntry[] = [];
 	for (let index = 0; index < entries.length; index++) {
 		const entry = entries[index];
 		const replacement = replacements.get(index);
-		if (replacement) projected.push(replacement);
+		if (replacement) projected.push(...replacement);
 		if (isProjectionEntry(entry) || claimed.has(entry.id)) continue;
 		projected.push(entry);
 	}
