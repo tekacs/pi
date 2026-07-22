@@ -35,6 +35,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { CACHE_CHECKPOINT } from "../types.ts";
 import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
@@ -298,6 +299,12 @@ type ChatCompletionTextPartWithCacheControl = ChatCompletionContentPartText & {
 type ChatCompletionToolWithCacheControl = OpenAI.Chat.Completions.ChatCompletionTool & {
 	cache_control?: OpenAICompatCacheControl;
 };
+
+type CheckpointMessage = ChatCompletionMessageParam & { [CACHE_CHECKPOINT]?: true };
+
+function markCacheCheckpoint(message: ChatCompletionMessageParam): void {
+	Object.defineProperty(message, CACHE_CHECKPOINT, { value: true });
+}
 
 function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEnv): CacheRetention {
 	if (cacheRetention) {
@@ -1085,6 +1092,9 @@ function applyAnthropicCacheControl(
 ): void {
 	addCacheControlToSystemPrompt(messages, cacheControl);
 	addCacheControlToLastTool(tools, cacheControl);
+	for (const message of messages) {
+		if ((message as CheckpointMessage)[CACHE_CHECKPOINT]) addCacheControlToMessage(message, cacheControl);
+	}
 	addCacheControlToLastConversationMessage(messages, cacheControl);
 }
 
@@ -1425,6 +1435,7 @@ export function convertMessages(
 				if (compat.requiresToolResultName && toolMsg.toolName) {
 					(toolResultMsg as any).name = toolMsg.toolName;
 				}
+				if ((toolMsg as Message)[CACHE_CHECKPOINT]) markCacheCheckpoint(toolResultMsg);
 				params.push(toolResultMsg);
 
 				if (hasImages && model.input.includes("image")) {
@@ -1469,6 +1480,7 @@ export function convertMessages(
 			continue;
 		}
 
+		if (msg[CACHE_CHECKPOINT] && params.length > 0) markCacheCheckpoint(params.at(-1)!);
 		lastRole = msg.role;
 	}
 

@@ -173,6 +173,51 @@ Use `customType` to identify your extension's entries on reload. Interactive mod
 
 Pi stores [virtual model](virtual-models.md) router state as custom entries with `customType` `pi.virtual-model-state` and `data` `{ provider, modelId, state }`.
 
+The reserved `PROJECTION_TYPE` (`pi.context-projection`) is the exception. Its append-only metadata replaces arbitrary source entries in both model context and the interactive transcript without modifying the original entries.
+
+Version 2 is an atomic frame. One frame owns a complete set of disjoint directives under `key`; a later frame with that key replaces the earlier set as a whole. This lets one semantic transaction change many source ranges without exposing intermediate provider contexts. Each replacement is an ordered message sequence, so it can preserve provider protocols across a projected boundary—for example, a synthetic tool result, a summary, and a synthetic tool call.
+
+```typescript
+pi.appendEntry(PROJECTION_TYPE, {
+  version: 2,
+  key: "my-extension:context",
+  generation: 7,
+  fingerprint: "sha256:...",
+  directives: [
+    {
+      key: "archive-1",
+      sourceEntryIds: ["a1b2c3d4", "b2c3d4e5"],
+      anchorEntryId: "b2c3d4e5",
+      replacement: {
+        messages: [{
+          role: "custom",
+          customType: "my-extension-archive",
+          content: "Continuation-complete summary",
+          display: true,
+          details: { ... },
+          timestamp: Date.now(),
+        }],
+      },
+    },
+    {
+      key: "obsolete-archive",
+      sourceEntryIds: [],
+      replacement: null,
+    },
+  ],
+});
+```
+
+Directives within a frame must have unique keys and disjoint active source sets. A malformed or internally overlapping frame is ignored as a whole. When frames owned by different keys overlap, the newer frame owns the shared range and the older frame is skipped as a whole.
+
+`anchorEntryId` optionally places a replacement at an explicit historical entry instead of the earliest suppressed source. The anchor need not itself be suppressed, and several disjoint directives may share it; all replacement sequences are retained in frame/directive order. If the anchor is absent from the selected branch, placement falls back to the earliest available source.
+
+An active replacement with `messages: []` suppresses its sources without inserting content. Conversely, a directive with no sources may insert messages at a present `anchorEntryId`. Together these forms separate exact source suppression from independently placed representations while retaining one atomic frame.
+
+When the effective latest frame differs from its predecessor, context materialization conservatively marks the last provider-visible message before the earliest old/new source or anchor as a stable-prefix cache checkpoint. This hint is ephemeral—it is neither written to JSONL nor exposed as provider payload metadata. Anthropic-compatible request builders translate it into an additional `cache_control` breakpoint while retaining the system/tool/current-tail breakpoints.
+
+Existing append-only single-directive records and their original single custom-message replacement shape remain readable. A later legacy directive with the same key and `replacement: null` still clears that legacy projection.
+
 ### CustomMessageEntry
 
 Extension-injected messages that DO participate in LLM context.
@@ -230,7 +275,8 @@ Entries normally form one tree, but navigation APIs can create multiple roots:
    - Includes the compaction entry first
    - Includes non-system entries from `firstKeptEntryId` up to, but not including, the compaction entry
    - Includes entries after the compaction entry
-3. Preserves non-message entries in the selected range so interactive mode can render them
+3. Resolves the latest `PROJECTION_TYPE` frame per owner key (treating each legacy directive as a one-directive frame), validates each frame atomically, suppresses its source entries, and inserts each ordered replacement at its anchor or first source position
+4. Preserves other non-message entries in the selected range so interactive mode can render them
 
 `buildSessionProjection()` then applies the latest `context_edit` for each selected target. It returns the model-visible messages together with their source entries. Omitted targets produce no message; replacements retain the source entry's role and metadata while changing only content. The raw selected entries are not modified.
 

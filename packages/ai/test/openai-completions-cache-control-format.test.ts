@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { getModel, normalizeContext } from "../src/compat.ts";
-import type { Message, Model } from "../src/types.ts";
+import { CACHE_CHECKPOINT, type Message, type Model } from "../src/types.ts";
 
 interface CacheControl {
 	type: "ephemeral";
@@ -93,7 +93,7 @@ async function capturePayload(
 				},
 			],
 		}),
-		{ apiKey: "test-key", ...options },
+		{ apiKey: "test-key", cacheRetention: "short", ...options },
 	).result();
 
 	if (!mockState.lastParams) {
@@ -157,6 +157,20 @@ describe("openai-completions cacheControlFormat", () => {
 		const model = getModel("openrouter", "anthropic/claude-fable-5.1:batch");
 		const params = await capturePayload(model);
 		expectAnthropicCacheMarkers(params);
+	});
+
+	it("adds a stable-prefix marker before the latest conversation marker", async () => {
+		const model = getModel("openrouter", "anthropic/claude-sonnet-4");
+		const timestamp = Date.now();
+		const params = await capturePayload(model, undefined, [
+			{ role: "user", content: "stable prefix", [CACHE_CHECKPOINT]: true, timestamp },
+			{ role: "user", content: "current turn", timestamp: timestamp + 1 },
+		]);
+
+		const first = params.messages.find((message) => message.role === "user")!;
+		const last = params.messages.at(-1)!;
+		expect((first.content as TextPart[])[0]?.cache_control).toEqual({ type: "ephemeral" });
+		expect((last.content as TextPart[])[0]?.cache_control).toEqual({ type: "ephemeral" });
 	});
 
 	it("moves the conversation cache marker to a tool result", async () => {

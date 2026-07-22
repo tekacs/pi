@@ -1,10 +1,11 @@
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stream as streamAnthropic } from "../src/api/anthropic-messages.ts";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { stream as streamOpenAIResponses } from "../src/api/openai-responses.ts";
 import { getModel, normalizeContext, stream } from "../src/compat.ts";
 import { MODELS } from "../src/models.generated.ts";
-import type { Model } from "../src/types.ts";
+import { CACHE_CHECKPOINT, type Model } from "../src/types.ts";
 
 class PayloadCaptured extends Error {
 	constructor() {
@@ -212,6 +213,52 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 			expect(Array.isArray(lastMessage.content)).toBe(true);
 			const lastBlock = lastMessage.content[lastMessage.content.length - 1];
 			expect(lastBlock.cache_control).toEqual({ type: "ephemeral" });
+		});
+
+		it("should add a stable-prefix marker before the latest conversation marker", async () => {
+			const baseModel = getModel("anthropic", "claude-haiku-4-5");
+			let capturedPayload: any = null;
+			const timestamp = Date.now();
+
+			try {
+				const s = streamAnthropic(
+					baseModel,
+					normalizeContext({
+						systemPrompt: "Stable system",
+						messages: [
+							{ role: "user", content: "stable prefix", [CACHE_CHECKPOINT]: true, timestamp },
+							{ role: "user", content: "current turn", timestamp: timestamp + 1 },
+						],
+						tools: [{ name: "read", description: "Read a file", parameters: Type.Object({}) }],
+					}),
+					{
+						apiKey: "sk-ant-oat-test",
+						onPayload: stopAfterPayload((payload) => {
+							capturedPayload = payload;
+						}),
+					},
+				);
+				for await (const event of s) {
+					if (event.type === "error") break;
+				}
+			} catch {
+				// Payload capture intentionally aborts the request.
+			}
+
+			const first = capturedPayload.messages[0];
+			const last = capturedPayload.messages.at(-1);
+			expect(first.content.at(-1).cache_control).toEqual({ type: "ephemeral" });
+			expect(last.content.at(-1).cache_control).toEqual({ type: "ephemeral" });
+			expect(capturedPayload.system[0].cache_control).toBeUndefined();
+			expect(capturedPayload.system[1].cache_control).toEqual({ type: "ephemeral" });
+			const cachePoints = [
+				...capturedPayload.system,
+				...capturedPayload.tools,
+				...capturedPayload.messages.flatMap((message: any) =>
+					Array.isArray(message.content) ? message.content : [],
+				),
+			].filter((value: any) => value.cache_control);
+			expect(cachePoints).toHaveLength(4);
 		});
 
 		it("should set 1h cache TTL when cacheRetention is long", async () => {

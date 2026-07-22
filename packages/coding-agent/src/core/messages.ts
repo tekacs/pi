@@ -6,7 +6,7 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import { CACHE_CHECKPOINT, type ImageContent, type Message, type TextContent } from "@earendil-works/pi-ai";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -148,6 +148,7 @@ export function createCustomMessage(
 export function convertToLlm(messages: AgentMessage[]): Message[] {
 	return messages
 		.map((m): Message | undefined => {
+			const checkpoint = CACHE_CHECKPOINT in m && m[CACHE_CHECKPOINT] ? { [CACHE_CHECKPOINT]: true as const } : {};
 			switch (m.role) {
 				case "bashExecution":
 					// Skip messages excluded from context (!! prefix)
@@ -157,6 +158,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					return {
 						role: "user",
 						content: [{ type: "text", text: bashExecutionToText(m) }],
+						...checkpoint,
 						timestamp: m.timestamp,
 					};
 				case "custom": {
@@ -164,6 +166,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					return {
 						role: "user",
 						content,
+						...checkpoint,
 						timestamp: m.timestamp,
 					};
 				}
@@ -171,6 +174,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 					return {
 						role: "user",
 						content: [{ type: "text" as const, text: BRANCH_SUMMARY_PREFIX + m.summary + BRANCH_SUMMARY_SUFFIX }],
+						...checkpoint,
 						timestamp: m.timestamp,
 					};
 				case "compactionSummary":
@@ -179,6 +183,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 						content: [
 							{ type: "text" as const, text: COMPACTION_SUMMARY_PREFIX + m.summary + COMPACTION_SUMMARY_SUFFIX },
 						],
+						...checkpoint,
 						timestamp: m.timestamp,
 					};
 				case "system":
