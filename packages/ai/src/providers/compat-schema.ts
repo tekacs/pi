@@ -339,7 +339,7 @@ const OpenAICompletionsCompatProperties = {
 	cacheControlFormat: opt(
 		stringLiteral("anthropic", {
 			description:
-				"Cache control convention for prompt caching. Anthropic applies cache_control markers to the system prompt, last tool definition, and last user, assistant, or tool-result text content.",
+				"Cache control convention for prompt caching. Anthropic marks the system prompt, last tool, stable-prefix checkpoints, and latest conversation content.",
 		}),
 	),
 	sendSessionAffinityHeaders: optionalCompatBoolean({

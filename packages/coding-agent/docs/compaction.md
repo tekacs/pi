@@ -296,7 +296,7 @@ Extensions can intercept and customize both compaction and branch summarization.
 
 ### session_before_compact
 
-Fired before auto-compaction or `/compact`. Can cancel or provide custom summary. See `SessionBeforeCompactEvent` and `CompactionPreparation` in the types file.
+Fired before auto-compaction or `/compact`. It can cancel, provide a custom summary, or report an extension-owned projection repair for manual, threshold, or overflow handling. See `SessionBeforeCompactEvent` and `CompactionPreparation` in the types file.
 
 ```typescript
 pi.on("session_before_compact", async (event, ctx) => {
@@ -328,8 +328,31 @@ pi.on("session_before_compact", async (event, ctx) => {
       details: { /* custom data */ },
     }
   };
+
+  // Optional progress for the interactive compaction indicator. The event's
+  // AbortSignal is cancelled when the operator interrupts compaction.
+  ctx.reportContextRepair?.({
+    stage: "seat",
+    message: "Relieving context: auxiliary round 1/4…",
+    round: 1,
+    model: "relief-model",
+    thinkingLevel: "high",
+  });
+
+  // Append the repaired projection before returning. Pi validates the target,
+  // rebuilds live context from the selected branch, and retries an overflowed
+  // turn only after a successful repair.
+  return {
+    contextRepair: {
+      resolution: "repaired",
+      projectedTokens: 120_000,
+      targetTokens: 140_000,
+    }
+  };
 });
 ```
+
+`cancel`, `compaction`, and `contextRepair` are mutually exclusive. `contextRepair: { resolution: "suppressed" }` disables automatic compaction without claiming the context changed; manual `/compact` rejects suppression because the operator explicitly requested relief. `resolution: "failed"` reports a terminal repair failure and prevents native compaction fallback. A repaired result is rejected unless it appended branch state and `projectedTokens <= targetTokens`. Pi rebuilds the selected branch for successful manual and automatic repairs, but only a repaired overflow retries the suspended turn. Progress updates are display-only; interruption still flows through the event's `signal` and the normal compaction cancellation path.
 
 #### Converting Messages to Text
 
