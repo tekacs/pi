@@ -40,6 +40,31 @@ function msg(id: string, parentId: string | null, role: "user" | "assistant", te
 	};
 }
 
+function assistantCall(id: string, parentId: string | null, callId: string): SessionMessageEntry {
+	const entry = msg(id, parentId, "assistant", "");
+	if (entry.message.role !== "assistant") throw new Error("expected assistant message");
+	entry.message.content = [{ type: "toolCall", id: callId, name: "read", arguments: { path: "file" } }];
+	entry.message.stopReason = "toolUse";
+	return entry;
+}
+
+function toolResult(id: string, parentId: string | null, callId: string, text: string): SessionMessageEntry {
+	return {
+		type: "message",
+		id,
+		parentId,
+		timestamp: "2025-01-01T00:00:00Z",
+		message: {
+			role: "toolResult",
+			toolCallId: callId,
+			toolName: "read",
+			content: [{ type: "text", text }],
+			isError: false,
+			timestamp: 1,
+		},
+	};
+}
+
 function compaction(id: string, parentId: string | null, summary: string, firstKeptEntryId: string): CompactionEntry {
 	return {
 		type: "compaction",
@@ -244,6 +269,44 @@ describe("buildSessionContext", () => {
 			expect(buildSessionContext(entries).messages.map((message) => message.role)).toEqual([
 				"custom",
 				"user",
+				"user",
+			]);
+		});
+
+		it("inserts an ordered replacement message sequence", () => {
+			const bridgeResult = toolResult("bridge-result", null, "prior-call", "Result archived in summary.").message;
+			const bridgeCall = assistantCall("bridge-call", null, "later-call").message;
+			const entries: SessionEntry[] = [
+				msg("1", null, "user", "before"),
+				msg("2", "1", "assistant", "replace me"),
+				projection("3", "2", {
+					key: "test:sequence",
+					sourceEntryIds: ["2"],
+					replacement: {
+						messages: [
+							bridgeResult,
+							{
+								role: "custom",
+								customType: "test-archive",
+								content: "summary",
+								display: true,
+								timestamp: 2,
+							},
+							bridgeCall,
+						],
+					},
+				}),
+				msg("4", "3", "user", "after"),
+			];
+
+			const projected = buildContextEntries(entries);
+			expect(projected.map((entry) => entry.id)).toEqual(["1", "3", "3:1", "3:2", "4"]);
+			expect(projected.slice(1, 4).map((entry) => entry.type)).toEqual(["message", "custom_message", "message"]);
+			expect(buildSessionContext(entries).messages.map((message) => message.role)).toEqual([
+				"user",
+				"toolResult",
+				"custom",
+				"assistant",
 				"user",
 			]);
 		});
