@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
+	CACHE_CHECKPOINT,
 	getCurrentSystemMessage,
 	type ImageContent,
 	type Message,
@@ -31,6 +32,7 @@ import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
+import { applyContextProjections } from "./context-projection.ts";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -38,6 +40,18 @@ import {
 	createCompactionSummaryMessage,
 	createCustomMessage,
 } from "./messages.ts";
+
+export {
+	type ContextProjection,
+	type ContextProjectionData,
+	type ContextProjectionFrame,
+	isProjectionEntry,
+	PROJECTION_TYPE,
+	type ProjectionCustomMessage,
+	type ProjectionMessage,
+	type ProjectionReplacement,
+} from "./context-projection.ts";
+
 export const CURRENT_SESSION_VERSION = 3;
 
 export interface SessionHeader {
@@ -59,6 +73,8 @@ export interface SessionEntryBase {
 	id: string;
 	parentId: string | null;
 	timestamp: string;
+	/** Ephemeral materialization hint; the symbol cannot survive JSON serialization. */
+	[CACHE_CHECKPOINT]?: true;
 }
 
 export interface SessionMessageEntry extends SessionEntryBase {
@@ -122,8 +138,9 @@ export interface BranchSummaryEntry<T = unknown> extends SessionEntryBase {
  * Purpose: Persist extension state across session reloads. On reload, extensions can
  * scan entries for their customType and reconstruct internal state.
  *
- * Does NOT participate in LLM context (ignored by buildSessionContext).
- * For injecting content into context, see CustomMessageEntry.
+ * Does NOT participate in LLM context (ignored by buildSessionContext), except
+ * for the reserved PROJECTION_TYPE metadata interpreted by buildContextEntries().
+ * For injecting ordinary content into context, see CustomMessageEntry.
  */
 export interface CustomEntry<T = unknown> extends SessionEntryBase {
 	type: "custom";
@@ -471,7 +488,8 @@ export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage
  * This follows the current leaf path. If the path contains compaction entries,
  * the latest compaction is represented by the compaction entry itself, followed
  * by the kept entries starting at firstKeptEntryId and all entries after the
- * compaction entry. Older summarized entries are omitted.
+ * compaction entry. Older summarized entries are omitted. Active append-only
+ * projection metadata then replaces arbitrary source-entry sets in that result.
  */
 export function buildContextEntries(
 	entries: SessionEntry[],
@@ -488,12 +506,12 @@ export function buildContextEntries(
 	}
 
 	if (!compaction) {
-		return path;
+		return applyContextProjections(path);
 	}
 
 	const compactionIdx = path.findIndex((entry) => entry.id === compaction.id);
 	if (compactionIdx < 0) {
-		return path;
+		return applyContextProjections(path);
 	}
 
 	const contextEntries: SessionEntry[] = [compaction];
@@ -508,7 +526,7 @@ export function buildContextEntries(
 		}
 	}
 	contextEntries.push(...path.slice(compactionIdx + 1));
-	return contextEntries;
+	return applyContextProjections(contextEntries);
 }
 
 /**
@@ -561,7 +579,9 @@ export function buildSessionProjection(
 			messages:
 				sourceEntry.type === "compaction" && index > 0
 					? []
-					: projectContextEntry(sourceEntry, edits.get(sourceEntry.id)),
+					: projectContextEntry(sourceEntry, edits.get(sourceEntry.id)).map((message) =>
+							sourceEntry[CACHE_CHECKPOINT] ? { ...message, [CACHE_CHECKPOINT]: true as const } : message,
+						),
 		}),
 	);
 	return {

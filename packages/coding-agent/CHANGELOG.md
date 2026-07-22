@@ -4,6 +4,10 @@
 
 ### Added
 
+- Added atomic v2 context-projection frames, provider-exact hypothetical branch counting, and versioned projection capability checks for extension-owned context systems.
+- Added extension-owned context repair for manual and automatic compaction, with inspectable progress, cancellation, selected-branch rebuild, and overflow retry.
+- Added public AgentSession service factories for isolated in-process sessions, projection-boundary cache checkpoints, and stable OpenRouter session affinity.
+- Added `ctx.countContextTokens()` for non-persisted, provider-reported preflight of candidate messages or hypothetical session branches from extensions.
 - Device-code login (for example GitHub Copilot) now opens the verification page and copies the code when you press Enter. Providers can turn either action off with `openBrowserOnConfirm: false` or `copyCodeOnConfirm: false` ([#9282](https://github.com/earendil-works/pi/issues/9282), [#9301](https://github.com/earendil-works/pi/pull/9301))
 
 ### Changed

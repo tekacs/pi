@@ -108,6 +108,7 @@ import { RADIUS_MCP_URL, RADIUS_PROVIDER_ID } from "../../core/radius.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import {
+	isProjectionEntry,
 	type SessionEntry,
 	SessionManager,
 	sessionEntryToContextMessages,
@@ -507,6 +508,7 @@ export class InteractiveMode {
 	private readonly entriesRenderedByBoundaryCompaction = new Set<string>();
 	private streamingMessage: AssistantMessage | undefined = undefined;
 	private streamingContentStart = 0;
+	private projectionDirty = false;
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
@@ -3402,7 +3404,10 @@ export class InteractiveMode {
 
 			case "entry_appended":
 				if (this.entriesRenderedByBoundaryCompaction.delete(event.entry.id)) break;
-				if (event.entry.type === "custom") {
+				if (isProjectionEntry(event.entry)) {
+					if (this.session.isStreaming) this.projectionDirty = true;
+					else this.rebuildChatFromMessages();
+				} else if (event.entry.type === "custom") {
 					this.addCustomEntryToChat(event.entry);
 					this.ui.requestRender();
 				} else if (event.entry.type === "usage" && event.entry.kind === "cache_warm") {
@@ -3683,6 +3688,7 @@ export class InteractiveMode {
 				this.streamingMessage = undefined;
 				this.streamingContentStart = 0;
 				this.pendingTools.clear();
+				if (this.projectionDirty) this.rebuildChatFromMessages();
 
 				this.ui.requestRender();
 				break;
@@ -3707,6 +3713,14 @@ export class InteractiveMode {
 							)
 					: undefined;
 				this.showStatusIndicator(new CompactionStatusIndicator(this.ui, event.reason, colorFn));
+				this.ui.requestRender();
+				break;
+			}
+
+			case "context_repair_progress": {
+				if (this.activeStatusIndicator?.kind === "compaction") {
+					this.activeStatusIndicator.setMessage(`${event.message} (${keyText("app.interrupt")} to cancel)`);
+				}
 				this.ui.requestRender();
 				break;
 			}
@@ -3748,6 +3762,10 @@ export class InteractiveMode {
 							usage: event.result.usage,
 						});
 					}
+					this.footer.invalidate();
+				} else if (event.contextRepair?.resolution === "repaired") {
+					this.chatContainer.clear();
+					this.rebuildChatFromMessages();
 					this.footer.invalidate();
 				} else if (event.errorMessage) {
 					if (event.reason === "manual") {
@@ -4315,6 +4333,7 @@ export class InteractiveMode {
 	}
 
 	private rebuildChatFromMessages(): void {
+		this.projectionDirty = false;
 		this.chatContainer.clear();
 		this.renderSessionEntries(this.sessionManager.buildContextEntries());
 	}

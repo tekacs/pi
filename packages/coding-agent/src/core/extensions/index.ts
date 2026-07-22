@@ -58,6 +58,11 @@ export type {
 	ContextEvent,
 	// Event Results
 	ContextEventResult,
+	ContextRepairProgress,
+	ContextRepairResult,
+	ContextTokenCandidate,
+	ContextTokenCount,
+	ContextTokenCountOptions,
 	ContextUsage,
 	ContextWithSystemEvent,
 	CustomEntryDraft,
@@ -133,6 +138,7 @@ export type {
 	ProjectTrustEventDecision,
 	ProjectTrustEventResult,
 	ProjectTrustHandler,
+	PromptTokenUsage,
 	// Provider Registration
 	ProviderConfig,
 	ProviderModelConfig,

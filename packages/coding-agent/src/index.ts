@@ -23,6 +23,21 @@ export {
 	parseSkillBlock,
 	type SessionStats,
 } from "./core/agent-session.ts";
+// SDK for programmatic usage
+export {
+	AgentSessionRuntime,
+	type CreateAgentSessionRuntimeFactory,
+	type CreateAgentSessionRuntimeResult,
+	createAgentSessionRuntime,
+} from "./core/agent-session-runtime.ts";
+export {
+	type AgentSessionRuntimeDiagnostic,
+	type AgentSessionServices,
+	type CreateAgentSessionFromServicesOptions,
+	type CreateAgentSessionServicesOptions,
+	createAgentSessionFromServices,
+	createAgentSessionServices,
+} from "./core/agent-session-services.ts";
 export { readStoredCredential } from "./core/auth-storage.ts";
 export type { CacheWarmingDecision, CacheWarmingStatus } from "./core/cache-warmer.ts";
 // Compaction
@@ -82,6 +97,8 @@ export type {
 	ContextEditEntryDraft,
 	ContextEvent,
 	ContextEventResult,
+	ContextTokenCandidate,
+	ContextTokenCount,
 	ContextUsage,
 	ContextWithSystemEvent,
 	CustomEntryDraft,
@@ -139,6 +156,7 @@ export type {
 	ProjectTrustEventDecision,
 	ProjectTrustEventResult,
 	ProjectTrustHandler,
+	PromptTokenUsage,
 	ProviderConfig,
 	ProviderModelConfig,
 	ProviderStreamEvent,
@@ -247,22 +265,10 @@ export type {
 export { DefaultPackageManager } from "./core/package-manager.ts";
 export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./core/resource-loader.ts";
 export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.ts";
-// SDK for programmatic usage
 export {
-	AgentSessionRuntime,
-	type AgentSessionRuntimeDiagnostic,
-	type AgentSessionServices,
-	type CreateAgentSessionFromServicesOptions,
 	type CreateAgentSessionOptions,
 	type CreateAgentSessionResult,
-	type CreateAgentSessionRuntimeFactory,
-	type CreateAgentSessionRuntimeResult,
-	type CreateAgentSessionServicesOptions,
-	// Factory
 	createAgentSession,
-	createAgentSessionFromServices,
-	createAgentSessionRuntime,
-	createAgentSessionServices,
 	createBashTool,
 	// Tool factories (for custom cwd)
 	createCodingTools,
@@ -284,15 +290,21 @@ export {
 	type CompactionEntry,
 	type ContextEditableContent,
 	type ContextEditEntry,
+	type ContextProjection,
 	CURRENT_SESSION_VERSION,
 	type CustomEntry,
 	type CustomMessageEntry,
 	type FileEntry,
 	getLatestCompactionEntry,
+	isProjectionEntry,
 	type ModelChangeEntry,
 	migrateSessionEntries,
 	type NewSessionOptions,
+	PROJECTION_TYPE,
 	type ProjectedSessionEntry,
+	type ProjectionCustomMessage,
+	type ProjectionMessage,
+	type ProjectionReplacement,
 	parseSessionEntries,
 	type SessionContext,
 	type SessionEntry,

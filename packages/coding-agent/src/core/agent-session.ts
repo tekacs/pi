@@ -83,6 +83,11 @@ import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
 import {
 	type AgentActivityOutcome,
 	type BoundaryContextPreview,
+	type ContextRepairProgress,
+	type ContextRepairResult,
+	type ContextTokenCandidate,
+	type ContextTokenCount,
+	type ContextTokenCountOptions,
 	type ContextUsage,
 	type ExecuteToolOptions,
 	type ExtensionCommandContextActions,
@@ -123,9 +128,11 @@ import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.t
 import { exportSessionToJsonl } from "./session-export.ts";
 import {
 	type BranchSummaryEntry,
+	buildSessionContext,
 	type CompactionEntry,
 	type ContextEditEntry,
 	getLatestCompactionEntry,
+	isProjectionEntry,
 	type SessionEntry,
 	SessionManager,
 	type SessionProjection,
@@ -207,6 +214,7 @@ export type AgentSessionEvent =
 			followUp: readonly string[];
 	  }
 	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
+	| ({ type: "context_repair_progress" } & ContextRepairProgress)
 	| { type: "entry_appended"; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
@@ -214,6 +222,7 @@ export type AgentSessionEvent =
 			type: "compaction_end";
 			reason: "manual" | "threshold" | "overflow";
 			result: CompactionResult | undefined;
+			contextRepair?: ContextRepairResult;
 			aborted: boolean;
 			willRetry: boolean;
 			errorMessage?: string;
@@ -2817,6 +2826,49 @@ export class AgentSession {
 		this._resolveIdleWaitIfIdle();
 	}
 
+	private _applyContextRepair(
+		repair: Extract<ContextRepairResult, { resolution: "repaired" }>,
+		leafBeforeExtension: string | null,
+		willRetry: boolean,
+	): AgentMessage[] {
+		if (
+			!Number.isFinite(repair.projectedTokens) ||
+			repair.projectedTokens < 0 ||
+			!Number.isFinite(repair.targetTokens) ||
+			repair.targetTokens < 0 ||
+			repair.projectedTokens > repair.targetTokens
+		) {
+			throw new Error(
+				`Context repair missed or returned an invalid target (${repair.projectedTokens} projected, ${repair.targetTokens} target)`,
+			);
+		}
+		if (this.sessionManager.getLeafId() === leafBeforeExtension) {
+			throw new Error("Context repair returned without appending branch state");
+		}
+
+		const sessionContext = this.sessionManager.buildSessionContext();
+		let repairedMessages = sessionContext.messages;
+		if (willRetry) {
+			let failedIndex = -1;
+			for (let index = repairedMessages.length - 1; index >= 0; index--) {
+				const message = repairedMessages[index];
+				if (
+					message.role === "assistant" &&
+					message.stopReason === "error" &&
+					isContextOverflow(message, this.model?.contextWindow ?? 0)
+				) {
+					failedIndex = index;
+					break;
+				}
+			}
+			if (failedIndex >= 0) {
+				repairedMessages = [...repairedMessages.slice(0, failedIndex), ...repairedMessages.slice(failedIndex + 1)];
+			}
+		}
+		this.agent.state.messages = repairedMessages;
+		return repairedMessages;
+	}
+
 	/**
 	 * Manually compact the session context.
 	 *
@@ -2847,6 +2899,7 @@ export class AgentSession {
 
 			const settings = this.settingsManager.getCompactionSettings(model);
 			const pathEntries = this.sessionManager.getBranch();
+			const leafBeforeExtension = this.sessionManager.getLeafId();
 
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
@@ -2871,6 +2924,37 @@ export class AgentSession {
 					signal: this._compactionAbortController.signal,
 				})) as SessionBeforeCompactResult | undefined;
 
+				const returnedActions = [result?.cancel, result?.compaction, result?.contextRepair].filter(Boolean).length;
+				if (returnedActions > 1) {
+					throw new Error("session_before_compact must return only one of cancel, compaction, or contextRepair");
+				}
+				if (result?.contextRepair) {
+					const repair = result.contextRepair;
+					if (repair.resolution === "suppressed") {
+						throw new Error("Manual context relief was suppressed");
+					}
+					if (repair.resolution === "failed") {
+						throw new Error(repair.errorMessage);
+					}
+					this._applyContextRepair(repair, leafBeforeExtension, false);
+					const repairedResult: CompactionResult = {
+						summary: "",
+						firstKeptEntryId: this.sessionManager.getLeafId() ?? leafBeforeExtension ?? "",
+						tokensBefore: preparation.tokensBefore,
+						estimatedTokensAfter: repair.projectedTokens,
+						details: { contextRepair: repair },
+					};
+					this._clearManualCompactionState();
+					this._emit({
+						type: "compaction_end",
+						reason: "manual",
+						result: undefined,
+						contextRepair: repair,
+						aborted: false,
+						willRetry: false,
+					});
+					return repairedResult;
+				}
 				if (result?.cancel) {
 					cancelledByExtension = true;
 					throw new Error("Compaction cancelled");
@@ -3175,6 +3259,7 @@ export class AgentSession {
 			}
 
 			const pathEntries = this.sessionManager.getBranch();
+			const leafBeforeExtension = this.sessionManager.getLeafId();
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
 				return false;
@@ -3198,6 +3283,52 @@ export class AgentSession {
 					willRetry,
 					signal: abortController.signal,
 				})) as SessionBeforeCompactResult | undefined;
+
+				const returnedActions = [
+					extensionResult?.cancel,
+					extensionResult?.compaction,
+					extensionResult?.contextRepair,
+				].filter(Boolean).length;
+				if (returnedActions > 1) {
+					throw new Error("session_before_compact must return only one of cancel, compaction, or contextRepair");
+				}
+
+				if (extensionResult?.contextRepair) {
+					const repair = extensionResult.contextRepair;
+					if (repair.resolution === "suppressed") {
+						this._emit({
+							type: "compaction_end",
+							reason,
+							result: undefined,
+							contextRepair: repair,
+							aborted: false,
+							willRetry: false,
+						});
+						return false;
+					}
+					if (repair.resolution === "failed") {
+						this._emit({
+							type: "compaction_end",
+							reason,
+							result: undefined,
+							contextRepair: repair,
+							aborted: false,
+							willRetry: false,
+							errorMessage: repair.errorMessage,
+						});
+						return false;
+					}
+					this._applyContextRepair(repair, leafBeforeExtension, willRetry);
+					this._emit({
+						type: "compaction_end",
+						reason,
+						result: undefined,
+						contextRepair: repair,
+						aborted: false,
+						willRetry,
+					});
+					return willRetry || this.agent.hasQueuedMessages();
+				}
 
 				if (extensionResult?.cancel) {
 					cancelledByExtension = true;
@@ -3474,6 +3605,9 @@ export class AgentSession {
 					const entryId = this.sessionManager.appendCustomEntry(customType, data);
 					const entry = this.sessionManager.getEntry(entryId);
 					if (entry) {
+						if (isProjectionEntry(entry)) {
+							this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
+						}
 						this._emit({ type: "entry_appended", entry });
 					}
 				},
@@ -3519,6 +3653,8 @@ export class AgentSession {
 					this._extensionShutdownHandler?.();
 				},
 				getContextUsage: () => this.getContextUsage(),
+				countContextTokens: (messages, options) => this.countContextTokens(messages, options),
+				reportContextRepair: (progress) => this._emit({ type: "context_repair_progress", ...progress }),
 				compact: (options) => {
 					void (async () => {
 						try {
@@ -4368,6 +4504,91 @@ export class AgentSession {
 			},
 			branch: [...branch, entry],
 		};
+	}
+
+	async countContextTokens(
+		candidate: AgentMessage[] | ContextTokenCandidate,
+		options: ContextTokenCountOptions = {},
+	): Promise<ContextTokenCount> {
+		const messages = Array.isArray(candidate)
+			? candidate
+			: buildSessionContext(candidate.entries, candidate.leafId).messages;
+		const model = this.model;
+		if (!model) {
+			return {
+				ok: false,
+				method: "provider-preflight",
+				overflow: false,
+				message: "No active model is available for provider context counting",
+			};
+		}
+
+		try {
+			const signal = options.signal ?? this.agent.signal;
+			const transformed = this.agent.transformContext
+				? await this.agent.transformContext(messages, signal)
+				: messages;
+			const context = {
+				systemPrompt: this.systemPrompt,
+				messages: await this.agent.convertToLlm(transformed),
+				tools: this.agent.state.tools,
+			};
+			const apiKey = await this.agent.getApiKey?.(model.provider);
+			const events = await this.agent.streamFunction(model, context, {
+				apiKey,
+				signal,
+				maxTokens: 1,
+				sessionId: this.agent.sessionId,
+				onPayload: this.agent.onPayload,
+				onResponse: this.agent.onResponse,
+				transport: this.agent.transport,
+				thinkingBudgets: this.agent.thinkingBudgets,
+				maxRetryDelayMs: this.agent.maxRetryDelayMs,
+			});
+			const response = await events.result();
+			const prompt = response.usage.entryPrompt ?? response.usage;
+			const usage = {
+				input: prompt.input,
+				cacheRead: prompt.cacheRead,
+				cacheWrite: prompt.cacheWrite,
+			};
+			const tokens = usage.input + usage.cacheRead + usage.cacheWrite;
+			if (response.stopReason === "error" || response.stopReason === "aborted") {
+				return {
+					ok: false,
+					method: "provider-preflight",
+					overflow: isContextOverflow(response, model.contextWindow),
+					...(tokens > 0 ? { tokens, usage } : {}),
+					contextWindow: model.contextWindow,
+					message: response.errorMessage ?? `Provider preflight ended with ${response.stopReason}`,
+				};
+			}
+			if (!Number.isFinite(tokens) || tokens < 0) {
+				return {
+					ok: false,
+					method: "provider-preflight",
+					overflow: false,
+					contextWindow: model.contextWindow,
+					message: "Provider preflight returned invalid prompt usage",
+				};
+			}
+			return {
+				ok: true,
+				exact: true,
+				method: "provider-preflight",
+				tokens,
+				contextWindow: model.contextWindow,
+				usage,
+			};
+		} catch (error) {
+			return {
+				ok: false,
+				method: "provider-preflight",
+				overflow: false,
+				contextWindow: model.contextWindow,
+				message: error instanceof Error ? error.message : String(error),
+			};
+		}
 	}
 
 	/**
