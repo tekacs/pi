@@ -1346,7 +1346,7 @@ function createClient(
 	}
 
 	const client = new PiAnthropic({
-		apiKey: apiKey ?? null,
+		apiKey: hasHeader(defaultHeaders, "authorization") ? null : (apiKey ?? null),
 		authToken: null,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,
