@@ -4,7 +4,7 @@ import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/p
 import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
-import { addUsageToTotals, createUsageTotals } from "../../../core/usage-totals.ts";
+import { addUsageToTotals, createUsageTotals, entryPrompt } from "../../../core/usage-totals.ts";
 import { theme } from "../theme/theme.ts";
 
 /**
@@ -91,8 +91,12 @@ export class FooterComponent implements Component {
 
 		const addLatestUsage = (usage: Usage) => {
 			addUsageToTotals(usageTotals, usage);
-			const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-			if (promptTokens > 0) latestCacheHitRate = (usage.cacheRead / promptTokens) * 100;
+			// Hit rate is about the turn's entry request. On providers that aggregate an
+			// internal loop, the summed buckets count each in-turn re-read as a hit and
+			// would report ~99% straight through a cold start.
+			const entry = entryPrompt(usage);
+			const promptTokens = entry.input + entry.cacheRead + entry.cacheWrite;
+			if (promptTokens > 0) latestCacheHitRate = (entry.cacheRead / promptTokens) * 100;
 		};
 
 		for (const entry of this.session.sessionManager.getEntries()) {

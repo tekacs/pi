@@ -89,6 +89,7 @@ type SdkOutputState = {
 	requests: Map<string, Usage>;
 	committed: AssistantMessage[];
 	contextTokens?: number;
+	entryPrompt?: Usage["entryPrompt"];
 	hasText: boolean;
 };
 
@@ -150,16 +151,16 @@ export function streamClaudeAgentSdk(model: Model<any>, context: Context, option
 				const errorText = "Claude Agent SDK prompt is too long";
 				output.stopReason = "error";
 				output.errorMessage = errorText;
-				output.usage = usageFromResult(result, model, outputState.contextTokens);
+				output.usage = usageFromResult(result, model, outputState);
 				if (!outputState.hasText) appendTextBlock(output, stream, errorText);
 			} else if (result.subtype === "success") {
 				if (!outputState.hasText && result.result) appendTextBlock(output, stream, result.result);
-				output.usage = usageFromResult(result, model, outputState.contextTokens);
+				output.usage = usageFromResult(result, model, outputState);
 			} else {
 				const errorText = result.errors.join("\n") || "Claude Agent SDK query failed";
 				output.stopReason = "error";
 				output.errorMessage = errorText;
-				output.usage = usageFromResult(result, model, outputState.contextTokens);
+				output.usage = usageFromResult(result, model, outputState);
 				if (!outputState.hasText && errorText) appendTextBlock(output, stream, errorText);
 			}
 
@@ -1235,6 +1236,12 @@ function recordUsage(
 	calculateCost(model, request);
 
 	state.requests.set(message.message.id, request);
+	// The first request of the loop is the only one that met the cache as the
+	// previous turn left it; requests 2..N re-read what it warmed. Frames without a
+	// prompt say nothing about the cache, so wait for one that has one.
+	if (!state.entryPrompt && request.input + request.cacheRead + request.cacheWrite > 0) {
+		state.entryPrompt = { input: request.input, cacheRead: request.cacheRead, cacheWrite: request.cacheWrite };
+	}
 	if (request.contextTokens > 0) state.contextTokens = request.contextTokens;
 
 	const aggregate = createEmptyUsage();
@@ -1263,6 +1270,7 @@ function recordUsage(
 	if (!hasLongWrites) aggregate.cacheWrite1h = undefined;
 	if (!hasReasoning) aggregate.reasoning = undefined;
 	aggregate.contextTokens = state.contextTokens;
+	aggregate.entryPrompt = state.entryPrompt;
 	output.usage = aggregate;
 	return true;
 }
@@ -1277,7 +1285,7 @@ function requestContext(raw: Extract<SDKMessage, { type: "assistant" }>["message
 	);
 }
 
-function usageFromResult(result: SDKResultMessage, model: Model<any>, contextTokens: number | undefined): Usage {
+function usageFromResult(result: SDKResultMessage, model: Model<any>, state: SdkOutputState): Usage {
 	const usage = createEmptyUsage();
 	// result.usage aggregates the main conversation loop; modelUsage[0] can be an
 	// internal helper model (e.g. Haiku) and badly under-reports the turn.
@@ -1288,8 +1296,20 @@ function usageFromResult(result: SDKResultMessage, model: Model<any>, contextTok
 	usage.cacheWrite1h = result.usage.cache_creation?.ephemeral_1h_input_tokens ?? 0;
 	usage.reasoning = result.usage.output_tokens_details?.thinking_tokens;
 	usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-	usage.contextTokens = contextTokens;
+	usage.contextTokens = state.contextTokens;
+	usage.entryPrompt = state.entryPrompt;
 	calculateCost(model, usage);
+	// total_cost_usd is what was actually billed, including helper models this
+	// model's pricing cannot see. Scale the buckets onto it so the breakdown and
+	// the total describe the same dollars.
+	const computed = usage.cost.total;
+	if (computed > 0) {
+		const multiplier = result.total_cost_usd / computed;
+		usage.cost.input *= multiplier;
+		usage.cost.output *= multiplier;
+		usage.cost.cacheRead *= multiplier;
+		usage.cost.cacheWrite *= multiplier;
+	}
 	usage.cost.total = result.total_cost_usd;
 	return usage;
 }

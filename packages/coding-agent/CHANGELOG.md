@@ -28,6 +28,8 @@
 - Fixed unavailable scoped models being hidden from `/models`, allowing them to be removed without editing settings manually ([#6949](https://github.com/earendil-works/pi/issues/6949), [#7032](https://github.com/earendil-works/pi/pull/7032) by [@christianklotz](https://github.com/christianklotz)).
 - Fixed startup context file discovery to skip directories that match context file names such as `AGENTS.md`, which produced `EISDIR` warnings ([#7106](https://github.com/earendil-works/pi/pull/7106) by [@mrexodia](https://github.com/mrexodia)).
 - Fixed the llama.cpp extension to persist its model catalog, so llama.cpp models stay listed before the first successful refresh. See [llama.cpp](docs/llama-cpp.md) ([#7072](https://github.com/earendil-works/pi/pull/7072) by [@davidbrai](https://github.com/davidbrai)).
+- Fixed the footer cache hit rate and cache-miss notices on the Claude Agent SDK provider, which measured the summed internal request loop and so reported near-total hits through a cold cache while missing or inventing waste.
+- Fixed Claude Agent SDK per-bucket token costs to reconcile with the billed turn total instead of mixing model list pricing with the reported total.
 
 ## [0.82.0] - 2026-07-24
 

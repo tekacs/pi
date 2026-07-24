@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { SessionEntry } from "./session-manager.ts";
+import { entryPrompt } from "./usage-totals.ts";
 
 /**
  * Prompt-cache TTL: idle gaps longer than this are worth mentioning as the
@@ -34,8 +35,9 @@ export interface ModelPriceSource {
 	getModel(provider: string, modelId: string): { cost: { cacheRead: number } } | undefined;
 }
 
-/** The last request seen by the scan; everything in its prompt should be cached. */
+/** The last request seen by the scan; everything it left in context should be cached. */
 interface PreviousRequest {
+	/** Context the turn left behind, which the next turn's entry request should read back. */
 	promptTokens: number;
 	modelKey: string;
 	timestamp: number;
@@ -59,7 +61,11 @@ function detectMiss(
 	models: ModelPriceSource,
 ): CacheMiss | undefined {
 	const usage = message.usage;
-	const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+	// Only the entry request can show a cold cache. On providers that aggregate an
+	// internal loop, requests 2..N read back the prefix the entry request just
+	// warmed, so the summed cacheRead hides the miss the entry request paid for.
+	const entry = entryPrompt(usage);
+	const promptTokens = entry.input + entry.cacheRead + entry.cacheWrite;
 	// A zero-cache turn only counts when cache activity was reported before:
 	// on cache-read-only providers that is a total miss, while on providers
 	// that never report caching it means nothing.
@@ -67,13 +73,14 @@ function detectMiss(
 		return undefined;
 	}
 
-	const missedTokens = Math.min(prev.promptTokens, promptTokens) - usage.cacheRead;
+	const missedTokens = Math.min(prev.promptTokens, promptTokens) - entry.cacheRead;
 	if (missedTokens <= NOISE_FLOOR_TOKENS) return undefined;
 
 	// Extra cost = missed tokens billed at the actual paid rate (input/cacheWrite,
 	// incl. write premium) instead of the cache-read rate. Missed tokens can only
 	// land in the input or cacheWrite buckets, so the paid rate comes straight
-	// from this message's own cost breakdown.
+	// from this message's own cost breakdown. Rates are per-token, so the whole
+	// block gives the same rate as its entry request.
 	const paidTokens = usage.input + usage.cacheWrite;
 	const paidPerToken = paidTokens > 0 ? (usage.cost.input + usage.cost.cacheWrite) / paidTokens : 0;
 	const readPerToken =
@@ -91,7 +98,9 @@ function detectMiss(
 
 function asPreviousRequest(message: AssistantMessage, reportedCache: boolean): PreviousRequest | undefined {
 	const usage = message.usage;
-	const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
+	// What the next turn should read back is the context this one left behind, which
+	// on an aggregating provider is not the summed prompt volume of its whole loop.
+	const promptTokens = usage.contextTokens ?? usage.input + usage.cacheRead + usage.cacheWrite;
 	if (promptTokens <= 0) return undefined;
 	return {
 		promptTokens,

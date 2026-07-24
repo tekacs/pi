@@ -375,6 +375,14 @@ export interface Usage {
 	 * context accounting can remain distinct from cumulative billing usage.
 	 */
 	contextTokens?: number;
+	/**
+	 * Prompt token split of the first request in this Usage block. Providers that
+	 * aggregate several internal requests set this: every later request re-reads the
+	 * prefix the first one warmed, so only the entry request shows whether the prompt
+	 * cache survived since the previous turn. Left undefined when the block is a
+	 * single request and the top-level buckets already describe it.
+	 */
+	entryPrompt?: { input: number; cacheRead: number; cacheWrite: number };
 	totalTokens: number;
 	cost: {
 		input: number;

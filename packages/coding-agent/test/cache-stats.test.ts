@@ -22,6 +22,8 @@ function assistant(options: {
 	cost?: Partial<typeof zeroCost>;
 	model?: string;
 	timestamp?: number;
+	contextTokens?: number;
+	entryPrompt?: { input: number; cacheRead: number; cacheWrite: number };
 }): AssistantMessage {
 	return {
 		role: "assistant",
@@ -35,6 +37,8 @@ function assistant(options: {
 			cacheRead: options.cacheRead ?? 0,
 			cacheWrite: options.cacheWrite ?? 0,
 			totalTokens: 0,
+			contextTokens: options.contextTokens,
+			entryPrompt: options.entryPrompt,
 			cost: { ...zeroCost, ...options.cost },
 		},
 		stopReason: "stop",
@@ -139,5 +143,70 @@ describe("detectCacheMiss", () => {
 
 	it("returns undefined for the first turn of a session", () => {
 		expect(detectCacheMiss([], turn1, models)).toBeUndefined();
+	});
+});
+
+// Providers that run an internal agent loop report one Usage per turn, summed over
+// every request in it. Requests 2..N re-read the prefix the entry request warmed,
+// so the summed buckets describe neither the context left behind nor the cache the
+// next turn met. Such providers report contextTokens and entryPrompt separately.
+describe("providers that aggregate an internal request loop", () => {
+	// One short turn: a single request over a 200k context.
+	const shortTurn = assistant({
+		cacheRead: 200_000,
+		cacheWrite: 2_000,
+		cost: { cacheRead: 0.06, cacheWrite: 0.0075 },
+		contextTokens: 210_000,
+		entryPrompt: { input: 0, cacheRead: 200_000, cacheWrite: 2_000 },
+		timestamp: 0,
+	});
+
+	it("detects a cold entry request masked by the rest of the loop", () => {
+		// Eight requests: the first repriced the whole 210k context, the other seven
+		// then read it back, summing to a cacheRead far above the real prompt.
+		const coldTurn = assistant({
+			cacheRead: 1_470_000,
+			cacheWrite: 220_000,
+			cost: { cacheRead: 0.441, cacheWrite: 0.825 },
+			contextTokens: 240_000,
+			entryPrompt: { input: 0, cacheRead: 0, cacheWrite: 210_000 },
+			timestamp: 600_000,
+		});
+		const miss = detectCacheMiss([entry(shortTurn)], coldTurn, models);
+		expect(miss?.missedTokens).toBe(210_000);
+		expect(miss?.idleMs).toBe(600_000);
+	});
+
+	it("counts nothing when the entry request hit and only the loop inflated the buckets", () => {
+		const warmTurn = assistant({
+			cacheRead: 1_500_000,
+			cacheWrite: 20_000,
+			cost: { cacheRead: 0.45, cacheWrite: 0.075 },
+			contextTokens: 240_000,
+			entryPrompt: { input: 0, cacheRead: 210_000, cacheWrite: 3_000 },
+			timestamp: 120_000,
+		});
+		expect(detectCacheMiss([entry(shortTurn)], warmTurn, models)).toBeUndefined();
+	});
+
+	it("expects the next turn to read back the context left behind, not the summed prompt", () => {
+		// A long warm loop leaves 240k in context; a following cold turn must be
+		// measured against that, not against the loop's 1.5M of prompt volume.
+		const longTurn = assistant({
+			cacheRead: 1_500_000,
+			cacheWrite: 20_000,
+			cost: { cacheRead: 0.45, cacheWrite: 0.075 },
+			contextTokens: 240_000,
+			entryPrompt: { input: 0, cacheRead: 210_000, cacheWrite: 3_000 },
+			timestamp: 0,
+		});
+		const coldTurn = assistant({
+			cacheWrite: 245_000,
+			cost: { cacheWrite: 0.919 },
+			contextTokens: 250_000,
+			entryPrompt: { input: 0, cacheRead: 0, cacheWrite: 245_000 },
+			timestamp: 600_000,
+		});
+		expect(detectCacheMiss([entry(longTurn)], coldTurn, models)?.missedTokens).toBe(240_000);
 	});
 });
