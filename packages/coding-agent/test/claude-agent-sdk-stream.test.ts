@@ -259,8 +259,12 @@ describe("Claude Agent SDK stream", () => {
 			cacheWrite: 3126,
 			totalTokens: 3239,
 			contextTokens: 239,
+			// The main loop's first request, not the summed loop and not the subagent.
+			entryPrompt: { input: 2, cacheRead: 100, cacheWrite: 126 },
 		});
 		expect(result.usage.cost.total).toBeCloseTo(0.0637);
+		const { input, output, cacheRead, cacheWrite } = result.usage.cost;
+		expect(input + output + cacheRead + cacheWrite).toBeCloseTo(0.0637);
 		expect(sdk.query.mock.calls[0][0].options.env).toMatchObject({
 			DISABLE_AUTO_COMPACT: "1",
 			DISABLE_COMPACT: "1",
@@ -368,7 +372,11 @@ describe("Claude Agent SDK stream", () => {
 		}
 
 		const result = await stream.result();
-		expect(result.usage).toMatchObject({ totalTokens: 3239, contextTokens: 50 });
+		expect(result.usage).toMatchObject({
+			totalTokens: 3239,
+			contextTokens: 50,
+			entryPrompt: { input: 10, cacheRead: 100, cacheWrite: 20 },
+		});
 	});
 
 	it("hands prompt overflow to Pi and clears the overfull transcript before replay", async () => {
