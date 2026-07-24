@@ -917,7 +917,7 @@ function createClient(
 		optionsHeaders,
 	);
 	const client = new Anthropic({
-		apiKey: apiKey ?? null,
+		apiKey: hasHeader(defaultHeaders, "authorization") ? null : (apiKey ?? null),
 		authToken: null,
 		baseURL: model.baseUrl,
 		dangerouslyAllowBrowser: true,

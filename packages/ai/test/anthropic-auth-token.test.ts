@@ -114,8 +114,9 @@ describe("Anthropic auth token env", () => {
 		});
 	});
 
-	it("uses Authorization headers without OAuth-mode request shaping", async () => {
+	it("lets Authorization headers override API key auth without OAuth-mode request shaping", async () => {
 		const stream = streamAnthropic(anthropicModel, context, {
+			apiKey: "stored-api-key",
 			headers: { Authorization: "Bearer gateway-token" },
 		});
 		await stream.result();
