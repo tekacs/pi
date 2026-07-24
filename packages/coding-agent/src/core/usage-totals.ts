@@ -19,6 +19,17 @@ export function createUsageTotals(): UsageTotals {
 	};
 }
 
+/**
+ * Prompt token split of the request that entered the turn: what the cache had to
+ * serve before any in-turn request warmed it. Providers that aggregate several
+ * internal requests into one Usage report it separately; for every other provider
+ * the whole block is one request. Use this, not the buckets, for cache-hit
+ * analysis - aggregated buckets count each in-turn re-read as a hit.
+ */
+export function entryPrompt(usage: Usage): { input: number; cacheRead: number; cacheWrite: number } {
+	return usage.entryPrompt ?? usage;
+}
+
 export function addUsageToTotals(totals: UsageTotals, usage: Usage): void {
 	totals.input += usage.input;
 	totals.output += usage.output;

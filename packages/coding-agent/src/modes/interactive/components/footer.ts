@@ -5,7 +5,7 @@ import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ContextUsage } from "../../../core/extensions/types.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
-import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
+import { addUsageToTotals, createUsageTotals, entryPrompt, type UsageTotals } from "../../../core/usage-totals.ts";
 import { theme } from "../theme/theme.ts";
 
 /**
@@ -124,8 +124,12 @@ export class FooterComponent implements Component {
 
 		const addLatestUsage = (usage: Usage) => {
 			addUsageToTotals(usageTotals, usage);
-			const promptTokens = usage.input + usage.cacheRead + usage.cacheWrite;
-			if (promptTokens > 0) latestCacheHitRate = (usage.cacheRead / promptTokens) * 100;
+			// Hit rate is about the turn's entry request. On providers that aggregate an
+			// internal loop, the summed buckets count each in-turn re-read as a hit and
+			// would report ~99% straight through a cold start.
+			const entry = entryPrompt(usage);
+			const promptTokens = entry.input + entry.cacheRead + entry.cacheWrite;
+			if (promptTokens > 0) latestCacheHitRate = (entry.cacheRead / promptTokens) * 100;
 		};
 
 		for (const entry of sessionManager.getEntries()) {
@@ -165,7 +169,7 @@ export class FooterComponent implements Component {
 		const streaming = state.streamingMessage;
 		if (streaming?.role === "assistant") {
 			addUsageToTotals(usageTotals, streaming.usage);
-			const { input, cacheRead, cacheWrite } = streaming.usage;
+			const { input, cacheRead, cacheWrite } = entryPrompt(streaming.usage);
 			const promptTokens = input + cacheRead + cacheWrite;
 			if (promptTokens > 0) latestCacheHitRate = (cacheRead / promptTokens) * 100;
 		}
