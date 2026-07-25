@@ -139,6 +139,7 @@ export type {
 	ToolExecutionStartEvent,
 	ToolExecutionUpdateEvent,
 	ToolInfo,
+	ToolRenderContext,
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	TurnEndEvent,
@@ -328,6 +329,15 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
+// Tool render helpers for custom tools and extensions
+export {
+	getTextOutput,
+	invalidArgText,
+	normalizeDisplayText,
+	replaceTabs,
+	shortenPath,
+	type ToolRenderResultLike,
+} from "./core/tools/render-utils.ts";
 export {
 	hasTrustRequiringProjectResources,
 	type ProjectTrustDecision,
@@ -405,10 +415,12 @@ export {
 	Theme,
 	type ThemeColor,
 } from "./modes/interactive/theme/theme.ts";
+// Terminal output utilities
+export { stripAnsi } from "./utils/ansi.ts";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
 export { convertToPng } from "./utils/image-convert.ts";
 export { formatDimensionNote, type ResizedImage, resizeImage } from "./utils/image-resize.ts";
 // Shell utilities
-export { getShellConfig } from "./utils/shell.ts";
+export { getShellConfig, sanitizeBinaryOutput } from "./utils/shell.ts";
