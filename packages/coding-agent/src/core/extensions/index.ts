@@ -193,6 +193,7 @@ export type {
 	ToolLoadout,
 	ToolLoadoutChanges,
 	ToolNamespace,
+	ToolRenderContext,
 	ToolRenderResultOptions,
 	ToolResultEvent,
 	ToolResultEventResult,
