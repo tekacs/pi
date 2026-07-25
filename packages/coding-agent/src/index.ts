@@ -199,6 +199,7 @@ export type {
 	ToolLoadout,
 	ToolLoadoutChanges,
 	ToolNamespace,
+	ToolRenderContext,
 	ToolRendererResolver,
 	ToolRenderers,
 	ToolRenderResultOptions,
@@ -403,7 +404,16 @@ export {
 	type WriteToolOptions,
 	withFileMutationQueue,
 } from "./core/tools/index.ts";
-export { formatReadLineRange } from "./core/tools/render-utils.ts";
+// Tool render helpers for custom tools and extensions
+export {
+	formatReadLineRange,
+	getTextOutput,
+	invalidArgText,
+	normalizeDisplayText,
+	replaceTabs,
+	shortenPath,
+	type ToolRenderResultLike,
+} from "./core/tools/render-utils.ts";
 export {
 	hasTrustRequiringProjectResources,
 	type ProjectTrustDecision,
@@ -500,6 +510,8 @@ export {
 	type ThemeStyle,
 	type ThemeToken,
 } from "./modes/interactive/theme/theme.ts";
+// Terminal output utilities
+export { stripAnsi } from "./utils/ansi.ts";
 // Clipboard utilities
 export { copyToClipboard } from "./utils/clipboard.ts";
 export { parseFrontmatter, stripFrontmatter } from "./utils/frontmatter.ts";
@@ -507,4 +519,4 @@ export { convertToPng } from "./utils/image-convert.ts";
 export { formatDimensionNote, type ResizedImage, resizeImage } from "./utils/image-resize.ts";
 export { detectSupportedImageMimeTypeFromFile } from "./utils/mime.ts";
 // Shell utilities
-export { getPowerShellConfig, getShellConfig } from "./utils/shell.ts";
+export { getPowerShellConfig, getShellConfig, sanitizeBinaryOutput } from "./utils/shell.ts";
