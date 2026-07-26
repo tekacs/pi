@@ -10,6 +10,7 @@ import {
 	compact,
 	DEFAULT_COMPACTION_SETTINGS,
 	estimateContextTokens,
+	estimateTokens,
 	findCutPoint,
 	getLastAssistantUsage,
 	prepareCompaction,
@@ -191,6 +192,18 @@ function extractText(messages: AgentMessage[]): string {
 // ============================================================================
 
 describe("Token calculation", () => {
+	it("counts opaque thinking signatures at two characters per token", () => {
+		const message = createAssistantMessage("");
+		message.content = [
+			{
+				type: "thinking",
+				thinking: "four",
+				thinkingSignature: "123456789",
+			},
+		];
+		expect(estimateTokens(message)).toBe(6);
+	});
+
 	it("should calculate total context tokens from usage", () => {
 		const usage = createMockUsage(1000, 500, 200, 100);
 		expect(calculateContextTokens(usage)).toBe(1800);
