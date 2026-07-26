@@ -275,16 +275,22 @@ export function estimateTokens(message: AgentMessage): number {
 		}
 		case "assistant": {
 			const assistant = message as AssistantMessage;
+			let signatureTokens = 0;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
 					chars += block.text.length;
 				} else if (block.type === "thinking") {
 					chars += block.thinking.length;
+					if (block.thinkingSignature) {
+						// Opaque signatures are encrypted/base64-like and tokenize much
+						// more densely than natural text across reasoning providers.
+						signatureTokens += Math.ceil(block.thinkingSignature.length / 2);
+					}
 				} else if (block.type === "toolCall") {
 					chars += block.name.length + JSON.stringify(block.arguments).length;
 				}
 			}
-			return Math.ceil(chars / 4);
+			return Math.ceil(chars / 4) + signatureTokens;
 		}
 		case "custom":
 		case "toolResult": {
