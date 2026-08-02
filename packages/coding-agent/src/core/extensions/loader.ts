@@ -27,6 +27,7 @@ import type {
 	ExtensionFactory,
 	ExtensionRuntime,
 	ExtensionVirtualModel,
+	HarnessStream,
 	LoadExtensionsResult,
 	MarkdownTransformer,
 	MessageRenderer,
@@ -190,6 +191,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		mcpServers: new McpServerRegistry(),
 		pendingVirtualModelRegistrations: [],
 		createContext: notInitialized,
+		pendingHarnessRegistrations: [],
 		assertActive,
 		invalidate: (message) => {
 			if (state.staleMessage) return;
@@ -218,11 +220,15 @@ export function createExtensionRuntime(): ExtensionRuntime {
 		registerNativeProvider: (provider, extensionPath = "<unknown>") => {
 			runtime.pendingNativeProviderRegistrations.push({ provider, extensionPath });
 		},
+		registerHarness: (name, stream, extensionPath = "<unknown>") => {
+			runtime.pendingHarnessRegistrations.push({ name, stream, extensionPath });
+		},
 		unregisterProvider: (name) => {
 			runtime.pendingProviderRegistrations = runtime.pendingProviderRegistrations.filter((r) => r.name !== name);
 			runtime.pendingNativeProviderRegistrations = runtime.pendingNativeProviderRegistrations.filter(
 				(r) => r.provider.id !== name,
 			);
+			runtime.pendingHarnessRegistrations = runtime.pendingHarnessRegistrations.filter((r) => r.name !== name);
 		},
 		registerVirtualModel: (definition, extensionPath = "<unknown>") => {
 			runtime.pendingVirtualModelRegistrations.push({ definition, extensionPath });
@@ -469,6 +475,11 @@ function createExtensionAPI(
 				return;
 			}
 			applyRuntimeChange(() => runtime.registerNativeProvider(providerOrName, extension.path));
+		},
+
+		registerHarness(name: string, stream: HarnessStream) {
+			assertActive();
+			applyRuntimeChange(() => runtime.registerHarness(name, stream, extension.path));
 		},
 
 		unregisterProvider(name: string) {
