@@ -1657,6 +1657,7 @@ export class AgentSession {
 			selectedTools: validToolNames,
 			toolSnippets,
 			toolGuidelines: Object.fromEntries(this._toolPromptGuidelines),
+			toolInstructions: this._resourceLoader.getToolInstructions?.(),
 		});
 	}
 
