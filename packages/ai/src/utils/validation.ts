@@ -61,9 +61,19 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 		return result.value;
 	}
 
-	const errors = result.errors.map((error) => `  - ${formatValidationPath(error.path)}: ${error.message}`).join("\n");
-
-	const errorMessage = `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`;
+	const uniqueErrors = [
+		...new Set(result.errors.map((error) => `${formatValidationPath(error.path)}: ${error.message}`)),
+	];
+	const visibleErrors = uniqueErrors
+		.slice(0, 6)
+		.map((error) => `  - ${error.length <= 240 ? error : `${error.slice(0, 239)}…`}`);
+	if (uniqueErrors.length > visibleErrors.length) {
+		visibleErrors.push(`  … ${uniqueErrors.length - visibleErrors.length} more validation errors`);
+	}
+	const errors = visibleErrors.join("\n") || "Unknown validation error";
+	const serialized = JSON.stringify(toolCall.arguments);
+	const received = serialized.length <= 400 ? serialized : `${serialized.slice(0, 399)}…`;
+	const errorMessage = `Validation failed for tool "${toolCall.name}":\n${errors}\nReceived arguments: ${received}`;
 
 	throw new Error(errorMessage);
 }
