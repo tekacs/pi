@@ -3544,6 +3544,9 @@ export class AgentSession {
 					this._modelRuntime.registerNativeProvider(provider);
 					this._refreshCurrentModelFromRegistry();
 				},
+				registerHarness: (name, stream) => {
+					this._modelRuntime.registerHarness(name, stream);
+				},
 				unregisterProvider: (name) => {
 					this._modelRuntime.unregisterProvider(name);
 					this._refreshCurrentModelFromRegistry();

@@ -10,6 +10,7 @@ import { CacheWarmer } from "./cache-warmer.ts";
 import { isClaudeAgentSdkModel, streamClaudeAgentSdk } from "./claude-agent-sdk-stream.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
+import { runAgentTool } from "./harness.ts";
 import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
@@ -395,6 +396,42 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
+			const harness = modelRuntime.getHarness(model.provider);
+			if (harness) {
+				const auth = await modelRuntime.getAuth(model, { apiKey: options?.apiKey, env: options?.env });
+				if (!auth) {
+					throw new Error(`Provider is not configured: ${model.provider}`);
+				}
+				const tools = agent.state.tools;
+				const agentContext = {
+					systemPrompt: agent.state.systemPrompt,
+					messages: agent.state.messages,
+					tools,
+				};
+				return harness(model, context, {
+					...options,
+					auth,
+					cwd,
+					systemPrompt: agent.state.systemPrompt,
+					tools,
+					agentContext,
+					runTool: (call) => {
+						if (!tools.includes(call.tool)) {
+							throw new Error(`Harness requested an inactive Pi tool: ${call.tool.name}`);
+						}
+						return runAgentTool(call.tool, call.args, {
+							model,
+							context: agentContext,
+							stream: call.stream,
+							signal: options?.signal,
+							callId: call.callId,
+							idPrefix: model.provider,
+							beforeToolCall: agent.beforeToolCall,
+							afterToolCall: agent.afterToolCall,
+						});
+					},
+				});
+			}
 			if (isClaudeAgentSdkModel(model)) {
 				const auth = await modelRuntime.getAuth(model, { apiKey: options?.apiKey, env: options?.env });
 				if (!auth) {

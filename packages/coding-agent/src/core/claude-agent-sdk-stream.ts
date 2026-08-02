@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -29,17 +29,12 @@ import {
 import { z } from "zod/v4";
 import { getPackageDir } from "../config.ts";
 import { CLAUDE_AGENT_SDK_API, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH } from "./claude-agent-sdk-models.ts";
+import { runAgentTool } from "./harness.ts";
 
 /** Disable the bundled binary's duplicate MCP result ceiling in practice. */
 const SDK_TOOL_RESULT_TOKENS = Number.MAX_SAFE_INTEGER;
 
 type ToolLookup = ReadonlyMap<string, AgentTool>;
-
-type SdkToolEvents = {
-	start: (toolCallId: string, toolName: string, args: unknown) => void;
-	update: (toolCallId: string, toolName: string, args: unknown, partialResult: AgentToolResult<unknown>) => void;
-	end: (toolCallId: string, toolName: string, result: AgentToolResult<unknown>, isError: boolean) => void;
-};
 
 export interface ClaudeAgentSdkStreamOptions extends SimpleStreamOptions {
 	cwd: string;
@@ -51,9 +46,10 @@ export interface ClaudeAgentSdkStreamOptions extends SimpleStreamOptions {
 }
 
 type SdkTurn = {
+	model: Model<any>;
 	options: ClaudeAgentSdkStreamOptions;
 	toolLookup: ToolLookup;
-	events: SdkToolEvents;
+	stream: AssistantMessageEventStream;
 };
 
 type SdkSession = {
@@ -245,9 +241,10 @@ async function startSdkInvocation(
 
 	const persistent = sessionId !== undefined;
 	const turn: SdkTurn = {
+		model,
 		options,
 		toolLookup: new Map(options.tools.map((tool) => [tool.name, tool])),
-		events: streamToolEvents(stream),
+		stream,
 	};
 	session.turn.current = turn;
 
@@ -384,20 +381,6 @@ async function readSdkTurn(
 		signal?.removeEventListener("abort", interrupt);
 		session.turn.current = undefined;
 	}
-}
-
-function streamToolEvents(stream: AssistantMessageEventStream): SdkToolEvents {
-	return {
-		start: (toolCallId, toolName, args) => {
-			stream.push({ type: "tool_execution_start", toolCallId, toolName, args });
-		},
-		update: (toolCallId, toolName, args, partialResult) => {
-			stream.push({ type: "tool_execution_update", toolCallId, toolName, args, partialResult });
-		},
-		end: (toolCallId, toolName, result, isError) => {
-			stream.push({ type: "tool_execution_end", toolCallId, toolName, result, isError });
-		},
-	};
 }
 
 function sdkConfig(model: Model<any>, context: Context, options: ClaudeAgentSdkStreamOptions): SdkConfig {
@@ -583,7 +566,15 @@ function createSdkTools(
 					content: [{ type: "text" as const, text: `Pi tool ${toolDefinition.name} is unavailable` }],
 				};
 			}
-			const execution = await executeAgentTool(agentTool, args, turn.options, turn.events);
+			const execution = await runAgentTool(agentTool, args, {
+				model: turn.model,
+				context: turn.options.agentContext,
+				stream: turn.stream,
+				signal: turn.options.signal,
+				idPrefix: "claude-agent-sdk",
+				beforeToolCall: turn.options.beforeToolCall,
+				afterToolCall: turn.options.afterToolCall,
+			});
 			return toolResultToMcp(execution.result, execution.isError);
 		},
 	}));
@@ -747,89 +738,6 @@ function resolveTypeBoxReference(
 
 function withDescription<T extends ZodSchema>(schema: T, description: string | undefined): T {
 	return description ? schema.describe(description) : schema;
-}
-
-async function executeAgentTool(
-	agentTool: AgentTool,
-	args: unknown,
-	options: ClaudeAgentSdkStreamOptions,
-	events: SdkToolEvents,
-): Promise<{ result: AgentToolResult<unknown>; isError: boolean }> {
-	const preparedArgs = agentTool.prepareArguments ? agentTool.prepareArguments(args) : args;
-	const toolCall = {
-		type: "toolCall",
-		id: `claude-agent-sdk-${randomUUID()}`,
-		name: agentTool.name,
-		arguments: preparedArgs as Record<string, unknown>,
-	} as const;
-	const assistantMessage: AssistantMessage = {
-		role: "assistant",
-		content: [toolCall],
-		api: CLAUDE_AGENT_SDK_API,
-		provider: "claude-agent-sdk",
-		model: "claude-agent-sdk",
-		usage: createEmptyUsage(),
-		stopReason: "toolUse",
-		timestamp: Date.now(),
-	};
-
-	events.start(toolCall.id, toolCall.name, toolCall.arguments);
-	let result: AgentToolResult<unknown>;
-	let isError = false;
-	try {
-		const beforeResult = await options.beforeToolCall?.(
-			{
-				assistantMessage,
-				toolCall,
-				args: preparedArgs,
-				context: options.agentContext,
-			},
-			options.signal,
-		);
-		if (beforeResult?.block) {
-			result = {
-				content: [{ type: "text", text: beforeResult.reason || "Tool execution was blocked" }],
-				details: {},
-			};
-			isError = true;
-		} else {
-			let acceptingUpdates = true;
-			try {
-				result = await agentTool.execute(toolCall.id, preparedArgs as never, options.signal, (partialResult) => {
-					if (acceptingUpdates) events.update(toolCall.id, toolCall.name, toolCall.arguments, partialResult);
-				});
-			} finally {
-				acceptingUpdates = false;
-			}
-			const afterResult = await options.afterToolCall?.(
-				{
-					assistantMessage,
-					toolCall,
-					args: preparedArgs,
-					result,
-					isError,
-					context: options.agentContext,
-				},
-				options.signal,
-			);
-			if (afterResult) {
-				result = {
-					content: afterResult.content ?? result.content,
-					details: afterResult.details ?? result.details,
-					terminate: afterResult.terminate ?? result.terminate,
-				};
-				isError = afterResult.isError ?? isError;
-			}
-		}
-	} catch (error) {
-		result = {
-			content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
-			details: {},
-		};
-		isError = true;
-	}
-	events.end(toolCall.id, toolCall.name, result, isError);
-	return { result, isError };
 }
 
 function toolResultToMcp(result: AgentToolResult<unknown>, isError: boolean) {

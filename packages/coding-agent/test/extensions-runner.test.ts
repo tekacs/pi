@@ -1210,9 +1210,14 @@ describe("ExtensionRunner", () => {
 					},
 				],
 			});
+			runtime.registerHarness("queued-provider", () => {
+				throw new Error("not called");
+			});
 			expect(runtime.pendingProviderRegistrations).toHaveLength(2);
+			expect(runtime.pendingHarnessRegistrations).toHaveLength(1);
 
 			runtime.unregisterProvider("queued-provider");
+			expect(runtime.pendingHarnessRegistrations).toHaveLength(0);
 			expect(runtime.pendingProviderRegistrations).toHaveLength(0);
 		});
 
@@ -1224,6 +1229,12 @@ describe("ExtensionRunner", () => {
 			expect(runtime.pendingProviderRegistrations).toHaveLength(0);
 
 			runtime.registerProvider("instant-provider", providerModelConfig);
+			const harness = () => {
+				throw new Error("not called");
+			};
+			runtime.registerHarness("instant-provider", harness);
+			expect(runtime.pendingHarnessRegistrations).toHaveLength(0);
+			expect(modelRegistry.getHarness("instant-provider")).toBe(harness);
 			expect(runtime.pendingProviderRegistrations).toHaveLength(0);
 			expect(modelRegistry.find("instant-provider", "instant-model")?.cost.tiers).toEqual([
 				{
@@ -1236,6 +1247,7 @@ describe("ExtensionRunner", () => {
 			]);
 
 			runtime.unregisterProvider("instant-provider");
+			expect(modelRegistry.getHarness("instant-provider")).toBeUndefined();
 			expect(modelRegistry.find("instant-provider", "instant-model")).toBeUndefined();
 		});
 	});

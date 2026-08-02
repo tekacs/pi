@@ -61,6 +61,7 @@ import type {
 	ExtensionShortcut,
 	ExtensionToolContext,
 	ExtensionUIContext,
+	HarnessStream,
 	InputEvent,
 	InputEventResult,
 	InputSource,
@@ -432,6 +433,7 @@ export class ExtensionRunner {
 		providerActions?: {
 			registerProvider?: (name: string, config: ProviderConfig) => void;
 			registerNativeProvider?: (provider: Provider) => void;
+			registerHarness?: (name: string, stream: HarnessStream) => void;
 			unregisterProvider?: (name: string) => void;
 			registerVirtualModel?: (definition: VirtualModelDefinition) => void;
 			unregisterVirtualModel?: (provider: string, id: string) => void;
@@ -536,8 +538,25 @@ export class ExtensionRunner {
 			}
 		}
 		this.runtime.pendingVirtualModelRegistrations = [];
+		for (const { name, stream, extensionPath } of this.runtime.pendingHarnessRegistrations) {
+			try {
+				if (providerActions?.registerHarness) {
+					providerActions.registerHarness(name, stream);
+				} else {
+					this.modelRegistry.registerHarness(name, stream);
+				}
+			} catch (err) {
+				this.emitError({
+					extensionPath,
+					event: "register_harness",
+					error: err instanceof Error ? err.message : String(err),
+					stack: err instanceof Error ? err.stack : undefined,
+				});
+			}
+		}
+		this.runtime.pendingHarnessRegistrations = [];
 
-		// From this point on, provider registration/unregistration takes effect immediately
+		// From this point on, provider and harness registration/unregistration takes effect immediately
 		// without requiring a /reload.
 		this.runtime.registerProvider = (name, config) => {
 			if (providerActions?.registerProvider) {
@@ -552,6 +571,13 @@ export class ExtensionRunner {
 				return;
 			}
 			this.modelRegistry.registerProvider(provider);
+		};
+		this.runtime.registerHarness = (name, stream) => {
+			if (providerActions?.registerHarness) {
+				providerActions.registerHarness(name, stream);
+				return;
+			}
+			this.modelRegistry.registerHarness(name, stream);
 		};
 		this.runtime.unregisterProvider = (name) => {
 			if (providerActions?.unregisterProvider) {

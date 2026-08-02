@@ -20,6 +20,7 @@ import type {
 	Provider,
 	ProviderHeaders,
 } from "@earendil-works/pi-ai";
+import type { HarnessStream } from "./harness.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
 import type { VirtualModelDefinition } from "./virtual-models.ts";
@@ -202,6 +203,14 @@ export class ModelRegistry {
 			return;
 		}
 		this.runtime.registerNativeProvider(providerOrName);
+	}
+
+	registerHarness(providerName: string, stream: HarnessStream): void {
+		this.runtime.registerHarness(providerName, stream);
+	}
+
+	getHarness(providerName: string): HarnessStream | undefined {
+		return this.runtime.getHarness(providerName);
 	}
 
 	unregisterProvider(providerName: string): void {
