@@ -104,6 +104,7 @@ Each boundary can be supplied explicitly:
 - `sessionManager` supplies persistent or in-memory conversation history.
 - `resourceLoader` supplies extensions, skills, prompt templates, themes, and context files.
 - `tools`, `noTools`, `excludeTools`, and `customTools` control the active tool set.
+- `systemPromptOverride` replaces the default prompt. Set `toolInstructions: true` alongside it to append the selected tools' prompt snippets and deduplicated prompt guidelines without restoring the default coding-assistant prompt; it defaults to `false`, preserving exact replacement semantics.
 
 Use `DefaultResourceLoader` when you want standard discovery with selected overrides. Supply a custom `ResourceLoader` when the host owns resource storage and discovery completely.
 
