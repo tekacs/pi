@@ -252,9 +252,19 @@ function repairStreamText(stream: RepairStream): string {
 }
 
 class StreamView extends Text {
+	constructor(
+		text: string,
+		private readonly rows: () => number,
+		paddingX = 0,
+		paddingY = 0,
+	) {
+		super(text, paddingX, paddingY);
+	}
+
 	render(width: number): string[] {
 		const lines = super.render(width);
-		return lines.length <= 7 ? lines : [lines[0]!, ...lines.slice(-6)];
+		const limit = Math.max(7, Math.floor(this.rows() * 0.85));
+		return lines.length <= limit ? lines : [lines[0]!, ...lines.slice(-(limit - 1))];
 	}
 }
 
@@ -2362,7 +2372,7 @@ export class InteractiveMode {
 			return;
 		}
 		if (!this.repairStream) {
-			this.repairStream = new StreamView(repairStreamText(stream), 1, 0);
+			this.repairStream = new StreamView(repairStreamText(stream), () => this.ui.terminal.rows, 1, 0);
 			this.statusContainer.addChild(this.repairStream);
 			return;
 		}
