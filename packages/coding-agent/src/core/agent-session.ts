@@ -1830,6 +1830,7 @@ export class AgentSession {
 			hiddenTools: [...this._hiddenDeclarations],
 			toolSnippets,
 			toolGuidelines: Object.fromEntries(this._toolPromptGuidelines),
+			toolInstructions: this._resourceLoader.getToolInstructions?.(),
 		});
 	}
 
