@@ -62,6 +62,7 @@ import type { CompactionPreparation, CompactionResult } from "../compaction/inde
 import type { EventBus } from "../event-bus.ts";
 import type { ExecOptions, ExecResult } from "../exec.ts";
 import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
+import type { HarnessStream } from "../harness.ts";
 import type { KeybindingsManager } from "../keybindings.ts";
 import type { McpServerConfig, McpServerRegistry, RegisteredMcpServer } from "../mcp-servers.ts";
 import type { CustomMessage } from "../messages.ts";
@@ -102,6 +103,13 @@ import type {
 import type { ModelRoute, ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
+export type {
+	HarnessStream,
+	HarnessStreamOptions,
+	HarnessToolCall,
+	HarnessToolResult,
+	HarnessToolRunner,
+} from "../harness.ts";
 export type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
 export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
@@ -1956,7 +1964,17 @@ export interface ExtensionAPI {
 	registerProvider(name: string, config: ProviderConfig): void;
 
 	/**
-	 * Unregister a previously registered provider.
+	 * Register a provider-scoped embedded-agent harness.
+	 *
+	 * Harnesses are selected by model.provider before ordinary provider streaming. The provider and
+	 * its models must be registered separately. Registrations during loading are committed only when
+	 * the extension factory succeeds, like provider registrations. Use options.runTool for every Pi tool invocation so
+	 * argument preparation, validation, hooks, cancellation, updates, and execution events stay exact.
+	 */
+	registerHarness(name: string, stream: HarnessStream): void;
+
+	/**
+	 * Unregister a previously registered provider and its harness.
 	 *
 	 * Removes all models belonging to the named provider and restores any
 	 * built-in models that were overridden by it. Has no effect if the provider
@@ -2258,6 +2276,8 @@ export interface ExtensionRuntimeState {
 	pendingVirtualModelRegistrations: Array<{ definition: VirtualModelDefinition; extensionPath: string }>;
 	/** Create an extension context. Throws before the runner binds. */
 	createContext: () => ExtensionContext;
+	/** Provider-scoped harnesses queued during extension loading, processed after providers bind. */
+	pendingHarnessRegistrations: Array<{ name: string; stream: HarnessStream; extensionPath: string }>;
 	/** Throws when this extension instance is stale after runtime replacement. */
 	assertActive: () => void;
 	/** Marks this extension instance as stale after runtime replacement or reload. */
@@ -2272,6 +2292,7 @@ export interface ExtensionRuntimeState {
 	 */
 	registerProvider: (name: string, config: ProviderConfig, extensionPath?: string) => void;
 	registerNativeProvider: (provider: Provider, extensionPath?: string) => void;
+	registerHarness: (name: string, stream: HarnessStream, extensionPath?: string) => void;
 	unregisterProvider: (name: string, extensionPath?: string) => void;
 	/** Servers registered with `pi.registerMcpServer()`. */
 	mcpServers: McpServerRegistry;
