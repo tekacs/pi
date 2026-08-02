@@ -252,13 +252,11 @@ function repairStreamText(stream: RepairStream): string {
 }
 
 class StreamView extends Text {
-	constructor(
-		text: string,
-		private readonly rows: () => number,
-		paddingX = 0,
-		paddingY = 0,
-	) {
+	private readonly rows: () => number;
+
+	constructor(text: string, rows: () => number, paddingX = 0, paddingY = 0) {
 		super(text, paddingX, paddingY);
+		this.rows = rows;
 	}
 
 	render(width: number): string[] {
