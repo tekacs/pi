@@ -11,6 +11,7 @@ describe("InteractiveMode compaction events", () => {
 		const fakeThis = {
 			isInitialized: true,
 			projectionDirty: false,
+			entriesRenderedByBoundaryCompaction: new Set<string>(),
 			footer: { invalidate: vi.fn() },
 			session: { isStreaming: true },
 			addCustomEntryToChat: vi.fn(),

@@ -117,6 +117,7 @@ import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { stripAnsi } from "../../utils/ansi.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../../utils/clipboard.ts";
 import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
@@ -221,6 +222,30 @@ function isWorkingStatusEditor(editor: EditorComponent): editor is WorkingStatus
 
 function isExpandable(obj: unknown): obj is Expandable {
 	return typeof obj === "object" && obj !== null && "setExpanded" in obj && typeof obj.setExpanded === "function";
+}
+
+type RepairStream = NonNullable<Extract<AgentSessionEvent, { type: "context_repair_progress" }>["stream"]>;
+
+function compactCount(value: number): string {
+	if (value < 1_000) return String(value);
+	const scaled = value / 1_000;
+	return `${scaled.toFixed(scaled < 10 ? 1 : 0).replace(/\.0$/, "")}k`;
+}
+
+function repairStreamText(stream: RepairStream): string {
+	const facts = [stream.channel, `${compactCount(stream.responseChars)} response chars`];
+	if (stream.toolChars) facts.push(`${compactCount(stream.toolChars)} tool chars`);
+	if (stream.inputTokens !== undefined) facts.push(`${compactCount(stream.inputTokens)} input tokens`);
+	if (stream.outputTokens !== undefined) facts.push(`${compactCount(stream.outputTokens)} output tokens`);
+	const text = stripAnsi(stream.text).replace(/\r/g, "");
+	return `${theme.fg("dim", `seat stream · ${facts.join(" · ")}`)}\n${theme.fg("muted", text)}`;
+}
+
+class StreamView extends Text {
+	render(width: number): string[] {
+		const lines = super.render(width);
+		return lines.length <= 7 ? lines : [lines[0]!, ...lines.slice(-6)];
+	}
 }
 
 class ExpandableText extends ThemedText implements Expandable {
@@ -452,6 +477,7 @@ export class InteractiveMode {
 	private pendingUserInputs: string[] = [];
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	private activeWorkingIndicatorEmbedded = false;
+	private repairStream: StreamView | undefined;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
 	private workingVisible = true;
@@ -2224,6 +2250,7 @@ export class InteractiveMode {
 		this.activeStatusIndicator?.dispose();
 		this.activeStatusIndicator = indicator;
 		this.activeWorkingIndicatorEmbedded = false;
+		this.repairStream = undefined;
 		this.statusContainer.clear();
 		this.setEditorWorkingStatusIndicator(undefined);
 		if (this.setEditorWorkingStatusIndicator(indicator)) {
@@ -2231,6 +2258,23 @@ export class InteractiveMode {
 			return;
 		}
 		this.statusContainer.addChild(indicator);
+	}
+
+	private setRepairStream(stream?: RepairStream): void {
+		if (this.activeStatusIndicator?.kind !== "compaction") return;
+		if (!stream) {
+			if (!this.repairStream) return;
+			this.repairStream = undefined;
+			this.statusContainer.clear();
+			this.statusContainer.addChild(this.activeStatusIndicator);
+			return;
+		}
+		if (!this.repairStream) {
+			this.repairStream = new StreamView(repairStreamText(stream), 1, 0);
+			this.statusContainer.addChild(this.repairStream);
+			return;
+		}
+		this.repairStream.setText(repairStreamText(stream));
 	}
 
 	private clearStatusIndicator(kind?: StatusIndicator["kind"]): void {
@@ -2242,6 +2286,7 @@ export class InteractiveMode {
 		clearedIndicator?.dispose();
 		this.activeStatusIndicator = undefined;
 		this.activeWorkingIndicatorEmbedded = false;
+		this.repairStream = undefined;
 		this.statusContainer.clear();
 		this.setEditorWorkingStatusIndicator(undefined);
 		if (
@@ -3650,6 +3695,7 @@ export class InteractiveMode {
 			case "context_repair_progress": {
 				if (this.activeStatusIndicator?.kind === "compaction") {
 					this.activeStatusIndicator.setMessage(`${event.message} (${keyText("app.interrupt")} to cancel)`);
+					this.setRepairStream(event.stream);
 				}
 				this.ui.requestRender();
 				break;
