@@ -848,6 +848,7 @@ describe("AgentSession compaction characterization", () => {
 
 	it("applies extension context repair for manual compaction and exposes progress", async () => {
 		const events: string[] = [];
+		const streams: string[] = [];
 		const harness = await createHarness({
 			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
 			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 100 }],
@@ -855,7 +856,17 @@ describe("AgentSession compaction characterization", () => {
 				(pi) => {
 					pi.on("session_before_compact", (event, ctx) => {
 						if (event.reason !== "manual") return undefined;
-						ctx.reportContextRepair?.({ stage: "counting", message: "Relieving context: measuring" });
+						ctx.reportContextRepair?.({
+							stage: "counting",
+							message: "Relieving context: measuring",
+							stream: {
+								channel: "thinking",
+								text: "Inspecting exact summary coverage",
+								responseChars: 34,
+								toolChars: 0,
+								inputTokens: 91,
+							},
+						});
 						const sources = event.branchEntries.filter((entry) => entry.type === "message");
 						pi.appendEntry(PROJECTION_TYPE, {
 							version: 2,
@@ -878,7 +889,10 @@ describe("AgentSession compaction characterization", () => {
 		harnesses.push(harness);
 		seedCompactableSession(harness);
 		harness.session.subscribe((event) => {
-			if (event.type === "context_repair_progress") events.push(`${event.stage}:${event.message}`);
+			if (event.type === "context_repair_progress") {
+				events.push(`${event.stage}:${event.message}`);
+				if (event.stream) streams.push(`${event.stream.channel}:${event.stream.text}:${event.stream.inputTokens}`);
+			}
 			if (event.type === "compaction_end" && event.contextRepair) {
 				expect(harness.session.isCompacting).toBe(false);
 				events.push(event.contextRepair.resolution);
@@ -889,6 +903,7 @@ describe("AgentSession compaction characterization", () => {
 
 		expect(result.estimatedTokensAfter).toBe(25);
 		expect(events).toEqual(["counting:Relieving context: measuring", "repaired"]);
+		expect(streams).toEqual(["thinking:Inspecting exact summary coverage:91"]);
 		expect(harness.session.agent.state.messages).toMatchObject([
 			{ role: "custom", customType: "test-repair", content: "manually repaired" },
 		]);
