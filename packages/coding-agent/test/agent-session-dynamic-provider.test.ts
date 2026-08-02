@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Provider } from "@earendil-works/pi-ai";
+import { type AssistantMessage, createAssistantMessageEventStream, type Provider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
@@ -173,6 +174,102 @@ describe("AgentSession dynamic provider registration", () => {
 
 		expect(session.model?.baseUrl).toBe("http://localhost:8080/native-command");
 		expect(await capturePromptBaseUrl(session)).toBe("http://localhost:8080/native-command");
+
+		session.dispose();
+	});
+
+	it("routes a registered harness through Pi's live extension tool and hooks", async () => {
+		const captured: Record<string, unknown> = {};
+		const lifecycle: string[] = [];
+		const session = await createSession([
+			(pi) => {
+				pi.registerTool({
+					name: "host_echo",
+					label: "Host echo",
+					description: "Echo through Pi",
+					parameters: Type.Object({ value: Type.String() }),
+					prepareArguments: (args) => ({ value: String((args as { legacy?: unknown }).legacy ?? "") }),
+					async execute(_id, args, _signal, onUpdate) {
+						captured.executedArgs = { ...args };
+						onUpdate?.({
+							content: [{ type: "text", text: `partial:${args.value}` }],
+							details: { partial: true },
+						});
+						return { content: [{ type: "text", text: `tool:${args.value}` }], details: { value: args.value } };
+					},
+				});
+				pi.on("tool_call", (event) => {
+					(event.input as { value: string }).value += ":before";
+				});
+				pi.on("tool_result", () => ({
+					content: [{ type: "text", text: "after-hook" }],
+					details: { patched: true },
+				}));
+				pi.registerHarness("anthropic", (model, _context, options) => {
+					captured.auth = options.auth.auth.apiKey;
+					captured.cwd = options.cwd;
+					captured.systemPrompt = options.systemPrompt;
+					captured.contextMessages = options.agentContext.messages.length;
+					const stream = createAssistantMessageEventStream();
+					queueMicrotask(async () => {
+						const tool = options.tools.find((candidate) => candidate.name === "host_echo");
+						if (!tool) throw new Error("host_echo was not supplied to the harness");
+						const execution = await options.runTool({
+							tool,
+							args: { legacy: "raw" },
+							callId: "vendor-call",
+							stream,
+						});
+						captured.execution = execution;
+						const message: AssistantMessage = {
+							role: "assistant",
+							content: execution.result.content.filter((part) => part.type === "text"),
+							api: model.api,
+							provider: model.provider,
+							model: model.id,
+							usage: {
+								input: 1,
+								output: 1,
+								cacheRead: 0,
+								cacheWrite: 0,
+								totalTokens: 2,
+								cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+							},
+							stopReason: "stop",
+							timestamp: Date.now(),
+						};
+						stream.push({ type: "done", reason: "stop", message });
+					});
+					return stream;
+				});
+			},
+		]);
+
+		await session.bindExtensions({});
+		session.setActiveToolsByName(["host_echo"]);
+		const unsubscribe = session.subscribe((event) => {
+			if (event.type.startsWith("tool_execution_")) lifecycle.push(event.type);
+		});
+		await session.prompt("exercise the host harness");
+		unsubscribe();
+
+		expect(captured).toMatchObject({
+			auth: "test-key",
+			cwd: tempDir,
+			executedArgs: { value: "raw:before" },
+			execution: {
+				isError: false,
+				result: { content: [{ type: "text", text: "after-hook" }], details: { patched: true } },
+			},
+		});
+		expect(captured.systemPrompt).toEqual(expect.any(String));
+		expect(captured.contextMessages).toBeGreaterThan(0);
+		expect(lifecycle).toEqual(["tool_execution_start", "tool_execution_update", "tool_execution_end"]);
+		expect(session.state.messages.at(-1)).toMatchObject({
+			role: "assistant",
+			content: [{ type: "text", text: "after-hook" }],
+			stopReason: "stop",
+		});
 
 		session.dispose();
 	});

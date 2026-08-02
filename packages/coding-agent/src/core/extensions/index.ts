@@ -110,6 +110,12 @@ export type {
 	GetThinkingLevelHandler,
 	GrepToolCallEvent,
 	GrepToolResultEvent,
+	// Provider Registration
+	HarnessStream,
+	HarnessStreamOptions,
+	HarnessToolCall,
+	HarnessToolResult,
+	HarnessToolRunner,
 	InlineExtension,
 	// Events - Input
 	InputEvent,
@@ -144,7 +150,6 @@ export type {
 	ProjectTrustEventResult,
 	ProjectTrustHandler,
 	PromptTokenUsage,
-	// Provider Registration
 	ProviderConfig,
 	ProviderModelConfig,
 	ProviderStreamEvent,
