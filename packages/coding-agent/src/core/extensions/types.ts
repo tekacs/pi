@@ -317,6 +317,15 @@ export interface ContextRepairProgress {
 	round?: number;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
+	/** Bounded observational tail from an auxiliary repair model. Never persisted in session history. */
+	stream?: {
+		channel: "thinking" | "text" | "tool";
+		text: string;
+		responseChars: number;
+		toolChars: number;
+		inputTokens?: number;
+		outputTokens?: number;
+	};
 }
 
 export interface PromptTokenUsage {
