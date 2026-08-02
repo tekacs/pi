@@ -235,4 +235,51 @@ describe("buildSystemPrompt", () => {
 			expect(build([])).toContain("Use the read tool to load a skill's file");
 		});
 	});
+
+	describe("custom system prompt", () => {
+		test("preserves replacement semantics by default", () => {
+			const prompt = buildSystemPrompt({
+				customPrompt: "Do one specialized job.",
+				selectedTools: ["dynamic_tool"],
+				toolSnippets: { dynamic_tool: "Run dynamic test behavior" },
+				promptGuidelines: ["Use dynamic_tool exactly once."],
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).not.toContain("Available tools:");
+			expect(prompt).not.toContain("Use dynamic_tool exactly once.");
+		});
+
+		test("can include selected tool instructions without the default coding prompt", () => {
+			const prompt = buildSystemPrompt({
+				customPrompt: "Do one specialized job.",
+				selectedTools: ["dynamic_tool", "hidden_tool"],
+				hiddenTools: ["hidden_tool"],
+				toolSnippets: {
+					hidden_tool: "Never expose this tool",
+					dynamic_tool: "Run dynamic test behavior",
+					unused_tool: "Never render this",
+				},
+				toolGuidelines: {
+					hidden_tool: ["Never expose this guideline"],
+					dynamic_tool: ["Use dynamic_tool exactly once."],
+					unused_tool: ["Never render this guideline"],
+				},
+				promptGuidelines: ["Use dynamic_tool exactly once.", " Use dynamic_tool exactly once. "],
+				toolInstructions: true,
+				cwd: process.cwd(),
+			});
+
+			expect(prompt).toContain("Available tools:\n- dynamic_tool: Run dynamic test behavior");
+			expect(prompt.match(/- Use dynamic_tool exactly once\./g)).toHaveLength(1);
+			expect(prompt).not.toContain("unused_tool");
+			expect(prompt).not.toContain("hidden_tool");
+			expect(prompt).not.toContain("Never expose");
+			expect(prompt).not.toContain("You are an expert coding assistant");
+			expect(prompt).not.toContain("Never render this guideline");
+			expect(prompt).not.toContain("Be concise in your responses");
+			expect(prompt).toContain("<tools>\nAvailable tools:");
+			expect(prompt).toContain("<rules>\nTool guidelines:");
+		});
+	});
 });

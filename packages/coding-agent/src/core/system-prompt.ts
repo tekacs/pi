@@ -24,6 +24,8 @@ export interface BuildSystemPromptOptions {
 	toolGuidelines?: Record<string, string[]>;
 	/** Additional guideline bullets appended to the default system prompt rules. */
 	promptGuidelines?: string[];
+	/** Include selected tool snippets and guidelines with a custom prompt. */
+	toolInstructions?: boolean;
 	/** Text appended from user configuration before project context, skills, and cwd. */
 	appendSystemPrompt?: string;
 	/** Additional XML-wrapped prompt sections keyed by tag name. */
@@ -61,6 +63,7 @@ export function normalizeBuildSystemPromptOptions(input: BuildSystemPromptOption
 	return {
 		customPrompt: input.customPrompt,
 		forceSystemPrompt: input.forceSystemPrompt,
+		toolInstructions: input.toolInstructions,
 		selectedTools: [...(input.selectedTools ?? ["read", "bash", "edit", "write"])],
 		hiddenTools: [...(input.hiddenTools ?? [])],
 		toolSnippets: { ...(input.toolSnippets ?? {}) },
@@ -89,6 +92,7 @@ function buildRules(
 	selectedTools: string[],
 	toolGuidelines: Record<string, string[]>,
 	promptGuidelines: string[],
+	customPrompt = false,
 ): string {
 	const rules: string[] = [];
 	const seen = new Set<string>();
@@ -105,7 +109,7 @@ function buildRules(
 	const hasFind = selectedTools.includes("find");
 	const hasLs = selectedTools.includes("ls");
 
-	if ((hasBash || hasPowerShell) && !hasGrep && !hasFind && !hasLs) {
+	if (!customPrompt && (hasBash || hasPowerShell) && !hasGrep && !hasFind && !hasLs) {
 		if (hasBash && hasPowerShell) {
 			addRule("Use bash or PowerShell for file operations like listing, searching, and finding files");
 		} else if (hasPowerShell) {
@@ -119,8 +123,10 @@ function buildRules(
 		for (const rule of toolGuidelines[name] ?? []) addRule(rule);
 	}
 	for (const rule of promptGuidelines) addRule(rule);
-	addRule("Be concise in your responses");
-	addRule("Show file paths clearly when working with files");
+	if (!customPrompt) {
+		addRule("Be concise in your responses");
+		addRule("Show file paths clearly when working with files");
+	}
 	return rules.map((rule) => `- ${rule}`).join("\n");
 }
 
@@ -134,6 +140,7 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 		toolSnippets,
 		toolGuidelines,
 		promptGuidelines,
+		toolInstructions,
 		appendSystemPrompt,
 		sections: customSections,
 		cwd,
@@ -149,16 +156,20 @@ export function buildSystemPromptSections(input: BuildSystemPromptOptions): Syst
 
 	const declaredTools = selectedTools.filter((name) => !hiddenTools.includes(name));
 	const promptSections: Record<string, string> = {};
-	if (customPrompt) {
-		promptSections.preamble = customPrompt;
-	} else {
-		promptSections.preamble =
-			"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+	promptSections.preamble =
+		customPrompt ||
+		"You are an expert coding assistant operating inside pi, a coding agent harness. You help users by reading files, executing commands, editing code, and writing new files.";
+	if (!customPrompt || toolInstructions) {
 		const visibleTools = declaredTools.filter((name) => !!toolSnippets[name]);
 		const tools =
 			visibleTools.length > 0 ? visibleTools.map((name) => `- ${name}: ${toolSnippets[name]}`).join("\n") : "(none)";
-		promptSections.tools = `${tools}\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.`;
-		promptSections.rules = buildRules(declaredTools, toolGuidelines, promptGuidelines);
+		promptSections.tools = customPrompt
+			? `Available tools:\n${tools}`
+			: `${tools}\n\nIn addition to the tools above, you may have access to other custom tools depending on the project.`;
+		const rules = buildRules(declaredTools, toolGuidelines, promptGuidelines, Boolean(customPrompt));
+		if (rules) promptSections.rules = customPrompt ? `Tool guidelines:\n${rules}` : rules;
+	}
+	if (!customPrompt) {
 		promptSections.docs = `Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):
 - Main documentation: ${getReadmePath()}
 - Additional docs: ${getDocsPath()}

@@ -157,6 +157,7 @@ export interface ResourceLoader {
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
 	getSystemPrompt(): string | undefined;
+	getToolInstructions?(): boolean;
 	getSystemPromptSource(): { path: string } | undefined;
 	getAppendSystemPrompt(): string[];
 	getAppendSystemPromptSources(): Array<{ path: string }>;
@@ -291,6 +292,7 @@ export interface DefaultResourceLoaderOptions {
 	noThemes?: boolean;
 	noContextFiles?: boolean;
 	systemPrompt?: string;
+	toolInstructions?: boolean;
 	appendSystemPrompt?: string[];
 	extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
 	skillsOverride?: (base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }) => {
@@ -331,6 +333,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private noThemes: boolean;
 	private noContextFiles: boolean;
 	private systemPromptSource?: string;
+	private toolInstructions: boolean;
 	private appendSystemPromptSource?: string[];
 	private extensionsOverride?: (base: LoadExtensionsResult) => LoadExtensionsResult;
 	private skillsOverride?: (base: { skills: Skill[]; diagnostics: ResourceDiagnostic[] }) => {
@@ -397,6 +400,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.noThemes = options.noThemes ?? false;
 		this.noContextFiles = options.noContextFiles ?? false;
 		this.systemPromptSource = options.systemPrompt;
+		this.toolInstructions = options.toolInstructions ?? false;
 		this.appendSystemPromptSource = options.appendSystemPrompt;
 		this.extensionsOverride = options.extensionsOverride;
 		this.skillsOverride = options.skillsOverride;
@@ -448,6 +452,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 	getSystemPrompt(): string | undefined {
 		return this.systemPrompt;
+	}
+
+	getToolInstructions(): boolean {
+		return this.toolInstructions;
 	}
 
 	getSystemPromptSource(): { path: string } | undefined {
