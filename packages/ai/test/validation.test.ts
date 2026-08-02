@@ -226,4 +226,36 @@ describe("validateToolArguments", () => {
 			'Invalid arguments for tool "echo": Unexpected token',
 		);
 	});
+
+	it("bounds wide-union diagnostics and received arguments", () => {
+		const tool: Tool = {
+			name: "wide",
+			description: "Wide union",
+			parameters: Type.Union(
+				Array.from({ length: 20 }, (_, index) =>
+					Type.Object({
+						kind: Type.Literal(`variant-${index}`),
+						[`required${index}`]: Type.String(),
+					}),
+				),
+			),
+		};
+		const toolCall: ToolCall = {
+			type: "toolCall",
+			id: "tool-wide",
+			name: "wide",
+			arguments: { kind: "invalid", payload: "x".repeat(2_000) },
+		};
+
+		let message = "";
+		try {
+			validateToolArguments(tool, toolCall);
+		} catch (error) {
+			message = error instanceof Error ? error.message : String(error);
+		}
+		expect((message.match(/^ {2}- /gm) ?? []).length).toBeLessThanOrEqual(6);
+		expect(message).toContain('Received arguments: {"kind":"invalid"');
+		expect(message.length).toBeLessThanOrEqual(2_000);
+		expect(message).not.toContain('\n  "kind"');
+	});
 });
