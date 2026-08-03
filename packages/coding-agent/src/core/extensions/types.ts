@@ -309,6 +309,17 @@ export interface ContextUsage {
 	contextWindow: number;
 	/** Context usage as percentage of context window, or null if tokens is unknown. */
 	percent: number | null;
+	/** Measurement source when an extension supplied the effective baseline. */
+	source?: string;
+	/** Whether tokens are exact rather than an exact baseline plus local estimates. */
+	exact?: boolean;
+}
+
+/** Exact effective provider context measured by an extension-owned projection or repair. */
+export interface EffectiveContextUsage {
+	tokens: number;
+	/** Human-readable measurement source for diagnostics. */
+	source: string;
 }
 
 export interface ContextRepairProgress {
@@ -412,6 +423,8 @@ export interface ExtensionContext {
 	shutdown(): void;
 	/** Get current context usage for the active model. */
 	getContextUsage(): ContextUsage | undefined;
+	/** Report an exact effective-context baseline until newer provider usage supersedes it. */
+	reportEffectiveContext?(usage: EffectiveContextUsage): void;
 	/**
 	 * Measure an explicit candidate transcript with the active provider.
 	 * This performs a non-persisted one-output-token preflight request and may consume provider quota.
@@ -2303,6 +2316,7 @@ export interface ExtensionContextActions {
 	hasPendingMessages: () => boolean;
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
+	reportEffectiveContext: (usage: EffectiveContextUsage) => void;
 	countContextTokens: (
 		candidate: AgentMessage[] | ContextTokenCandidate,
 		options?: ContextTokenCountOptions,

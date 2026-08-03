@@ -116,6 +116,54 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
+	it("uses an exact extension baseline until newer provider usage supersedes it", async () => {
+		const { session, sessionManager } = await createSession();
+
+		try {
+			sessionManager.appendMessage(createUserMessage("before projection", 1));
+			sessionManager.appendMessage(createAssistantMessage("old response", 180_000, 2));
+			sessionManager.appendMessage(createUserMessage("repair context", 3));
+			syncAgentMessages(session, sessionManager);
+
+			(session as any)._reportEffectiveContext({ tokens: 64_864, source: "posture/provider-preflight" });
+			expect(session.getContextUsage()).toMatchObject({
+				tokens: 64_864,
+				source: "posture/provider-preflight",
+				exact: true,
+			});
+
+			sessionManager.appendMessage(createUserMessage("trailing prompt", 4));
+			syncAgentMessages(session, sessionManager);
+			const trailing = session.getContextUsage();
+			expect(trailing?.tokens).toBeGreaterThan(64_864);
+			expect(trailing).toMatchObject({ source: "posture/provider-preflight", exact: false });
+
+			sessionManager.appendMessage(createAssistantMessage("fresh provider response", 70_000, 5));
+			syncAgentMessages(session, sessionManager);
+			expect(session.getContextUsage()).toMatchObject({ tokens: 70_000 });
+			expect(session.getContextUsage()?.source).toBeUndefined();
+		} finally {
+			session.dispose();
+		}
+	});
+
+	it("invalidates an extension baseline when its basis leaves the branch", async () => {
+		const { session, sessionManager } = await createSession();
+
+		try {
+			const ancestor = sessionManager.appendMessage(createUserMessage("ancestor", 1));
+			sessionManager.appendMessage(createAssistantMessage("old response", 180_000, 2));
+			syncAgentMessages(session, sessionManager);
+			(session as any)._reportEffectiveContext({ tokens: 64_864, source: "posture/provider-preflight" });
+
+			sessionManager.branch(ancestor);
+			syncAgentMessages(session, sessionManager);
+			expect(session.getContextUsage()?.source).toBeUndefined();
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("reports unknown current context usage immediately after compaction", async () => {
 		const { session, sessionManager } = await createSession();
 

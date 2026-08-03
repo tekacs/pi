@@ -107,6 +107,7 @@ describe("ExtensionRunner", () => {
 		hasPendingMessages: () => false,
 		shutdown: () => {},
 		getContextUsage: () => undefined,
+		reportEffectiveContext: () => {},
 		countContextTokens: async () => ({
 			ok: false,
 			method: "provider-preflight",
