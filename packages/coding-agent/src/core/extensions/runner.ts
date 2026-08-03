@@ -44,6 +44,7 @@ import type {
 	ContextTokenCountOptions,
 	ContextUsage,
 	ContextWithSystemEvent,
+	EffectiveContextUsage,
 	EntryRenderer,
 	ExecuteToolOptions,
 	Extension,
@@ -376,6 +377,7 @@ export class ExtensionRunner {
 	private abortFn: () => void = () => {};
 	private hasPendingMessagesFn: () => boolean = () => false;
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
+	private reportEffectiveContextFn: (usage: EffectiveContextUsage) => void = () => {};
 	private countContextTokensFn: (
 		candidate: AgentMessage[] | ContextTokenCandidate,
 		options?: ContextTokenCountOptions,
@@ -465,6 +467,7 @@ export class ExtensionRunner {
 		this.hasPendingMessagesFn = contextActions.hasPendingMessages;
 		this.shutdownHandler = contextActions.shutdown;
 		this.getContextUsageFn = contextActions.getContextUsage;
+		this.reportEffectiveContextFn = contextActions.reportEffectiveContext;
 		this.countContextTokensFn = contextActions.countContextTokens;
 		this.reportContextRepairFn = contextActions.reportContextRepair;
 		this.compactFn = contextActions.compact;
@@ -970,6 +973,10 @@ export class ExtensionRunner {
 			getContextUsage: () => {
 				runner.assertActive();
 				return runner.getContextUsageFn();
+			},
+			reportEffectiveContext: (usage) => {
+				runner.assertActive();
+				runner.reportEffectiveContextFn(usage);
 			},
 			countContextTokens: (candidate, options) => {
 				runner.assertActive();

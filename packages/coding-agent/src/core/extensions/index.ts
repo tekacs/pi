@@ -70,6 +70,7 @@ export type {
 	EditorFactory,
 	EditToolCallEvent,
 	EditToolResultEvent,
+	EffectiveContextUsage,
 	// Message and Entry Rendering
 	EntryRenderer,
 	EntryRenderOptions,

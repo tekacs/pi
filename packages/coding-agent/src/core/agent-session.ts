@@ -89,6 +89,7 @@ import {
 	type ContextTokenCount,
 	type ContextTokenCountOptions,
 	type ContextUsage,
+	type EffectiveContextUsage,
 	type ExecuteToolOptions,
 	type ExtensionCommandContextActions,
 	type ExtensionErrorListener,
@@ -391,6 +392,12 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	private _effectiveContext?: {
+		tokens: number;
+		source: string;
+		basisLeafId: string;
+		basisMessageCount: number;
+	};
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -3509,6 +3516,7 @@ export class AgentSession {
 					this._extensionShutdownHandler?.();
 				},
 				getContextUsage: () => this.getContextUsage(),
+				reportEffectiveContext: (usage) => this._reportEffectiveContext(usage),
 				countContextTokens: (messages, options) => this.countContextTokens(messages, options),
 				reportContextRepair: (progress) => this._emit({ type: "context_repair_progress", ...progress }),
 				compact: (options) => {
@@ -4281,6 +4289,22 @@ export class AgentSession {
 		};
 	}
 
+	private _reportEffectiveContext(usage: EffectiveContextUsage): void {
+		if (!Number.isFinite(usage.tokens) || usage.tokens < 0) {
+			throw new Error(`Effective context tokens must be a non-negative finite number; received ${usage.tokens}`);
+		}
+		const source = usage.source.trim();
+		if (!source) throw new Error("Effective context usage requires a source");
+		const basisLeafId = this.sessionManager.getLeafId();
+		if (!basisLeafId) throw new Error("Effective context usage requires a current session leaf");
+		this._effectiveContext = {
+			tokens: Math.floor(usage.tokens),
+			source,
+			basisLeafId,
+			basisMessageCount: this._activeProjection().projection.messages.length,
+		};
+	}
+
 	getContextUsage(): ContextUsage | undefined {
 		const model = this._limitsModel();
 		if (!model) return undefined;
@@ -4294,6 +4318,36 @@ export class AgentSession {
 		// An in-flight assistant segment (provider-managed streams report usage before
 		// message_end) counts as the newest projected entry.
 		const { projection, branch } = this._activeProjection();
+		const effective = this._effectiveContext;
+		if (effective) {
+			const activeMessages = projection.messages;
+			const basisIsOnBranch = branch.some((entry) => entry.id === effective.basisLeafId);
+			if (!basisIsOnBranch || activeMessages.length < effective.basisMessageCount) {
+				this._effectiveContext = undefined;
+			} else {
+				const trailing = activeMessages.slice(effective.basisMessageCount);
+				const newerProviderUsage = trailing.some(
+					(message) =>
+						message.role === "assistant" &&
+						message.stopReason !== "aborted" &&
+						message.stopReason !== "error" &&
+						calculateContextTokens(message.usage) > 0,
+				);
+				if (!newerProviderUsage) {
+					const tokens =
+						effective.tokens + trailing.reduce((total, message) => total + estimateTokens(message), 0);
+					return {
+						tokens,
+						contextWindow,
+						percent: (tokens / contextWindow) * 100,
+						source: effective.source,
+						exact: trailing.length === 0,
+					};
+				}
+				this._effectiveContext = undefined;
+			}
+		}
+
 		const latestCompaction = getLatestCompactionEntry(branch);
 
 		if (latestCompaction) {
