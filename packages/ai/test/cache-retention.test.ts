@@ -19,8 +19,26 @@ interface OpenAICompletionsCachePayload {
 	prompt_cache_retention?: string;
 }
 
+interface OpenAIResponsesContentBlock {
+	type: string;
+	text?: string;
+	prompt_cache_breakpoint?: { mode: "explicit" };
+}
+
+interface OpenAIResponsesInputItem {
+	role?: string;
+	content?: string | OpenAIResponsesContentBlock[];
+}
+
 interface OpenAIResponsesCachePayload extends OpenAICompletionsCachePayload {
+	input?: OpenAIResponsesInputItem[];
 	prompt_cache_options?: { mode?: "explicit"; ttl?: "30m" };
+}
+
+function explicitBreakpoints(payload: OpenAIResponsesCachePayload | undefined): OpenAIResponsesContentBlock[] {
+	return (payload?.input ?? [])
+		.flatMap((item) => (Array.isArray(item.content) ? item.content : []))
+		.filter((block) => block.prompt_cache_breakpoint?.mode === "explicit");
 }
 
 function stopAfterPayload<TPayload>(capture: (payload: TPayload) => void): (payload: unknown) => never {
@@ -404,6 +422,124 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 			expect(capturedPayload.prompt_cache_retention).toBeUndefined();
 		});
 
+		it("should add a stable system breakpoint while retaining implicit rolling caching", async () => {
+			const model = getModel("openai", "gpt-5.6-sol");
+			let capturedPayload: OpenAIResponsesCachePayload | undefined;
+
+			try {
+				const s = streamOpenAIResponses(model, context, {
+					apiKey: "fake-key",
+					sessionId: "session-stable",
+					onPayload: stopAfterPayload<OpenAIResponsesCachePayload>((payload) => {
+						capturedPayload = payload;
+					}),
+				});
+				for await (const event of s) {
+					if (event.type === "error") break;
+				}
+			} catch {
+				// Payload capture intentionally aborts the request.
+			}
+
+			expect(capturedPayload?.prompt_cache_key).toBe("session-stable");
+			expect(capturedPayload?.prompt_cache_options).toBeUndefined();
+			expect(capturedPayload?.prompt_cache_retention).toBeUndefined();
+			expect(explicitBreakpoints(capturedPayload)).toEqual([
+				expect.objectContaining({ type: "input_text", text: "You are a helpful assistant." }),
+			]);
+		});
+
+		it("should lower a marked user boundary in addition to the stable system breakpoint", async () => {
+			const model = getModel("openai", "gpt-5.6-sol");
+			let capturedPayload: OpenAIResponsesCachePayload | undefined;
+			const markedContext = normalizeContext({
+				systemPrompt: "Stable system",
+				messages: [
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: "historical prefix" },
+							{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+						],
+						[CACHE_CHECKPOINT]: true,
+						timestamp: Date.now(),
+					},
+					{ role: "user", content: "current suffix", timestamp: Date.now() + 1 },
+				],
+			});
+
+			try {
+				const s = streamOpenAIResponses(model, markedContext, {
+					apiKey: "fake-key",
+					sessionId: "session-marked",
+					onPayload: stopAfterPayload<OpenAIResponsesCachePayload>((payload) => {
+						capturedPayload = payload;
+					}),
+				});
+				for await (const event of s) {
+					if (event.type === "error") break;
+				}
+			} catch {
+				// Payload capture intentionally aborts the request.
+			}
+
+			expect(explicitBreakpoints(capturedPayload)).toEqual([
+				expect.objectContaining({ type: "input_text", text: "Stable system" }),
+				expect.objectContaining({ type: "input_image" }),
+			]);
+		});
+
+		it("marks a transcript system checkpoint without folding later instructions into the prefix", async () => {
+			const baseModel = getModel("openai", "gpt-5.6-sol");
+			const model = { ...baseModel, compat: { ...baseModel.compat, supportsMidConvoSystemMessages: true } };
+			let capturedPayload: OpenAIResponsesCachePayload | undefined;
+			await streamOpenAIResponses(
+				model,
+				normalizeContext({
+					messages: [
+						{ role: "system", content: "Stable system", timestamp: 1 },
+						{ role: "user", content: "Earlier turn", timestamp: 2 },
+						{ role: "system", content: "Later instructions", [CACHE_CHECKPOINT]: true, timestamp: 3 },
+						{ role: "user", content: "Current turn", timestamp: 4 },
+					],
+				}),
+				{
+					apiKey: "fake-key",
+					onPayload: stopAfterPayload<OpenAIResponsesCachePayload>((payload) => {
+						capturedPayload = payload;
+					}),
+				},
+			).result();
+			const breakpoints = explicitBreakpoints(capturedPayload);
+			expect(breakpoints).toHaveLength(2);
+			expect(breakpoints[0].text).toBe("Stable system");
+			expect(breakpoints[1].text).toContain("Later instructions");
+		});
+
+		it("should omit deprecated long retention for explicit-cache models", async () => {
+			const model = getModel("openai", "gpt-5.6-sol");
+			let capturedPayload: OpenAIResponsesCachePayload | undefined;
+
+			try {
+				const s = streamOpenAIResponses(model, context, {
+					apiKey: "fake-key",
+					cacheRetention: "long",
+					sessionId: "session-explicit-long",
+					onPayload: stopAfterPayload<OpenAIResponsesCachePayload>((payload) => {
+						capturedPayload = payload;
+					}),
+				});
+				for await (const event of s) {
+					if (event.type === "error") break;
+				}
+			} catch {
+				// Payload capture intentionally aborts the request.
+			}
+
+			expect(capturedPayload?.prompt_cache_retention).toBeUndefined();
+			expect(explicitBreakpoints(capturedPayload)).toHaveLength(1);
+		});
+
 		it("should omit prompt_cache_key and disable implicit writes when cacheRetention is none", async () => {
 			const model = getModel("openai", "gpt-5.6-sol");
 			let capturedPayload: OpenAIResponsesCachePayload | undefined;
@@ -429,6 +565,7 @@ describe("Cache Retention (PI_CACHE_RETENTION)", () => {
 			expect(capturedPayload?.prompt_cache_key).toBeUndefined();
 			expect(capturedPayload?.prompt_cache_retention).toBeUndefined();
 			expect(capturedPayload?.prompt_cache_options).toEqual({ mode: "explicit" });
+			expect(explicitBreakpoints(capturedPayload)).toEqual([]);
 		});
 
 		it("should omit prompt_cache_options for models that reject it", async () => {
