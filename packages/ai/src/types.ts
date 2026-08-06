@@ -912,7 +912,7 @@ export interface OpenAIResponsesCompat {
 	supportsAdditionalTools?: boolean;
 	/** Whether the model supports client-executed tool search for transcript-anchored additions. Default: false. */
 	supportsToolSearch?: boolean;
-	/** Whether the model accepts `prompt_cache_options` (OpenAI GPT-5.6+ prompt caching). Older OpenAI models reject the parameter. Default: false. */
+	/** Whether the model accepts GPT-5.6+ `prompt_cache_options` and content-block `prompt_cache_breakpoint` controls. Older OpenAI models reject them. Default: false. */
 	supportsExplicitPromptCacheMode?: boolean;
 	/** Whether the provider accepts the `max_output_tokens` parameter. Some Codex-protocol gateways reject it. Default: true. */
 	supportsMaxOutputTokens?: boolean;

@@ -6,6 +6,10 @@
 
 - Added the lightweight `@earendil-works/pi-ai/models` entry point for model collections and provider construction without loading TypeBox, built-in catalogs, or provider SDKs.
 
+### Fixed
+
+- Fixed GPT-5.6 OpenAI Responses requests to place an explicit breakpoint after the stable system prefix while retaining OpenAI's managed rolling breakpoint, and to omit deprecated `prompt_cache_retention` for explicit-cache models.
+
 ## [0.99.1] - 2026-09-29
 
 ### Added

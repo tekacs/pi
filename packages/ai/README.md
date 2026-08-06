@@ -1416,6 +1416,7 @@ interface OpenAIResponsesCompat {
   supportsLongCacheRetention?: boolean; // Whether provider supports `prompt_cache_retention: "24h"` (default: true)
   supportsStrictMode?: boolean;      // Whether provider supports strict JSON-schema function tools (default: false; enabled in metadata for built-in OpenAI models)
   supportsOpenAIGrammarTools?: boolean; // Whether to emit OpenAI custom Lark/regex grammar tools; false falls back to normal function tools (default: false; the generated catalog enables it for capable models)
+  supportsExplicitPromptCacheMode?: boolean; // GPT-5.6 explicit-cache controls: mark the stable system prefix while retaining the managed rolling breakpoint; `none` disables the managed breakpoint (default: false)
 }
 ```
 

@@ -309,11 +309,14 @@ function buildParams(
 		compat.supportsOpenAIGrammarTools,
 	),
 ) {
+	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
+	const explicitPromptCache = cacheRetention !== "none" && compat.supportsExplicitPromptCacheMode;
 	const transcriptTools = resolveTranscriptTools(
 		context.messages,
 		compat.supportsAdditionalTools || compat.supportsToolSearch,
 	);
 	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+		explicitPromptCache,
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: compat.supportsMidConvoSystemMessages,
 		supportsAdditionalTools: compat.supportsAdditionalTools,
@@ -324,7 +327,6 @@ function buildParams(
 		},
 	});
 
-	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 	// Sign in with ChatGPT rejects these request fields.
 	const omitUnsupportedFields = isChatGPTSignIn(model, options?.apiKey);
 	const params: ResponseCreateParamsStreaming = {
