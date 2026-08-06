@@ -4,7 +4,6 @@ import type {
 	ResponseConfigurationUpdateItemParam,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
-	ResponseInputContent,
 	ResponseInputImage,
 	ResponseInputItem,
 	ResponseInputText,
@@ -15,21 +14,22 @@ import type {
 	ResponseToolSearchOutputItemParam,
 } from "openai/resources/responses/responses.js";
 import { calculateCost } from "../models.ts";
-import type {
-	Api,
-	AssistantMessage,
-	ImageContent,
-	Model,
-	StopReason,
-	StreamOptions,
-	SystemMessage,
-	TextContent,
-	TextSignatureV1,
-	ThinkingContent,
-	Tool,
-	ToolCall,
-	TranscriptContext,
-	Usage,
+import {
+	type Api,
+	type AssistantMessage,
+	CACHE_CHECKPOINT,
+	type ImageContent,
+	type Model,
+	type StopReason,
+	type StreamOptions,
+	type SystemMessage,
+	type TextContent,
+	type TextSignatureV1,
+	type ThinkingContent,
+	type Tool,
+	type ToolCall,
+	type TranscriptContext,
+	type Usage,
 } from "../types.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
@@ -147,6 +147,8 @@ export interface OpenAIResponsesStreamOptions {
 
 export interface ConvertResponsesMessagesOptions {
 	includeSystemPrompt?: boolean;
+	/** Add GPT-5.6 explicit breakpoints to stable cache boundaries. */
+	explicitPromptCache?: boolean;
 	grammarToolInputProperties?: ReadonlyMap<string, string>;
 	/** Whether later system messages are sent in place; otherwise they are folded into the leading prompt. */
 	supportsMidConvoSystemMessages?: boolean;
@@ -170,6 +172,16 @@ export interface ConvertResponsesToolsOptions {
 	supportsStrictMode?: boolean;
 	supportsOpenAIGrammarTools?: boolean;
 	toolSearchResult?: boolean;
+}
+
+type ExplicitPromptCacheBreakpoint = { mode: "explicit" };
+type CacheableResponseInput = ResponseInputText | ResponseInputImage;
+type CacheableResponseInputWithBreakpoint = CacheableResponseInput & {
+	prompt_cache_breakpoint: ExplicitPromptCacheBreakpoint;
+};
+
+function withPromptCacheBreakpoint(block: CacheableResponseInput): CacheableResponseInputWithBreakpoint {
+	return { ...block, prompt_cache_breakpoint: { mode: "explicit" } };
 }
 
 // =============================================================================
@@ -263,17 +275,24 @@ export function convertResponsesMessages<TApi extends Api>(
 			if (!isLeadingSystemMessage || includeInitialSystemMessage) {
 				const text = isLeadingSystemMessage ? getSystemMessageText(msg) : renderSystemMessageUpdate(msg);
 				if (text.length > 0) {
-					messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
+					const block: ResponseInputText = { type: "input_text", text: sanitizeSurrogates(text) };
+					const marked = options?.explicitPromptCache && (isLeadingSystemMessage || msg[CACHE_CHECKPOINT]);
+					messages.push({
+						role: instructionRole,
+						content: marked ? [withPromptCacheBreakpoint(block)] : block.text,
+					});
 				}
 			}
 		} else if (msg.role === "user") {
+			const marked = options?.explicitPromptCache && msg[CACHE_CHECKPOINT];
 			if (typeof msg.content === "string") {
+				const block: ResponseInputText = { type: "input_text", text: sanitizeSurrogates(msg.content) };
 				messages.push({
 					role: "user",
-					content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
+					content: [marked ? withPromptCacheBreakpoint(block) : block],
 				});
 			} else {
-				const content: ResponseInputContent[] = msg.content.map((item): ResponseInputContent => {
+				const content: CacheableResponseInput[] = msg.content.map((item): CacheableResponseInput => {
 					if (item.type === "text") {
 						return {
 							type: "input_text",
@@ -287,6 +306,7 @@ export function convertResponsesMessages<TApi extends Api>(
 					} satisfies ResponseInputImage;
 				});
 				if (content.length === 0) continue;
+				if (marked) content[content.length - 1] = withPromptCacheBreakpoint(content[content.length - 1]);
 				messages.push({
 					role: "user",
 					content,
