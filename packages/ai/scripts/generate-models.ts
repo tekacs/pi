@@ -990,7 +990,7 @@ function applyOpenAIResponsesTranscriptMetadata(model: Model<Api>): void {
 }
 
 // OpenAI charges prompt-cache writes starting with the GPT-5.6 family, and exactly
-// those models accept `prompt_cache_options`; older models reject the parameter.
+// those models accept `prompt_cache_options` and content-block breakpoints; older models reject them.
 // https://developers.openai.com/api/docs/guides/prompt-caching
 function applyOpenAIExplicitPromptCacheMetadata(model: Model<Api>): void {
 	if (model.provider !== "openai" || model.api !== "openai-responses") return;

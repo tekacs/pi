@@ -215,6 +215,10 @@
 - Fixed Anthropic requests failing when a `strict: "prefer"` tool schema uses keywords Anthropic strict tool use rejects, such as `minimum`/`maximum`; such tools are now sent non-strict ([#9953](https://github.com/earendil-works/pi/issues/9953))
 - Fixed provider retries firing immediately when a `Retry-After` header contains an unparseable date; they now use exponential backoff ([#9571](https://github.com/earendil-works/pi/issues/9571))
 
+### Fixed
+
+- Fixed GPT-5.6 OpenAI Responses requests to place an explicit breakpoint after the stable system prefix while retaining OpenAI's managed rolling breakpoint, and to omit deprecated `prompt_cache_retention` for explicit-cache models.
+
 ## [0.99.1] - 2026-09-29
 
 ### Added
