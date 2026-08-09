@@ -271,6 +271,36 @@ describe("with projections", () => {
 		expect(buildContextEntries(entries).map((entry) => entry.id)).toEqual(["4:d1", "2", "4:d2"]);
 	});
 
+	it("mounts replacement context at a non-message semantic-state entry", () => {
+		const entries: SessionEntry[] = [
+			msg("1", null, "user", "before scope"),
+			custom("2", "1", "posture.transaction", { schema: 4 }),
+			msg("3", "2", "assistant", "after scope"),
+			projectionFrame("4", "3", {
+				version: 2,
+				key: "test:semantic-anchor",
+				generation: 1,
+				fingerprint: "semantic-anchor-1",
+				directives: [
+					{
+						key: "description",
+						sourceEntryIds: [],
+						anchorEntryId: "2",
+						replacement: { customType: "scope-description", content: "stable scope", display: false },
+					},
+				],
+			}),
+		];
+
+		const projected = buildContextEntries(entries);
+		expect(projected.map((entry) => entry.id)).toEqual(["1", "4", "2", "3"]);
+		expect(projected[1]).toMatchObject({
+			type: "custom_message",
+			customType: "scope-description",
+			content: "stable scope",
+		});
+	});
+
 	it("replaces an owned frame as a whole", () => {
 		const entries: SessionEntry[] = [
 			msg("1", null, "user", "first raw"),
