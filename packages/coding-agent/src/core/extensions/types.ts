@@ -321,6 +321,10 @@ export interface ContextUsage {
 	source?: string;
 	/** Whether tokens are exact rather than an exact baseline plus local estimates. */
 	exact?: boolean;
+	/** Direct context tokens reported by the latest successful upstream response. */
+	providerTokens?: number | null;
+	/** Direct providerTokens/contextWindow percentage, without trailing local estimates. */
+	providerPercent?: number | null;
 }
 
 /** Exact effective provider context measured by an extension-owned projection or repair. */
@@ -1038,8 +1042,16 @@ export interface BeforeAgentStartCustomEvent extends BeforeAgentStartEventBase {
 	message: CustomMessage;
 }
 
-/** Fired before a run starts from a user message or an idle custom message with `triggerTurn`. */
-export type BeforeAgentStartEvent = BeforeAgentStartUserEvent | BeforeAgentStartCustomEvent;
+/** A run requested by `pi.triggerTurn()` against existing or extension-projected context. */
+export interface BeforeAgentStartContextEvent extends BeforeAgentStartEventBase {
+	messageType: "context";
+}
+
+/** Fired before a run starts from submitted input or a context-only wake. */
+export type BeforeAgentStartEvent =
+	| BeforeAgentStartUserEvent
+	| BeforeAgentStartCustomEvent
+	| BeforeAgentStartContextEvent;
 
 /** Fired when an agent loop starts */
 export interface AgentStartEvent {
@@ -1826,6 +1838,9 @@ export interface ExtensionAPI {
 	// Actions
 	// =========================================================================
 
+	/** Run an agent turn without appending a prompt; context transforms must supply any operational tail. */
+	triggerTurn(): void;
+
 	/** Send a custom message to the session. */
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
@@ -2215,6 +2230,8 @@ export interface ExtensionShortcut {
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
+export type TriggerTurnHandler = () => void;
+
 export type SendMessageHandler = <T = unknown>(
 	message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 	options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
@@ -2305,6 +2322,7 @@ export interface ExtensionRuntimeState {
  * Provided to runner.initialize(), copied into the shared runtime.
  */
 export interface ExtensionActions {
+	triggerTurn: TriggerTurnHandler;
 	sendMessage: SendMessageHandler;
 	sendUserMessage: SendUserMessageHandler;
 	appendEntry: AppendEntryHandler;

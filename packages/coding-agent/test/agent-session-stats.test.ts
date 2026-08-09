@@ -111,6 +111,8 @@ describe("AgentSession.getSessionStats", () => {
 			expect(stats.contextUsage?.tokens).toBe(200);
 			expect(stats.contextUsage?.contextWindow).toBe(model.contextWindow);
 			expect(stats.contextUsage?.percent).toBe((200 / model.contextWindow) * 100);
+			expect(stats.contextUsage?.providerTokens).toBe(200);
+			expect(stats.contextUsage?.providerPercent).toBe((200 / model.contextWindow) * 100);
 		} finally {
 			session.dispose();
 		}
@@ -130,6 +132,7 @@ describe("AgentSession.getSessionStats", () => {
 				tokens: 64_864,
 				source: "posture/provider-preflight",
 				exact: true,
+				providerTokens: 180_000,
 			});
 
 			sessionManager.appendMessage(createUserMessage("trailing prompt", 4));
@@ -140,7 +143,7 @@ describe("AgentSession.getSessionStats", () => {
 
 			sessionManager.appendMessage(createAssistantMessage("fresh provider response", 70_000, 5));
 			syncAgentMessages(session, sessionManager);
-			expect(session.getContextUsage()).toMatchObject({ tokens: 70_000 });
+			expect(session.getContextUsage()).toMatchObject({ tokens: 70_000, providerTokens: 70_000 });
 			expect(session.getContextUsage()?.source).toBeUndefined();
 		} finally {
 			session.dispose();

@@ -27,6 +27,7 @@ import {
 import type { VirtualModelDefinition } from "../virtual-models.ts";
 import type {
 	AgentBeforeSettleEvent,
+	BeforeAgentStartContextEvent,
 	BeforeAgentStartCustomEvent,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -172,10 +173,11 @@ function isUserBashEventResult(value: unknown): value is UserBashEventResult {
 	);
 }
 
-/** The message that starts a run: the before_agent_start event without its prompt fields. */
+/** What starts a run, without the prompt configuration supplied to startup handlers. */
 export type BeforeAgentStartTrigger =
 	| Pick<BeforeAgentStartUserEvent, "messageType" | "prompt" | "images">
-	| Pick<BeforeAgentStartCustomEvent, "messageType" | "message">;
+	| Pick<BeforeAgentStartCustomEvent, "messageType" | "message">
+	| Pick<BeforeAgentStartContextEvent, "messageType">;
 
 /** Combined result from all before_agent_start handlers. */
 interface BeforeAgentStartCombinedResult {
@@ -448,6 +450,7 @@ export class ExtensionRunner {
 		},
 	): void {
 		// Copy actions into the shared runtime (all extension APIs reference this)
+		this.runtime.triggerTurn = actions.triggerTurn;
 		this.runtime.sendMessage = actions.sendMessage;
 		this.runtime.sendUserMessage = actions.sendUserMessage;
 		this.runtime.appendEntry = actions.appendEntry;

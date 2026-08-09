@@ -80,6 +80,7 @@ describe("ExtensionRunner", () => {
 	};
 
 	const extensionActions: ExtensionActions = {
+		triggerTurn: () => {},
 		sendMessage: () => {},
 		sendUserMessage: () => {},
 		appendEntry: () => {},
@@ -136,6 +137,26 @@ describe("ExtensionRunner", () => {
 
 			expect(registrationVersion).toBe(2);
 			expect(runner.createContext().contextProjectionVersion).toBe(2);
+		});
+
+		it("runs a context-only turn through the extension action plane", async () => {
+			const runtime = createExtensionRuntime();
+			let trigger: (() => void) | undefined;
+			const extension = await loadExtensionFromFactory(
+				(pi) => {
+					trigger = () => pi.triggerTurn();
+				},
+				tempDir,
+				createEventBus(),
+				runtime,
+			);
+			const runner = new ExtensionRunner([extension], runtime, tempDir, sessionManager, modelRegistry);
+			const triggered = vi.fn();
+			runner.bindCore({ ...extensionActions, triggerTurn: triggered }, extensionContextActions);
+
+			trigger?.();
+
+			expect(triggered).toHaveBeenCalledOnce();
 		});
 
 		it("forwards a caller-owned abort signal to provider context counting", async () => {
