@@ -2225,6 +2225,12 @@ export class AgentSession {
 	 * @param options.triggerTurn If true and not streaming, triggers a new LLM turn
 	 * @param options.deliverAs Delivery mode: "steer", "followUp", or "nextTurn"
 	 */
+	/** Run a context-only turn. Extensions use this when durable state changed but no payload belongs in transcript. */
+	async triggerTurn(): Promise<void> {
+		if (this.isStreaming) throw new Error("Cannot trigger a context-only turn while the agent is already running");
+		await this._runAgentPrompt([]);
+	}
+
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
@@ -3446,6 +3452,15 @@ export class AgentSession {
 
 		runner.bindCore(
 			{
+				triggerTurn: () => {
+					this.triggerTurn().catch((err) => {
+						runner.emitError({
+							extensionPath: "<runtime>",
+							event: "trigger_turn",
+							error: err instanceof Error ? err.message : String(err),
+						});
+					});
+				},
 				sendMessage: (message, options) => {
 					this.sendCustomMessage(message, options).catch((err) => {
 						runner.emitError({
@@ -4315,15 +4330,40 @@ export class AgentSession {
 		const contextWindow = model.contextWindow ?? 0;
 		if (contextWindow <= 0) return undefined;
 
-		// After compaction, the last assistant usage reflects pre-compaction context size.
-		// We can only trust usage from an assistant that responded after the latest compaction.
-		// If no such assistant exists, context token count is unknown until the next LLM response.
 		// An in-flight assistant segment (provider-managed streams report usage before
 		// message_end) counts as the newest projected entry.
 		const { projection, branch } = this._activeProjection();
+		const activeMessages = projection.messages;
+		const providerEstimate = estimateProjectedContextTokens(projection, branch);
+
+		// After compaction, the last assistant usage reflects pre-compaction context size.
+		// We can only trust usage from an assistant that responded after the latest compaction.
+		// If no such assistant exists, context token count is unknown until the next LLM response.
+		const latestCompaction = getLatestCompactionEntry(branch);
+		let providerCurrent = true;
+		if (latestCompaction) {
+			const projectedAssistants = new Set(
+				projection.entries.flatMap((entry) =>
+					entry.messages.some(
+						(message) =>
+							message.role === "assistant" &&
+							message.stopReason !== "aborted" &&
+							message.stopReason !== "error" &&
+							calculateContextTokens(message.usage) > 0,
+					)
+						? [entry.sourceEntry.id]
+						: [],
+				),
+			);
+			const compactionIndex = branch.findIndex((entry) => entry.id === latestCompaction.id);
+			providerCurrent = branch.slice(compactionIndex + 1).some((entry) => projectedAssistants.has(entry.id));
+		}
+		const providerTokens =
+			providerCurrent && providerEstimate.lastUsageIndex !== null ? providerEstimate.usageTokens : null;
+		const providerPercent = providerTokens === null ? null : (providerTokens / contextWindow) * 100;
+
 		const effective = this._effectiveContext;
 		if (effective) {
-			const activeMessages = projection.messages;
 			const basisIsOnBranch = branch.some((entry) => entry.id === effective.basisLeafId);
 			if (!basisIsOnBranch || activeMessages.length < effective.basisMessageCount) {
 				this._effectiveContext = undefined;
@@ -4345,42 +4385,24 @@ export class AgentSession {
 						percent: (tokens / contextWindow) * 100,
 						source: effective.source,
 						exact: trailing.length === 0,
+						providerTokens,
+						providerPercent,
 					};
 				}
 				this._effectiveContext = undefined;
 			}
 		}
 
-		const latestCompaction = getLatestCompactionEntry(branch);
-
-		if (latestCompaction) {
-			const projectedAssistants = new Set(
-				projection.entries.flatMap((entry) =>
-					entry.messages.some(
-						(message) =>
-							message.role === "assistant" &&
-							message.stopReason !== "aborted" &&
-							message.stopReason !== "error" &&
-							calculateContextTokens(message.usage) > 0,
-					)
-						? [entry.sourceEntry.id]
-						: [],
-				),
-			);
-			const compactionIndex = branch.findIndex((entry) => entry.id === latestCompaction.id);
-			const hasPostCompactionUsage = branch
-				.slice(compactionIndex + 1)
-				.some((entry) => projectedAssistants.has(entry.id));
-			if (!hasPostCompactionUsage) return { tokens: null, contextWindow, percent: null };
+		if (latestCompaction && !providerCurrent) {
+			return { tokens: null, contextWindow, percent: null, providerTokens, providerPercent };
 		}
 
-		const estimate = estimateProjectedContextTokens(projection, branch);
-		const percent = (estimate.tokens / contextWindow) * 100;
-
 		return {
-			tokens: estimate.tokens,
+			tokens: providerEstimate.tokens,
 			contextWindow,
-			percent,
+			percent: (providerEstimate.tokens / contextWindow) * 100,
+			providerTokens,
+			providerPercent,
 		};
 	}
 

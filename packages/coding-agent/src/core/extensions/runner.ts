@@ -440,6 +440,7 @@ export class ExtensionRunner {
 		},
 	): void {
 		// Copy actions into the shared runtime (all extension APIs reference this)
+		this.runtime.triggerTurn = actions.triggerTurn;
 		this.runtime.sendMessage = actions.sendMessage;
 		this.runtime.sendUserMessage = actions.sendUserMessage;
 		this.runtime.appendEntry = actions.appendEntry;

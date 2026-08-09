@@ -204,6 +204,7 @@ export type {
 	ToolResultEvent,
 	ToolResultEventResult,
 	TreePreparation,
+	TriggerTurnHandler,
 	TurnEndEvent,
 	TurnEndEventResult,
 	TurnStartEvent,
