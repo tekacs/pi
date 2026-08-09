@@ -168,6 +168,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 	};
 
 	const runtime: ExtensionRuntime = {
+		triggerTurn: notInitialized,
 		sendMessage: notInitialized,
 		sendUserMessage: notInitialized,
 		appendEntry: notInitialized,
@@ -387,6 +388,11 @@ function createExtensionAPI(
 		},
 
 		// Action methods - delegate to shared runtime
+		triggerTurn(): void {
+			runtime.assertActive();
+			runtime.triggerTurn();
+		},
+
 		sendMessage(message, options): void {
 			assertActive();
 			runtime.sendMessage(message, options);
