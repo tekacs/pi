@@ -37,6 +37,7 @@ export type {
 	// Events - Tool (ToolCallEvent types)
 	BashToolCallEvent,
 	BashToolResultEvent,
+	BeforeAgentStartContextEvent,
 	BeforeAgentStartCustomEvent,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
@@ -212,6 +213,7 @@ export type {
 	ToolResultEvent,
 	ToolResultEventResult,
 	TreePreparation,
+	TriggerTurnHandler,
 	TurnEndEvent,
 	TurnEndEventResult,
 	TurnStartEvent,

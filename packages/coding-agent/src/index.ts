@@ -79,6 +79,7 @@ export type {
 	AppKeybinding,
 	AutocompleteProviderFactory,
 	BashToolCallEvent,
+	BeforeAgentStartContextEvent,
 	BeforeAgentStartCustomEvent,
 	BeforeAgentStartEvent,
 	BeforeAgentStartEventResult,
