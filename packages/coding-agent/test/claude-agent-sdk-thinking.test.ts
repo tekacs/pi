@@ -19,7 +19,7 @@ function model(id: string) {
 }
 
 describe("Claude Agent SDK thinking", () => {
-	it.each(["sonnet", "opus", "fable", "claude-opus-5"])("exposes xhigh and max for %s", (id) => {
+	it.each(["sonnet", "opus", "claude-opus-5"])("exposes xhigh and max for %s", (id) => {
 		expect(getSupportedThinkingLevels(model(id))).toEqual([
 			"off",
 			"minimal",
@@ -31,8 +31,12 @@ describe("Claude Agent SDK thinking", () => {
 		]);
 	});
 
-	it("advertises Fable's 128K output limit", () => {
-		expect(model("fable").maxTokens).toBe(128000);
+	it.each(["fable", "claude-fable-5-1"])("keeps always-on thinking enabled for %s", (id) => {
+		expect(getSupportedThinkingLevels(model(id))).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
+	});
+
+	it.each(["fable", "claude-fable-5-1"])("advertises Fable's 128K output limit for %s", (id) => {
+		expect(model(id).maxTokens).toBe(128000);
 	});
 
 	it.each(["opus", "claude-opus-5"])("advertises Opus 5 metadata for %s", (id) => {
