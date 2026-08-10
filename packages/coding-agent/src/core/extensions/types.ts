@@ -1838,7 +1838,7 @@ export interface ExtensionAPI {
 	// Actions
 	// =========================================================================
 
-	/** Run an agent turn without appending a prompt; context transforms must supply any operational tail. */
+	/** Run normal startup preparation against existing or extension-projected context, without adding provider input. */
 	triggerTurn(): void;
 
 	/** Send a custom message to the session. */

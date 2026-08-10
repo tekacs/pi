@@ -332,6 +332,10 @@ await agent.prompt("What's in this image?", [
 // AgentMessage directly
 await agent.prompt({ role: "user", content: "Hello", timestamp: Date.now() });
 
+// Provider-visible for this run, but omitted from state and listener message events.
+// The assistant response and tool activity remain durable.
+await agent.promptTransient("Durable external context changed");
+
 // Continue existing non-assistant input; an assistant tail may use queued input as fallback
 await agent.continue();
 ```

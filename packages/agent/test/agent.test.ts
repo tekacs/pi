@@ -359,6 +359,42 @@ describe("Agent", () => {
 		expect(agent.state.errorMessage).toBe("provider exploded");
 	});
 
+	it("sends transient prompts to the provider without committing or emitting them", async () => {
+		let contextRoles: string[] = [];
+		let transientText: string | undefined;
+		let agentEndRoles: string[] = [];
+		const events: string[] = [];
+		const agent = new Agent({
+			streamFn: (_model, context) => {
+				contextRoles = context.messages.map((message) => message.role);
+				const last = context.messages.at(-1);
+				if (last?.role === "user") {
+					transientText =
+						typeof last.content === "string"
+							? last.content
+							: last.content.find((part) => part.type === "text")?.text;
+				}
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("noticed") });
+				});
+				return stream;
+			},
+		});
+		agent.subscribe((event) => {
+			events.push(event.type);
+			if (event.type === "agent_end") agentEndRoles = event.messages.map((message) => message.role);
+		});
+
+		await agent.promptTransient("context changed");
+
+		expect(contextRoles).toEqual(["user"]);
+		expect(transientText).toBe("context changed");
+		expect(agent.state.messages.map((message) => message.role)).toEqual(["assistant"]);
+		expect(agentEndRoles).toEqual(["assistant"]);
+		expect(events).toEqual(["agent_start", "turn_start", "message_start", "message_end", "turn_end", "agent_end"]);
+	});
+
 	it("should await async subscribers before prompt resolves", async () => {
 		const barrier = createDeferred();
 		const agent = new Agent({
