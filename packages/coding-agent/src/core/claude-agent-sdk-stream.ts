@@ -335,7 +335,7 @@ function createSdkSession(
 				strictMcpConfig: true,
 				includePartialMessages: true,
 				forwardSubagentText: true,
-				env: createClaudeAgentSdkEnv(options.apiKey),
+				env: config.env,
 				resume,
 				stderr: process.env.PI_CLAUDE_AGENT_SDK_DEBUG === "1" ? (data) => process.stderr.write(data) : undefined,
 			},
@@ -387,11 +387,14 @@ function sdkConfig(model: Model<any>, context: Context, options: ClaudeAgentSdkS
 	const usesSubscriptionAuth = options.apiKey === CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH;
 	const systemPrompt = sdkSystemPrompt(options.systemPrompt, usesSubscriptionAuth);
 	const thinking = resolveSdkThinking(model, options.reasoning);
+	const env = createClaudeAgentSdkEnv(options);
 	return {
 		systemPrompt,
 		thinking,
+		env,
 		fingerprint: fingerprint({
 			apiKey: options.apiKey,
+			cacheTtl: env.CLAUDE_CODE_PROMPT_CACHE_TTL,
 			cwd: options.cwd,
 			model: model.id,
 			systemPrompt,
@@ -405,6 +408,7 @@ type SdkConfig = {
 	fingerprint: string;
 	systemPrompt: ReturnType<typeof sdkSystemPrompt>;
 	thinking: ReturnType<typeof resolveSdkThinking>;
+	env: Record<string, string | undefined>;
 };
 
 function historyMatches(session: SdkSession, history: Context["messages"]): boolean {
@@ -527,9 +531,12 @@ export function resolveSdkThinking(
 	};
 }
 
-function createClaudeAgentSdkEnv(apiKey: string | undefined): Record<string, string | undefined> {
+function createClaudeAgentSdkEnv(
+	options: Pick<ClaudeAgentSdkStreamOptions, "apiKey" | "cacheRetention" | "env">,
+): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {
 		...process.env,
+		...options.env,
 		CLAUDE_AGENT_SDK_CLIENT_APP: "pi-coding-agent",
 		CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
 		DISABLE_AUTO_COMPACT: "1",
@@ -541,10 +548,13 @@ function createClaudeAgentSdkEnv(apiKey: string | undefined): Record<string, str
 	if (!env.MAX_MCP_OUTPUT_TOKENS) {
 		env.MAX_MCP_OUTPUT_TOKENS = String(SDK_TOOL_RESULT_TOKENS);
 	}
-	if (apiKey === CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH) {
+	const retention = options.cacheRetention ?? (env.PI_CACHE_RETENTION === "long" ? "long" : undefined);
+	if (retention === "long") env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h";
+	if (retention === "short") env.CLAUDE_CODE_PROMPT_CACHE_TTL = "5m";
+	if (options.apiKey === CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH) {
 		delete env.ANTHROPIC_API_KEY;
-	} else if (apiKey) {
-		env.ANTHROPIC_API_KEY = apiKey;
+	} else if (options.apiKey) {
+		env.ANTHROPIC_API_KEY = options.apiKey;
 	}
 	return env;
 }

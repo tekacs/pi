@@ -7,12 +7,23 @@ export const CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH = "__PI_CLAUDE_AGENT_SDK_SUBSCRI
 
 const standardCost = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 const opus5Cost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+const fable5Cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
+const fable51Cost = { ...fable5Cost, cacheRead: 0.25 };
 
 export const CLAUDE_AGENT_SDK_MODELS = [
 	model("sonnet", "Claude Sonnet", 1000000, 64000, true, { xhigh: "xhigh", max: "max" }),
 	model("opus", "Claude Opus", 1000000, 128000, true, { xhigh: "xhigh", max: "max" }, opus5Cost),
 	model("haiku", "Claude Haiku", 1000000, 64000, true),
-	model("fable", "Claude Fable", 1000000, 128000, true, { xhigh: "xhigh", max: "max" }),
+	model("fable", "Claude Fable", 1000000, 128000, true, { off: null, xhigh: "xhigh", max: "max" }, fable5Cost),
+	model(
+		"claude-fable-5-1",
+		"Claude Fable 5.1",
+		1000000,
+		128000,
+		true,
+		{ off: null, xhigh: "xhigh", max: "max" },
+		fable51Cost,
+	),
 	model("claude-opus-5", "Claude Opus 5", 1000000, 128000, true, { xhigh: "xhigh", max: "max" }, opus5Cost),
 	model("claude-opus-4-5-20251101", "Claude Opus 4.5", 1000000, 64000, true),
 	model("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5", 1000000, 64000, true),

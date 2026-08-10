@@ -456,6 +456,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				return streamClaudeAgentSdk(model, context, {
 					...options,
 					apiKey: options?.apiKey ?? auth.auth.apiKey,
+					env: auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined,
 					cwd,
 					systemPrompt: agent.state.systemPrompt,
 					tools: agent.state.tools,
