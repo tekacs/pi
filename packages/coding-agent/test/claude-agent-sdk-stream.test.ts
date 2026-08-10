@@ -4,7 +4,7 @@ import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil
 import { cleanupSessionResources, isContextOverflow } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLAUDE_AGENT_SDK_MODELS } from "../src/core/claude-agent-sdk-models.ts";
+import { CLAUDE_AGENT_SDK_MODELS, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH } from "../src/core/claude-agent-sdk-models.ts";
 import { streamClaudeAgentSdk } from "../src/core/claude-agent-sdk-stream.ts";
 
 const sdk = vi.hoisted(() => ({
@@ -175,6 +175,35 @@ describe("Claude Agent SDK stream", () => {
 
 	afterEach(() => {
 		for (const sessionId of testSessions) cleanupSessionResources(sessionId);
+	});
+
+	it("maps Pi's long cache retention to Claude Code's one-hour TTL", async () => {
+		let sdkEnv: Record<string, string | undefined> | undefined;
+		sdk.query.mockImplementation(({ prompt, options }: QueryInput) => {
+			sdkEnv = options.env;
+			return mockQuery(
+				(async function* () {
+					await nextInput(prompt);
+					yield success("ok");
+				})(),
+			);
+		});
+
+		await collect(
+			{ messages: [user("cache")], tools: [] },
+			{
+				cwd: process.cwd(),
+				systemPrompt: "system",
+				apiKey: CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH,
+				env: { PI_CACHE_RETENTION: "long" },
+			},
+		);
+
+		expect(sdkEnv).toMatchObject({
+			PI_CACHE_RETENTION: "long",
+			CLAUDE_CODE_PROMPT_CACHE_TTL: "1h",
+		});
+		expect(sdkEnv?.ANTHROPIC_API_KEY).toBeUndefined();
 	});
 
 	it("separates assistant turns and exposes internally executed Pi tools", async () => {

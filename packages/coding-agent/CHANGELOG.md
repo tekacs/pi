@@ -8,9 +8,16 @@
 - Added extension-owned context repair for manual and automatic compaction, with inspectable progress, cancellation, selected-branch rebuild, and overflow retry.
 - Added public AgentSession service factories for isolated in-process sessions, projection-boundary cache checkpoints, and stable OpenRouter session affinity.
 - Added `ctx.countContextTokens()` for non-persisted, provider-reported preflight of candidate messages or hypothetical session branches from extensions.
+- Added explicit Claude Fable 5.1 selection to the Claude Agent SDK providers while preserving the `fable` gateway alias on Fable 5.
+
+### Changed
+
+- Updated the Claude Agent SDK to 0.3.257 for Fable 5.1 support and corrected Fable pricing metadata.
+- Extended `PI_CACHE_RETENTION=long` to Claude Agent SDK sessions by mapping it to Claude Code's one-hour prompt-cache TTL.
 
 ### Fixed
 
+- Fixed the Cerebras default referencing a model no longer present in its generated catalog.
 - Fixed new sessions intermittently ignoring the saved default model, or warning that no models are available, when it belongs to an extension-registered native provider with a stored credential ([#9962](https://github.com/earendil-works/pi/issues/9962)).
 
 ## [0.99.1] - 2026-09-29
@@ -280,10 +287,6 @@
 ### Removed
 
 - Removed unavailable inherited GPT-5.4 and GPT-5.4 mini models from OpenAI Codex selection ([#9394](https://github.com/earendil-works/pi/issues/9394)).
-
-### Fixed
-
-- Fixed the Cerebras default referencing a model no longer present in its generated catalog.
 
 ## [0.85.1] - 2026-09-05
 
