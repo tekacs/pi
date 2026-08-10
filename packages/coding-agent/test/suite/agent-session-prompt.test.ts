@@ -54,6 +54,30 @@ describe("AgentSession prompt characterization", () => {
 		expect(harness.getPendingResponseCount()).toBe(0);
 	});
 
+	it("gives context-only turns a transient provider boundary without appending it", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		let providerRoles: string[] = [];
+		let triggerText = "";
+		harness.setResponses([
+			(context) => {
+				providerRoles = context.messages.map((message) => message.role);
+				triggerText = getMessageText(context.messages.at(-1)!);
+				return fauxAssistantMessage("noticed");
+			},
+		]);
+
+		await harness.session.triggerTurn();
+
+		expect(providerRoles).toEqual(["system", "user"]);
+		expect(triggerText).toContain("durable context changed");
+		expect(harness.session.messages.map((message) => message.role)).toEqual(["system", "assistant"]);
+		expect(harness.sessionManager.buildSessionContext().messages.map((message) => message.role)).toEqual([
+			"system",
+			"assistant",
+		]);
+	});
+
 	it("handles a tool call turn and waits for the follow-up LLM response", async () => {
 		const toolRuns: string[] = [];
 		const echoTool: AgentTool = {

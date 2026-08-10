@@ -1766,7 +1766,7 @@ export interface ExtensionAPI {
 	// Actions
 	// =========================================================================
 
-	/** Run an agent turn without appending a prompt; context transforms must supply any operational tail. */
+	/** Run a turn through a generic transient provider boundary without appending it; context transforms supply the operational tail. */
 	triggerTurn(): void;
 
 	/** Send a custom message to the session. */

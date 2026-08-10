@@ -380,6 +380,22 @@ export class Agent {
 		await this.runPromptMessages(messages);
 	}
 
+	/**
+	 * Start a turn with provider-visible input that is not committed to transcript state or emitted to listeners.
+	 * The assistant response and any tool activity remain durable.
+	 */
+	async promptTransient(message: AgentMessage | AgentMessage[]): Promise<void>;
+	async promptTransient(input: string, images?: ImageContent[]): Promise<void>;
+	async promptTransient(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void> {
+		if (this.activeRun) {
+			throw new Error(
+				"Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
+			);
+		}
+		const messages = this.normalizePromptInput(input, images);
+		await this.runPromptMessages(messages, { transient: true });
+	}
+
 	/** Continue from the current transcript. The last message must be a user or tool-result message. */
 	async continue(): Promise<void> {
 		if (this.activeRun) {
@@ -431,14 +447,31 @@ export class Agent {
 
 	private async runPromptMessages(
 		messages: AgentMessage[],
-		options: { skipInitialSteeringPoll?: boolean } = {},
+		options: { skipInitialSteeringPoll?: boolean; transient?: boolean } = {},
 	): Promise<void> {
+		const transient = options.transient ? new Set(messages) : undefined;
 		await this.runWithLifecycle(async (signal) => {
 			await runAgentLoop(
 				messages,
 				this.createContextSnapshot(),
 				this.createLoopConfig(options),
-				(event) => this.processEvents(event),
+				async (event) => {
+					if (
+						transient &&
+						(event.type === "message_start" || event.type === "message_end") &&
+						transient.has(event.message)
+					) {
+						return;
+					}
+					if (transient && event.type === "agent_end") {
+						await this.processEvents({
+							...event,
+							messages: event.messages.filter((message) => !transient.has(message)),
+						});
+						return;
+					}
+					await this.processEvents(event);
+				},
 				signal,
 				this.streamFunction,
 			);

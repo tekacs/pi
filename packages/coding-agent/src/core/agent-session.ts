@@ -360,6 +360,17 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 	return tokens;
 }
 
+/** Generic provider boundary for transcript-free turns; extension context carries the actual durable state. */
+function turnPrompt(): AgentMessage {
+	return {
+		role: "user",
+		content: [
+			{ type: "text", text: "The durable context changed. Inspect the current context and continue accordingly." },
+		],
+		timestamp: Date.now(),
+	};
+}
+
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -376,6 +387,8 @@ export class AgentSession {
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
 	private _agentRunAbortRequested = false;
+	/** Provider-visible prompt of the active transient run; it never enters the session projection. */
+	private _transientRun?: { messages: AgentMessage[]; afterLeafId: string | null; knownEntryIds: Set<string> };
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
 
@@ -759,6 +772,34 @@ export class AgentSession {
 		return { ...context, messages: this.sessionManager.buildSessionProjection().messages };
 	}
 
+	/**
+	 * Canonical request messages: the session projection, with the active transient
+	 * prompt re-seated where the run started so this run's persisted assistant and
+	 * tool activity still follow it.
+	 */
+	private _projectedRequestMessages(projection: SessionProjection): AgentMessage[] {
+		const transient = this._transientRun;
+		if (!transient) return projection.messages;
+		let insertAt = projection.messages.length;
+		let count = 0;
+		let seated = false;
+		for (const entry of projection.entries) {
+			const id = entry.sourceEntry.id;
+			if (!seated && entry.sourceEntry.type === "message" && !transient.knownEntryIds.has(id)) {
+				insertAt = count;
+				seated = true;
+			}
+			count += entry.messages.length;
+			if (id === transient.afterLeafId) {
+				insertAt = count;
+				break;
+			}
+		}
+		// The initial prompt may have been persisted after the transient run began.
+		if (projection.messages[0]?.role === "system") insertAt = Math.max(1, insertAt);
+		return [...projection.messages.slice(0, insertAt), ...transient.messages, ...projection.messages.slice(insertAt)];
+	}
+
 	private _installAgentRequestProjection(): void {
 		const previousPrepareRequest = this.agent.prepareRequest;
 		this.agent.prepareRequest = async (request, signal) => {
@@ -768,7 +809,7 @@ export class AgentSession {
 				const projection = this.sessionManager.buildSessionProjection();
 				const canonicalContext = {
 					...request.context,
-					messages: projection.messages,
+					messages: this._projectedRequestMessages(projection),
 					// Messages declare the provider-visible loadout; context.tools keeps executable implementations.
 					tools: this.agent.state.tools.slice(),
 				};
@@ -1757,14 +1798,26 @@ export class AgentSession {
 	// Prompting
 	// =========================================================================
 
-	private async _runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+	private async _runAgentPrompt(
+		messages: AgentMessage | AgentMessage[],
+		options: { transient?: boolean } = {},
+	): Promise<void> {
 		this._agentRunAbortRequested = false;
 		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
 		this._failedResponse = undefined;
 		this._recordSelection();
 		this._isAgentRunActive = true;
+		if (options.transient) {
+			const branch = this.sessionManager.getBranch();
+			this._transientRun = {
+				messages: Array.isArray(messages) ? messages : [messages],
+				afterLeafId: this.sessionManager.getLeafId(),
+				knownEntryIds: new Set(branch.map((entry) => entry.id)),
+			};
+		}
 		try {
-			await this.agent.prompt(messages);
+			if (options.transient) await this.agent.promptTransient(messages);
+			else await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {
 				if (await this._handlePostAgentRun()) {
 					if (this._agentRunAbortRequested) break;
@@ -1776,6 +1829,7 @@ export class AgentSession {
 				await this.agent.continue();
 			}
 		} finally {
+			this._transientRun = undefined;
 			if (this._agentRunAbortRequested) this._finishCancelledRetry();
 			this._failedResponse = undefined;
 			this._runSystemPromptOptions = undefined;
@@ -2228,7 +2282,7 @@ export class AgentSession {
 	/** Run a context-only turn. Extensions use this when durable state changed but no payload belongs in transcript. */
 	async triggerTurn(): Promise<void> {
 		if (this.isStreaming) throw new Error("Cannot trigger a context-only turn while the agent is already running");
-		await this._runAgentPrompt([]);
+		await this._runAgentPrompt(turnPrompt(), { transient: true });
 	}
 
 	async sendCustomMessage<T = unknown>(
