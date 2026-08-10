@@ -84,7 +84,7 @@ These variables are read by Pi itself:
 | `PI_OFFLINE` | Disable automatic network activity, including model catalog refreshes |
 | `PI_SKIP_VERSION_CHECK` | Disable the `pi.dev` latest-version request |
 | `PI_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no` |
-| `PI_CACHE_RETENTION` | Set to `long` for extended provider prompt caching where supported |
+| `PI_CACHE_RETENTION` | Set to `long` for extended provider prompt caching, including a 1h Claude Agent SDK cache |
 | `MAX_MCP_OUTPUT_TOKENS` | Claude Agent SDK backend only: ceiling on one tool result before it is spilled to a file and previewed. Pi sets it to JavaScript's largest exact integer so Pi's own result handling remains authoritative; an explicit value is honored as-is |
 | `PI_SHARE_VIEWER_URL` | Override the base URL used by `/share` |
 | `PI_RADIUS_GATEWAY` | Override the Radius gateway origin used by `/bug` uploads |

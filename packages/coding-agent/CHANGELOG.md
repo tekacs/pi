@@ -5,6 +5,7 @@
 ### Added
 
 - Added a Models Configuration reference generated from the `models.json` schema, listing all provider, model, model override, and compatibility fields ([#10790](https://github.com/earendil-works/pi/issues/10790))
+- Added explicit Claude Fable 5.1 selection to the Claude Agent SDK providers while preserving the `fable` gateway alias on Fable 5.
 - Added atomic v2 context-projection frames, provider-exact hypothetical branch counting, and versioned projection capability checks for extension-owned context systems.
 - Added extension-owned context repair for manual and automatic compaction, with inspectable progress, cancellation, selected-branch rebuild, and overflow retry.
 - Added public AgentSession service factories for isolated in-process sessions, projection-boundary cache checkpoints, and stable OpenRouter session affinity.
@@ -18,6 +19,7 @@
 
 - Fixed compaction and branch summaries failing with "generation hit the token cap" when reasoning used most of the fixed summary output limit. Summaries now use the model's output limit, and `compaction.reserveTokens` only controls when compaction starts ([#9512](https://github.com/earendil-works/pi/issues/9512), [#9075](https://github.com/earendil-works/pi/issues/9075)).
 - Fixed `models.schema.json` missing descriptions for provider and model fields, so editors showed no hints for them ([#10790](https://github.com/earendil-works/pi/issues/10790))
+- Fixed the Cerebras default referencing a model no longer present in its generated catalog.
 
 ## [1.3.0] - 2026-10-15
 
@@ -96,6 +98,8 @@
 
 ### Changed
 
+- Updated the Claude Agent SDK to 0.3.257 for Fable 5.1 support and corrected Fable pricing metadata.
+- Extended `PI_CACHE_RETENTION=long` to Claude Agent SDK sessions by mapping it to Claude Code's one-hour prompt-cache TTL.
 - Changed the `showHardwareCursor` setting to use only the terminal cursor instead of also drawing Pi's reverse-video cursor
 - Changed codemode tool declarations to show input constraints such as integer, minimum/maximum, length, pattern, and default as `@` tags on property comments, so scripts see them without the tool repeating them in descriptions ([#10707](https://github.com/earendil-works/pi/issues/10707))
 - Changed codemode declarations of MCP tools to spell out the result type (`content`, `structuredContent`, `isError`) instead of referring to `CallToolResult<T>`, which `describeTool()`, `searchTools()`, and `ALL_TOOLS` showed without defining it; the codemode description no longer includes the shared MCP types
@@ -641,10 +645,6 @@
 ### Removed
 
 - Removed unavailable inherited GPT-5.4 and GPT-5.4 mini models from OpenAI Codex selection ([#9394](https://github.com/earendil-works/pi/issues/9394)).
-
-### Fixed
-
-- Fixed the Cerebras default referencing a model no longer present in its generated catalog.
 
 ## [0.85.1] - 2026-09-05
 
