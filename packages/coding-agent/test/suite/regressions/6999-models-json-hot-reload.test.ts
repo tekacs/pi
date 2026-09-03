@@ -72,6 +72,7 @@ describe("issue #6999 models.json hot reload", () => {
 			[],
 			() => {},
 			() => {},
+			"new-model",
 		);
 
 		await renderedAfterRefresh;
