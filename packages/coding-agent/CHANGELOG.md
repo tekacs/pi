@@ -703,6 +703,10 @@
 
 - Removed unavailable inherited GPT-5.4 and GPT-5.4 mini models from OpenAI Codex selection ([#9394](https://github.com/earendil-works/pi/issues/9394)).
 
+### Fixed
+
+- Fixed the Cerebras default referencing a model no longer present in its generated catalog.
+
 ## [0.85.1] - 2026-09-05
 
 ### New Features
