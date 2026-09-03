@@ -30,6 +30,14 @@ describe("Fireworks models", () => {
 		expect(model.input).toEqual(["text", "image"]);
 	});
 
+	it("registers the Kimi K3 fast router model", () => {
+		const model = getModel("fireworks", "accounts/fireworks/routers/kimi-k3-fast");
+
+		expect(model.api).toBe("openai-completions");
+		expect(model.baseUrl).toBe("https://api.fireworks.ai/inference/v1");
+		expect(model.input).toEqual(["text", "image"]);
+	});
+
 	it("aligns GLM 5.3 Fast with GLM 5.3's OpenAI-compatible config", () => {
 		const base = getModel("fireworks", "accounts/fireworks/models/glm-5p3");
 		const fast = getModel("fireworks", "accounts/fireworks/routers/glm-5p3-fast");
