@@ -65,9 +65,12 @@ describe("model selector filter resets selection to top", () => {
 		// Current model (alpha-1) is sorted first, so selection starts on row 0.
 		expect(selectedModelId(stripAnsi(selector.render(120).join("\n")))).toBe("alpha-1");
 
-		// Move selection down two rows to alpha-3.
-		selector.handleInput("\x1b[B");
-		selector.handleInput("\x1b[B");
+		// Other available providers may sit between the faux models, so navigate
+		// until alpha-3 rather than assuming the rows are adjacent.
+		for (let attempts = 0; attempts < 100; attempts++) {
+			if (selectedModelId(stripAnsi(selector.render(120).join("\n"))) === "alpha-3") break;
+			selector.handleInput("\x1b[B");
+		}
 		expect(selectedModelId(stripAnsi(selector.render(120).join("\n")))).toBe("alpha-3");
 
 		// Type a query that matches the three alpha models. The selection must
