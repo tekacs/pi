@@ -12,8 +12,15 @@ const codingAgentDir = join(repoRoot, "packages", "coding-agent");
 const aiDistDir = join(repoRoot, "packages", "ai", "dist");
 const codingAgentDistDir = join(codingAgentDir, "dist");
 const bundleDir = join(codingAgentDistDir, "bundle");
+// Undici 8.9 uses worker_threads.markAsUncloneable during module initialization.
+// Bun 1.3 does not expose it yet; a no-op preserves Bun's existing clone behavior.
 const banner = {
-	js: 'import { createRequire as __piCreateRequire } from "node:module"; const require = __piCreateRequire(import.meta.url);',
+	js: `import { createRequire as __piCreateRequire } from "node:module";
+import __piWorkerThreads from "node:worker_threads";
+if (typeof __piWorkerThreads.markAsUncloneable !== "function") {
+	__piWorkerThreads.markAsUncloneable = () => {};
+}
+const require = __piCreateRequire(import.meta.url);`,
 };
 const allowedExternalPackages = new Set([
 	"@silvia-odwyer/photon-node",
