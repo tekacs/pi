@@ -244,6 +244,45 @@ describe("streamHarnessAssistant", () => {
 		expect(lifecycle.filter((event) => event === "update").length).toBeGreaterThan(0);
 	});
 
+	it("forwards provider-managed events with the latest live partial", async () => {
+		const final = assistant("complete");
+		const partial = { ...final, content: [], stopReason: "pending" as const };
+		const updates: Array<{ type: string; message: AssistantMessage }> = [];
+		const result = await streamHarnessAssistant(
+			[user("prompt")],
+			{
+				model: model(),
+				systemPrompt: "system",
+				thinkingLevel: "off",
+				streamOptions: {},
+				toProviderMessages,
+				request: () => {
+					const stream = createAssistantMessageEventStream();
+					queueMicrotask(() => {
+						stream.push({ type: "start", partial });
+						stream.push({ type: "tool_execution_start", toolCallId: "call", toolName: "read", args: {} });
+						stream.push({ type: "assistant_message_commit", message: assistant("segment") });
+						stream.push({ type: "done", reason: "stop", message: final });
+					});
+					return stream;
+				},
+				observer: {
+					start() {},
+					update(message, event) {
+						updates.push({ type: event.type, message });
+					},
+					end() {},
+				},
+			},
+			BACKGROUND_CONTEXT,
+		);
+
+		expect(result).toBe(final);
+		expect(updates.map((update) => update.type)).toEqual(["tool_execution_start", "assistant_message_commit"]);
+		expect(updates.map((update) => update.message)).toEqual([partial, partial]);
+		expect(updates[0]?.message).not.toBe(partial);
+	});
+
 	it("rejects a successful terminal event before start", async () => {
 		const final = assistant("complete");
 		let options: SimpleStreamOptions | undefined;

@@ -97,7 +97,9 @@ function assertContentIndex(contentIndex: number): void {
 	}
 }
 
-function eventBlock(event: Exclude<AssistantMessageEvent, { type: "start" | "done" | "error" }>) {
+type AssistantContentEvent = Extract<AssistantMessageEvent, { contentIndex: number; partial: AssistantMessage }>;
+
+function eventBlock(event: AssistantContentEvent) {
 	assertContentIndex(event.contentIndex);
 	const block = event.partial.content[event.contentIndex];
 	if (!block) {
@@ -161,6 +163,11 @@ export class AssistantMessageFrameEncoder {
 		if (!this.started) throw new Error(`Assistant message ${event.type} event appears before start`);
 
 		switch (event.type) {
+			case "tool_execution_start":
+			case "tool_execution_update":
+			case "tool_execution_end":
+			case "assistant_message_commit":
+				return undefined;
 			case "text_start": {
 				const content = eventBlock(event);
 				if (content.type !== "text") {

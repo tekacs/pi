@@ -104,16 +104,17 @@ export async function consumeAssistantStream(
 		| undefined,
 	context: Context,
 ): Promise<SettledAssistantMessage> {
-	let started = false;
+	let partial: AssistantMessage | undefined;
 	for await (const event of stream) {
 		if (event.type === "start") {
-			if (started) throw new Error("Assistant message stream emitted more than one start event");
-			started = true;
-			await observer.start({ ...event.partial }, event, context);
+			if (partial) throw new Error("Assistant message stream emitted more than one start event");
+			partial = event.partial;
+			await observer.start({ ...partial }, event, context);
 		} else if (isUpdateEvent(event)) {
-			if (!started) throw new Error(`Assistant message stream emitted ${event.type} before start`);
-			await observer.update({ ...event.partial }, event, context);
-		} else if (event.type === "done" && !started) {
+			if (!partial) throw new Error(`Assistant message stream emitted ${event.type} before start`);
+			if ("partial" in event) partial = event.partial;
+			await observer.update({ ...partial }, event, context);
+		} else if (event.type === "done" && !partial) {
 			throw new Error("Assistant message stream emitted done before start");
 		}
 	}

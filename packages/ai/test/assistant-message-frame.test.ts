@@ -542,6 +542,37 @@ describe("assistant message frames", () => {
 		});
 	});
 
+	it("omits provider-managed lifecycle events because their durability is separate", () => {
+		const partial = seed();
+		const committed = seed();
+		committed.stopReason = "stop";
+		const encoder = new AssistantMessageFrameEncoder();
+		encoder.encode({ type: "start", partial });
+
+		expect(
+			encoder.encode({ type: "tool_execution_start", toolCallId: "call", toolName: "read", args: {} }),
+		).toBeUndefined();
+		expect(
+			encoder.encode({
+				type: "tool_execution_update",
+				toolCallId: "call",
+				toolName: "read",
+				args: {},
+				partialResult: {},
+			}),
+		).toBeUndefined();
+		expect(
+			encoder.encode({
+				type: "tool_execution_end",
+				toolCallId: "call",
+				toolName: "read",
+				result: {},
+				isError: false,
+			}),
+		).toBeUndefined();
+		expect(encoder.encode({ type: "assistant_message_commit", message: committed })).toBeUndefined();
+	});
+
 	it("omits terminal events because settlement is separate", () => {
 		const message = seed();
 		const completed = new AssistantMessageFrameEncoder();
