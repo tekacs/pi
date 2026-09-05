@@ -79,6 +79,16 @@ type SdkPartialOutput = {
 	finalized: Set<SdkOutputBlock>;
 };
 
+type ExtendedSdkUsage = {
+	output_tokens_details?: { thinking_tokens?: number };
+	iterations?: Array<{
+		input_tokens: number;
+		output_tokens: number;
+		cache_read_input_tokens?: number;
+		cache_creation_input_tokens?: number;
+	}>;
+};
+
 type SdkOutputState = {
 	active?: SdkPartialOutput;
 	activeMessageId?: string;
@@ -1148,7 +1158,7 @@ function recordUsage(
 	output: AssistantMessage,
 	state: SdkOutputState,
 ): boolean {
-	const raw = message.message.usage;
+	const raw = message.message.usage as (typeof message.message.usage & ExtendedSdkUsage) | undefined;
 	if (!raw) return false;
 
 	const request = createEmptyUsage();
@@ -1203,7 +1213,8 @@ function recordUsage(
 }
 
 function requestContext(raw: Extract<SDKMessage, { type: "assistant" }>["message"]["usage"]): number {
-	const usage = raw.iterations?.at(-1) ?? raw;
+	const extended = raw as typeof raw & ExtendedSdkUsage;
+	const usage = extended.iterations?.at(-1) ?? extended;
 	return (
 		usage.input_tokens +
 		usage.output_tokens +
@@ -1221,7 +1232,8 @@ function usageFromResult(result: SDKResultMessage, model: Model<any>, state: Sdk
 	usage.cacheRead = result.usage.cache_read_input_tokens ?? 0;
 	usage.cacheWrite = result.usage.cache_creation_input_tokens ?? 0;
 	usage.cacheWrite1h = result.usage.cache_creation?.ephemeral_1h_input_tokens ?? 0;
-	usage.reasoning = result.usage.output_tokens_details?.thinking_tokens;
+	const resultUsage = result.usage as typeof result.usage & ExtendedSdkUsage;
+	usage.reasoning = resultUsage.output_tokens_details?.thinking_tokens;
 	usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 	usage.contextTokens = state.contextTokens;
 	usage.entryPrompt = state.entryPrompt;
