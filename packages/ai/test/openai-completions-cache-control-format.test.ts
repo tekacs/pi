@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stream as streamOpenAICompletions } from "../src/api/openai-completions.ts";
 import { getModel, normalizeContext } from "../src/compat.ts";
+import { hasApi } from "../src/models.ts";
 import { CACHE_CHECKPOINT, type Message, type Model } from "../src/types.ts";
 
 interface CacheControl {
@@ -107,6 +108,12 @@ function getInstructionMessage(params: CapturedParams) {
 	return params.messages.find((message) => message.role === "system" || message.role === "developer");
 }
 
+function openRouterAnthropicBatch(): Model<"openai-completions"> {
+	const model = getModel("openrouter", "anthropic/claude-fable-5.1:batch");
+	if (!hasApi(model, "openai-completions")) throw new Error("Expected an OpenAI Completions model");
+	return model;
+}
+
 function expectAnthropicCacheMarkers(params: CapturedParams): void {
 	const instructionMessage = getInstructionMessage(params);
 	expect(instructionMessage).toBeDefined();
@@ -154,13 +161,12 @@ describe("openai-completions cacheControlFormat", () => {
 	});
 
 	it("preserves Anthropic-style cache markers for OpenRouter Anthropic batch aliases", async () => {
-		const model = getModel("openrouter", "anthropic/claude-fable-5.1:batch");
-		const params = await capturePayload(model);
+		const params = await capturePayload(openRouterAnthropicBatch());
 		expectAnthropicCacheMarkers(params);
 	});
 
 	it("adds a stable-prefix marker before the latest conversation marker", async () => {
-		const model = getModel("openrouter", "anthropic/claude-sonnet-4");
+		const model = openRouterAnthropicBatch();
 		const timestamp = Date.now();
 		const params = await capturePayload(model, undefined, [
 			{ role: "user", content: "stable prefix", [CACHE_CHECKPOINT]: true, timestamp },
@@ -174,7 +180,7 @@ describe("openai-completions cacheControlFormat", () => {
 	});
 
 	it("moves the conversation cache marker to a tool result", async () => {
-		const model = getModel("openrouter", "anthropic/claude-fable-5.1:batch");
+		const model = openRouterAnthropicBatch();
 		const timestamp = Date.now();
 		const params = await capturePayload(model, undefined, [
 			{ role: "user", content: "Read the file", timestamp },
