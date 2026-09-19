@@ -173,6 +173,11 @@ class PendingMessageQueue {
 	}
 }
 
+/** Durable instructions emitted before a transient provider input. */
+export interface TransientOptions {
+	prefix?: AgentMessage[];
+}
+
 type ActiveRun = {
 	promise: Promise<void>;
 	resolve: () => void;
@@ -382,18 +387,22 @@ export class Agent {
 
 	/**
 	 * Start a turn with provider-visible input that is not committed to transcript state or emitted to listeners.
-	 * The assistant response and any tool activity remain durable.
+	 * The optional prefix, assistant response, and tool activity remain durable with normal lifecycle events.
 	 */
-	async promptTransient(message: AgentMessage | AgentMessage[]): Promise<void>;
+	async promptTransient(message: AgentMessage | AgentMessage[], options?: TransientOptions): Promise<void>;
 	async promptTransient(input: string, images?: ImageContent[]): Promise<void>;
-	async promptTransient(input: string | AgentMessage | AgentMessage[], images?: ImageContent[]): Promise<void> {
+	async promptTransient(
+		input: string | AgentMessage | AgentMessage[],
+		options?: ImageContent[] | TransientOptions,
+	): Promise<void> {
 		if (this.activeRun) {
 			throw new Error(
 				"Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.",
 			);
 		}
-		const messages = this.normalizePromptInput(input, images);
-		await this.runPromptMessages(messages, { transient: true });
+		const messages = this.normalizePromptInput(input, Array.isArray(options) ? options : undefined);
+		const prefix = options && !Array.isArray(options) ? (options.prefix ?? []) : [];
+		await this.runPromptMessages([...prefix, ...messages], { transient: new Set(messages) });
 	}
 
 	/** Continue from the current transcript. The last message must be a user or tool-result message. */
@@ -447,9 +456,9 @@ export class Agent {
 
 	private async runPromptMessages(
 		messages: AgentMessage[],
-		options: { skipInitialSteeringPoll?: boolean; transient?: boolean } = {},
+		options: { skipInitialSteeringPoll?: boolean; transient?: ReadonlySet<AgentMessage> } = {},
 	): Promise<void> {
-		const transient = options.transient ? new Set(messages) : undefined;
+		const transient = options.transient;
 		await this.runWithLifecycle(async (signal) => {
 			await runAgentLoop(
 				messages,

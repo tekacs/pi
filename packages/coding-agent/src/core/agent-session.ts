@@ -27,11 +27,12 @@ import {
 	type AgentToolCallOutcome,
 	type BeforeToolCallContext,
 	type BeforeToolCallResult,
+	declareToolChanges,
 	type PrepareNextTurnContext,
 	runToolCall,
 	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
+import { contentText, getCurrentSystemMessage, normalizeContext, retryDelayMs } from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -1806,6 +1807,13 @@ export class AgentSession {
 		messages: AgentMessage[] = this.agent.state.messages,
 	): SystemMessage | undefined {
 		options.selectedTools = this._applyToolLoadout(options.selectedTools).map((tool) => tool.name);
+		return this._promptUpdate(options, messages);
+	}
+
+	private _promptUpdate(
+		options: NormalizedBuildSystemPromptOptions,
+		messages: AgentMessage[],
+	): SystemMessage | undefined {
 		// The tool list and rules must match the declarations the request carries.
 		options.hiddenTools = [...this._hiddenDeclarations];
 		const sections = diffSystemPromptSections(
@@ -1895,8 +1903,12 @@ export class AgentSession {
 	 * starting another, and an abort requested meanwhile aborts the run as soon as it exists.
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
 	 */
-	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
-		return this._executeRun(() => this._prepareRun(trigger), onStarted);
+	private async _startRun(
+		trigger: BeforeAgentStartTrigger,
+		onStarted?: () => void,
+		options: { preflightResult?: PromptOptions["preflightResult"] } = {},
+	): Promise<void> {
+		return this._executeRun(() => this._prepareRun(trigger), onStarted, options);
 	}
 
 	/**
@@ -1906,7 +1918,7 @@ export class AgentSession {
 	 */
 	private async _runAgentPrompt(
 		messages: AgentMessage | AgentMessage[],
-		options: { transient?: boolean } = {},
+		options: { transient?: boolean; preflightResult?: PromptOptions["preflightResult"] } = {},
 	): Promise<void> {
 		const prepared = Array.isArray(messages) ? messages : [messages];
 		return this._executeRun(async () => prepared, undefined, options);
@@ -1915,7 +1927,7 @@ export class AgentSession {
 	private async _executeRun(
 		prepare: () => Promise<AgentMessage[]>,
 		onStarted?: () => void,
-		options: { transient?: boolean } = {},
+		options: { transient?: boolean; preflightResult?: PromptOptions["preflightResult"] } = {},
 	): Promise<void> {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
@@ -1941,6 +1953,11 @@ export class AgentSession {
 		// The run records the loadout in the transcript; restored tools that did not register by now
 		// are dropped, so a tool that never registers does not stay pending.
 		this._pendingToolNames.clear();
+		const update = this._preparePromptAndToolLoadout(
+			this._runSystemPromptOptions ?? this._baseSystemPromptOptions,
+		);
+		const prefix: AgentMessage[] = update ? [update] : [];
+		options.preflightResult?.("started");
 		if (options.transient) {
 			const branch = this.sessionManager.getBranch();
 			this._transientRun = {
@@ -1950,8 +1967,8 @@ export class AgentSession {
 			};
 		}
 		try {
-			if (options.transient) await this.agent.promptTransient(messages);
-			else await this.agent.prompt(messages);
+			if (options.transient) await this.agent.promptTransient(messages, { prefix });
+			else await this.agent.prompt([...prefix, ...(Array.isArray(messages) ? messages : [messages])]);
 			while (!this._agentRunAbortRequested) {
 				if (await this._handlePostAgentRun()) {
 					if (this._agentRunAbortRequested) break;
@@ -1976,8 +1993,8 @@ export class AgentSession {
 	/**
 	 * Prepare a run and return its starting messages: compact first when needed, emit
 	 * before_agent_start, apply the run's prompt options and tool loadout, and build the starting
-	 * message followed by pending nextTurn messages (consumed here) and handler messages, with a
-	 * system patch first when the prompt changed.
+	 * message followed by pending nextTurn messages (consumed here) and handler messages. The
+	 * system patch for a changed prompt is declared by the run itself, as its prefix.
 	 */
 	private async _prepareRun(trigger: BeforeAgentStartTrigger): Promise<AgentMessage[]> {
 		// Check if we need to compact before sending (catches aborted responses).
@@ -2026,9 +2043,7 @@ export class AgentSession {
 				timestamp: Date.now(),
 			});
 		}
-		const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
 		this._runSystemPromptOptions = result.systemPromptOptions;
-		if (updateMessage) messages.unshift(updateMessage);
 		return messages;
 	}
 
@@ -2227,9 +2242,9 @@ export class AgentSession {
 			throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
 		}
 
-		await this._startRun({ messageType: "user", prompt: expandedText, images: currentImages }, () =>
-			preflightResult?.("started"),
-		);
+		await this._startRun({ messageType: "user", prompt: expandedText, images: currentImages }, undefined, {
+			preflightResult,
+		});
 	}
 
 	/**
@@ -4647,14 +4662,13 @@ export class AgentSession {
 
 		try {
 			const signal = options.signal ?? this.agent.signal;
+			const update = this._promptUpdate(this._runSystemPromptOptions ?? this._baseSystemPromptOptions, messages);
+			const pending = declareToolChanges({ messages, tools: this.agent.state.tools }, update ? [update] : []);
+			const prepared = [...messages, ...pending];
 			const transformed = this.agent.transformContext
-				? await this.agent.transformContext(messages, signal)
-				: messages;
-			const context = {
-				systemPrompt: this.systemPrompt,
-				messages: await this.agent.convertToLlm(transformed),
-				tools: this.agent.state.tools,
-			};
+				? await this.agent.transformContext(prepared, signal)
+				: prepared;
+			const context = normalizeContext({ messages: await this.agent.convertToLlm(transformed) });
 			const apiKey = await this.agent.getApiKey?.(model.provider);
 			const events = await this.agent.streamFunction(model, context, {
 				apiKey,

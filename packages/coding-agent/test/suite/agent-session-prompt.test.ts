@@ -65,10 +65,12 @@ describe("AgentSession prompt characterization", () => {
 		harnesses.push(harness);
 		let providerRoles: string[] = [];
 		let triggerText = "";
+		let providerPrompt = "";
 		harness.setResponses([
 			(context) => {
 				providerRoles = context.messages.map((message) => message.role);
 				triggerText = getMessageText(context.messages.at(-1)!);
+				providerPrompt = getCurrentSystemPrompt(context.messages);
 				return fauxAssistantMessage("noticed");
 			},
 		]);
@@ -76,6 +78,7 @@ describe("AgentSession prompt characterization", () => {
 		await harness.session.triggerTurn();
 
 		expect(providerRoles).toEqual(["system", "user"]);
+		expect(providerPrompt).toBe(harness.session.systemPrompt);
 		expect(triggerText).toContain("durable context changed");
 		expect(harness.session.messages.map((message) => message.role)).toEqual(["system", "assistant"]);
 		expect(harness.sessionManager.buildSessionContext().messages.map((message) => message.role)).toEqual([
