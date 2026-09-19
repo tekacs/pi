@@ -51,10 +51,10 @@ Transport-neutral facet-service primitives live in `@earendil-works/chord`. The 
 ### AgentMessage vs LLM Message
 
 The agent works with `AgentMessage`, a flexible type that can include:
-- Standard LLM messages (`user`, `assistant`, `toolResult`)
+- Standard LLM messages (`system`, `user`, `assistant`, `toolResult`)
 - Custom app-specific message types via declaration merging
 
-LLMs only understand `user`, `assistant`, and `toolResult`. The `convertToLlm` function bridges this gap by filtering and transforming messages before each LLM call.
+Provider transcripts contain `system`, `user`, `assistant`, and `toolResult` messages. The `convertToLlm` function bridges this gap by filtering and transforming messages before each LLM call.
 
 ### Message Flow
 
@@ -339,6 +339,12 @@ await agent.prompt({ role: "user", content: "Hello", timestamp: Date.now() });
 // The assistant response and tool activity remain durable.
 await agent.promptTransient("Durable external context changed");
 
+// Persist updated instructions through normal lifecycle events, but not the trigger.
+await agent.promptTransient(
+  { role: "user", content: "Context changed", timestamp: Date.now() },
+  { prefix: [{ role: "system", content: "New durable instructions", timestamp: Date.now() }] },
+);
+
 // Continue existing non-assistant input; an assistant tail may use queued input as fallback
 await agent.continue();
 ```
@@ -550,7 +556,7 @@ const context: AgentContext = {
 
 const config: AgentLoopConfig = {
   model: getModel("openai", "gpt-4o"),
-  convertToLlm: (msgs) => msgs.filter(m => ["user", "assistant", "toolResult"].includes(m.role)),
+  convertToLlm: (msgs) => msgs.filter(m => ["system", "user", "assistant", "toolResult"].includes(m.role)),
   toolExecution: "parallel",  // overridden by per-tool executionMode if set
   beforeToolCall: async ({ toolCall, args, context }) => undefined,
   afterToolCall: async ({ toolCall, result, isError, context }) => undefined,
@@ -568,6 +574,8 @@ for await (const event of agentLoopContinue(context, config, undefined, streamFn
   console.log(event.type);
 }
 ```
+
+`declareToolChanges(context, pendingMessages)` purely prepares the same prompt/tool declaration delta used by the loop. It returns pending messages with the executable tool loadout declared, without mutating the context or emitting events; preflight callers can use it before context transformation and provider normalization.
 
 These low-level streams are observational. They preserve event order, but they do not wait for your async event handling to settle before later producer phases continue. If you need message processing to act as a barrier before tool preflight, use the `Agent` class instead of raw `agentLoop()` or `agentLoopContinue()`.
 

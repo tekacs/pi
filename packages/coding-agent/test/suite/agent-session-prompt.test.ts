@@ -2,7 +2,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { fauxAssistantMessage, fauxToolCall, type Model } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, type Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, InputEvent } from "../../src/core/extensions/index.ts";
@@ -59,10 +59,12 @@ describe("AgentSession prompt characterization", () => {
 		harnesses.push(harness);
 		let providerRoles: string[] = [];
 		let triggerText = "";
+		let providerPrompt = "";
 		harness.setResponses([
 			(context) => {
 				providerRoles = context.messages.map((message) => message.role);
 				triggerText = getMessageText(context.messages.at(-1)!);
+				providerPrompt = getCurrentSystemPrompt(context.messages);
 				return fauxAssistantMessage("noticed");
 			},
 		]);
@@ -70,6 +72,7 @@ describe("AgentSession prompt characterization", () => {
 		await harness.session.triggerTurn();
 
 		expect(providerRoles).toEqual(["system", "user"]);
+		expect(providerPrompt).toBe(harness.session.systemPrompt);
 		expect(triggerText).toContain("durable context changed");
 		expect(harness.session.messages.map((message) => message.role)).toEqual(["system", "assistant"]);
 		expect(harness.sessionManager.buildSessionContext().messages.map((message) => message.role)).toEqual([

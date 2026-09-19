@@ -27,11 +27,12 @@ import {
 	type AgentToolCallOutcome,
 	type BeforeToolCallContext,
 	type BeforeToolCallResult,
+	declareToolChanges,
 	type PrepareNextTurnContext,
 	runToolCall,
 	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
+import { contentText, getCurrentSystemMessage, normalizeContext, retryDelayMs } from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -1724,6 +1725,13 @@ export class AgentSession {
 		messages: AgentMessage[] = this.agent.state.messages,
 	): SystemMessage | undefined {
 		options.selectedTools = this._applyToolLoadout(options.selectedTools).map((tool) => tool.name);
+		return this._promptUpdate(options, messages);
+	}
+
+	private _promptUpdate(
+		options: NormalizedBuildSystemPromptOptions,
+		messages: AgentMessage[],
+	): SystemMessage | undefined {
 		const sections = diffSystemPromptSections(
 			getCurrentSystemMessage(messages)?.sections ?? {},
 			buildSystemPromptSections(options),
@@ -1800,12 +1808,17 @@ export class AgentSession {
 
 	private async _runAgentPrompt(
 		messages: AgentMessage | AgentMessage[],
-		options: { transient?: boolean } = {},
+		options: { transient?: boolean; preflightResult?: PromptOptions["preflightResult"] } = {},
 	): Promise<void> {
 		this._agentRunAbortRequested = false;
 		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
 		this._failedResponse = undefined;
 		this._recordSelection();
+		const update = this._preparePromptAndToolLoadout(
+			this._runSystemPromptOptions ?? this._baseSystemPromptOptions,
+		);
+		const prefix: AgentMessage[] = update ? [update] : [];
+		options.preflightResult?.("started");
 		this._isAgentRunActive = true;
 		if (options.transient) {
 			const branch = this.sessionManager.getBranch();
@@ -1816,8 +1829,8 @@ export class AgentSession {
 			};
 		}
 		try {
-			if (options.transient) await this.agent.promptTransient(messages);
-			else await this.agent.prompt(messages);
+			if (options.transient) await this.agent.promptTransient(messages, { prefix });
+			else await this.agent.prompt([...prefix, ...(Array.isArray(messages) ? messages : [messages])]);
 			while (!this._agentRunAbortRequested) {
 				if (await this._handlePostAgentRun()) {
 					if (this._agentRunAbortRequested) break;
@@ -2091,12 +2104,8 @@ export class AgentSession {
 				timestamp: Date.now(),
 			});
 		}
-		const updateMessage = this._preparePromptAndToolLoadout(result.systemPromptOptions);
 		this._runSystemPromptOptions = result.systemPromptOptions;
-		if (updateMessage) messages.unshift(updateMessage);
-
-		preflightResult?.("started");
-		await this._runAgentPrompt(messages);
+		await this._runAgentPrompt(messages, { preflightResult });
 	}
 
 	/**
@@ -4501,14 +4510,13 @@ export class AgentSession {
 
 		try {
 			const signal = options.signal ?? this.agent.signal;
+			const update = this._promptUpdate(this._runSystemPromptOptions ?? this._baseSystemPromptOptions, messages);
+			const pending = declareToolChanges({ messages, tools: this.agent.state.tools }, update ? [update] : []);
+			const prepared = [...messages, ...pending];
 			const transformed = this.agent.transformContext
-				? await this.agent.transformContext(messages, signal)
-				: messages;
-			const context = {
-				systemPrompt: this.systemPrompt,
-				messages: await this.agent.convertToLlm(transformed),
-				tools: this.agent.state.tools,
-			};
+				? await this.agent.transformContext(prepared, signal)
+				: prepared;
+			const context = normalizeContext({ messages: await this.agent.convertToLlm(transformed) });
 			const apiKey = await this.agent.getApiKey?.(model.provider);
 			const events = await this.agent.streamFunction(model, context, {
 				apiKey,

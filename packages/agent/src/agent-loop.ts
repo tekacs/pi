@@ -335,8 +335,9 @@ async function runLoop(
  * are treated as intent and replaced with the delta between the committed transcript and
  * the executable set, so replay always yields exactly `context.tools`. Otherwise a new
  * system message is inserted before the first non-system pending message.
+ * Pure preparation: callers can preview the same declaration delta without emitting events or mutating state.
  */
-function declareToolChanges(context: AgentContext, pendingMessages: AgentMessage[]): AgentMessage[] {
+export function declareToolChanges(context: AgentContext, pendingMessages: AgentMessage[]): AgentMessage[] {
 	let systemIndex = -1;
 	for (let i = pendingMessages.length - 1; i >= 0; i--) {
 		if (pendingMessages[i].role === "system") {
