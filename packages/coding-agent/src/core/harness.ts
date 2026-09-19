@@ -5,9 +5,9 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEventStream,
 	type AuthResult,
-	type Context,
 	type Model,
 	type SimpleStreamOptions,
+	type TranscriptContext,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
 
@@ -33,6 +33,7 @@ export type HarnessToolRunner = (call: HarnessToolCall) => Promise<HarnessToolRe
 export interface HarnessStreamOptions extends SimpleStreamOptions {
 	auth: AuthResult;
 	cwd: string;
+	/** Current prompt replayed from the transformed request transcript. */
 	systemPrompt: string;
 	tools: readonly AgentTool[];
 	agentContext: AgentContext;
@@ -42,7 +43,7 @@ export interface HarnessStreamOptions extends SimpleStreamOptions {
 
 export type HarnessStream = (
 	model: Model<Api>,
-	context: Context,
+	context: TranscriptContext,
 	options: HarnessStreamOptions,
 ) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
 
