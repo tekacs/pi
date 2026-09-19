@@ -1,7 +1,7 @@
 import type { Query, SDKMessage, SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
-import { cleanupSessionResources, isContextOverflow } from "@earendil-works/pi-ai";
+import { cleanupSessionResources, isContextOverflow, normalizeContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_AGENT_SDK_MODELS, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH } from "../src/core/claude-agent-sdk-models.ts";
@@ -19,6 +19,7 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 
 type MockServer = {
 	tools: Array<{
+		name: string;
 		inputSchema: Record<string, { safeParse: (value: unknown) => { success: boolean } }>;
 		handler: (args: Record<string, unknown>, extra: unknown) => Promise<unknown>;
 	}>;
@@ -30,6 +31,7 @@ type QueryInput = {
 		env: Record<string, string | undefined>;
 		mcpServers: { pi: MockServer };
 		forwardSubagentText: boolean;
+		systemPrompt: string;
 		resume?: string;
 	};
 };
@@ -149,13 +151,15 @@ async function collect(
 	context: Context,
 	options: Omit<Parameters<typeof streamClaudeAgentSdk>[2], "tools" | "agentContext"> & {
 		tools?: readonly AgentTool[];
+		systemPrompt?: string;
 	},
 ): Promise<{ result: AssistantMessage; events: AssistantMessageEvent[] }> {
+	const { systemPrompt, ...streamOptions } = options;
 	const tools = [...(options.tools ?? [])];
-	const stream = streamClaudeAgentSdk(fableModel(), context, {
-		...options,
+	const stream = streamClaudeAgentSdk(fableModel(), normalizeContext({ systemPrompt, ...context }), {
+		...streamOptions,
 		tools,
-		agentContext: { systemPrompt: options.systemPrompt, messages: [], tools },
+		agentContext: { messages: [], tools },
 	});
 	const events: AssistantMessageEvent[] = [];
 	for await (const event of stream) events.push(event);
@@ -369,12 +373,11 @@ describe("Claude Agent SDK stream", () => {
 			),
 		);
 
-		const context: Context = { messages: [user("measure")], tools: [] };
+		const context = normalizeContext({ systemPrompt: "system", messages: [user("measure")], tools: [] });
 		const stream = streamClaudeAgentSdk(fableModel(), context, {
 			cwd: process.cwd(),
-			systemPrompt: "system",
 			tools: [],
-			agentContext: { systemPrompt: "system", messages: [], tools: [] },
+			agentContext: { messages: [], tools: [] },
 		});
 		const iterator = stream[Symbol.asyncIterator]();
 		const nextUsageAbove = async (minimum: number) => {
@@ -850,6 +853,66 @@ describe("Claude Agent SDK stream", () => {
 		expect(calls).toHaveLength(2);
 		expect(calls[1].options.resume).toBe("resume-sdk-session");
 		expect(prompts[1]).toBe("<user>\nsecond\n</user>");
+	});
+
+	it("replays transcript sections and tool changes while resuming conversational history", async () => {
+		const calls: QueryInput[] = [];
+		const prompts: string[] = [];
+		const executed: string[] = [];
+		const tools: AgentTool[] = ["old", "new"].map((name) => ({
+			name,
+			label: name,
+			description: name,
+			parameters: Type.Object({}),
+			async execute() {
+				executed.push(name);
+				return { content: [{ type: "text", text: name }], details: {} };
+			},
+		}));
+		sdk.query.mockImplementation((input: QueryInput) => {
+			calls.push(input);
+			return mockQuery(
+				(async function* () {
+					yield init("resume-sdk-session");
+					prompts.push(contentText(await nextInput(input.prompt)));
+					await input.options.mcpServers.pi.tools[0].handler({}, {});
+					yield success("reply", "resume-sdk-session");
+				})(),
+			);
+		});
+		const context: Context = {
+			messages: [
+				{ role: "system", content: "base", sections: { rules: "before" }, toolsAdded: [tools[0]], timestamp: 1 },
+				user("first"),
+			],
+		};
+		const options = { cwd: process.cwd(), sessionId: "claude-sdk-resume", tools };
+		const first = await collect(context, options);
+		await collect(
+			{
+				messages: [
+					...context.messages,
+					first.result,
+					{
+						role: "system",
+						content: "",
+						sections: { rules: "after" },
+						toolsRemoved: [{ name: "old" }],
+						toolsAdded: [tools[1]],
+						timestamp: 2,
+					},
+					user("second"),
+				],
+			},
+			options,
+		);
+		expect(calls).toHaveLength(2);
+		expect(calls[0].options.systemPrompt).toBe("base\n\nbefore");
+		expect(calls[1].options.systemPrompt).toBe("base\n\nafter");
+		expect(calls[1].options.resume).toBe("resume-sdk-session");
+		expect(calls[1].options.mcpServers.pi.tools.map((tool) => tool.name)).toEqual(["new"]);
+		expect(executed).toEqual(["old", "new"]);
+		expect(prompts).toEqual(["<user>\nfirst\n</user>", "<user>\nsecond\n</user>"]);
 	});
 
 	it("falls back to a fresh process when the SDK does not confirm reset", async () => {

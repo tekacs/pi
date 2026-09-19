@@ -3,6 +3,7 @@ import {
 	fauxAssistantMessage,
 	fauxToolCall,
 	getCurrentSystemPrompt,
+	getCurrentTools,
 	type JsonObject,
 	type Model,
 	type Usage,
@@ -440,6 +441,30 @@ describe("AgentSession model and extension characterization", () => {
 		expect(count.tokens).toBeGreaterThan(0);
 		expect(count.tokens).toBe(count.usage.input + count.usage.cacheRead + count.usage.cacheWrite);
 		expect(harness.session.messages).toHaveLength(messageCount);
+	});
+
+	it("preflights transcript prompt and tool deltas without duplicating or persisting them", async () => {
+		const harness = await createHarness();
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("seed")]);
+		await harness.session.prompt("seed");
+		harness.session.setActiveToolsByName(["read"]);
+		const messages = harness.session.messages.slice();
+		const entries = harness.sessionManager.getEntries();
+		const leaf = harness.sessionManager.getLeafId();
+		harness.setResponses([
+			(context) => {
+				expect(Object.keys(context)).toEqual(["messages"]);
+				expect(getCurrentSystemPrompt(context.messages)).toBe(harness.session.systemPrompt);
+				expect(getCurrentTools(context.messages).map((tool) => tool.name)).toEqual(["read"]);
+				return fauxAssistantMessage("probe");
+			},
+		]);
+		const count = await harness.session.countContextTokens(messages);
+		expect(count.ok).toBe(true);
+		expect(harness.session.messages).toEqual(messages);
+		expect(harness.sessionManager.getEntries()).toEqual(entries);
+		expect(harness.sessionManager.getLeafId()).toBe(leaf);
 	});
 
 	it("materializes a hypothetical session branch before provider context counting", async () => {

@@ -15,15 +15,17 @@ import type { Agent, AgentContext, AgentTool, AgentToolResult } from "@earendil-
 import type {
 	AssistantMessage,
 	AssistantMessageEventStream,
-	Context,
 	Model,
 	SimpleStreamOptions,
 	Tool,
+	TranscriptContext,
 	Usage,
 } from "@earendil-works/pi-ai";
 import {
 	calculateCost,
 	createAssistantMessageEventStream,
+	getCurrentSystemPrompt,
+	getCurrentTools,
 	registerSessionResourceCleanup,
 } from "@earendil-works/pi-ai";
 import { z } from "zod/v4";
@@ -38,7 +40,7 @@ type ToolLookup = ReadonlyMap<string, AgentTool>;
 
 export interface ClaudeAgentSdkStreamOptions extends SimpleStreamOptions {
 	cwd: string;
-	systemPrompt: string;
+	/** Executable host tools; declarations and prompt are replayed from the request transcript. */
 	tools: readonly AgentTool[];
 	agentContext: AgentContext;
 	beforeToolCall?: Agent["beforeToolCall"];
@@ -66,7 +68,7 @@ type SdkInvocation = {
 	session: SdkSession;
 	persistent: boolean;
 	resumed: boolean;
-	history: Context["messages"];
+	history: TranscriptContext["messages"];
 };
 
 type SdkOutputBlock = {
@@ -111,7 +113,11 @@ registerSessionResourceCleanup((sessionId) => {
 	if (session) closeSdkSession(session);
 });
 
-export function streamClaudeAgentSdk(model: Model<any>, context: Context, options: ClaudeAgentSdkStreamOptions) {
+export function streamClaudeAgentSdk(
+	model: Model<any>,
+	context: TranscriptContext,
+	options: ClaudeAgentSdkStreamOptions,
+) {
 	const stream = createAssistantMessageEventStream();
 
 	void (async () => {
@@ -211,11 +217,13 @@ export function streamClaudeAgentSdk(model: Model<any>, context: Context, option
 
 async function startSdkInvocation(
 	model: Model<any>,
-	context: Context,
+	context: TranscriptContext,
 	options: ClaudeAgentSdkStreamOptions,
 	stream: AssistantMessageEventStream,
 ): Promise<SdkInvocation> {
-	const history = context.messages.slice();
+	// The SDK carries the replayed prompt/tool state in its process configuration,
+	// not its user transcript. Config changes resume the same conversational history.
+	const history = context.messages.filter((message) => message.role !== "system");
 	const config = sdkConfig(model, context, options);
 	const sessionId = options.sessionId;
 	const activeSession = liveSdkSession;
@@ -317,14 +325,14 @@ async function resetSdkSession(session: SdkSession, signal: AbortSignal | undefi
 
 function createSdkSession(
 	model: Model<any>,
-	context: Context,
+	context: TranscriptContext,
 	options: ClaudeAgentSdkStreamOptions,
 	config: SdkConfig,
 	resume: string | undefined,
 ): SdkSession {
 	const input = new SdkInput();
 	const turn: { current?: SdkTurn } = {};
-	const sdkTools = createSdkTools(context.tools ?? [], () => turn.current);
+	const sdkTools = createSdkTools(getCurrentTools(context.messages), () => turn.current);
 	return {
 		input,
 		query: query({
@@ -393,9 +401,9 @@ async function readSdkTurn(
 	}
 }
 
-function sdkConfig(model: Model<any>, context: Context, options: ClaudeAgentSdkStreamOptions): SdkConfig {
+function sdkConfig(model: Model<any>, context: TranscriptContext, options: ClaudeAgentSdkStreamOptions): SdkConfig {
 	const usesSubscriptionAuth = options.apiKey === CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH;
-	const systemPrompt = sdkSystemPrompt(options.systemPrompt, usesSubscriptionAuth);
+	const systemPrompt = sdkSystemPrompt(getCurrentSystemPrompt(context.messages), usesSubscriptionAuth);
 	const thinking = resolveSdkThinking(model, options.reasoning);
 	const env = createClaudeAgentSdkEnv(options);
 	return {
@@ -409,7 +417,11 @@ function sdkConfig(model: Model<any>, context: Context, options: ClaudeAgentSdkS
 			model: model.id,
 			systemPrompt,
 			thinking,
-			tools: (context.tools ?? []).map(({ name, description, parameters }) => ({ name, description, parameters })),
+			tools: getCurrentTools(context.messages).map(({ name, description, parameters }) => ({
+				name,
+				description,
+				parameters,
+			})),
 		}),
 	};
 }
@@ -421,12 +433,12 @@ type SdkConfig = {
 	env: Record<string, string | undefined>;
 };
 
-function historyMatches(session: SdkSession, history: Context["messages"]): boolean {
+function historyMatches(session: SdkSession, history: TranscriptContext["messages"]): boolean {
 	if (!session.expectedHistory || history.length < session.expectedHistory.count) return false;
 	return historyState(history.slice(0, session.expectedHistory.count)).hash === session.expectedHistory.hash;
 }
 
-function historyState(messages: Context["messages"]): { count: number; hash: string } {
+function historyState(messages: TranscriptContext["messages"]): { count: number; hash: string } {
 	return {
 		count: messages.length,
 		hash: fingerprint(messages.map(({ role, content }) => ({ role, content }))),
@@ -776,7 +788,7 @@ function toolResultToMcp(result: AgentToolResult<unknown>, isError: boolean) {
 	};
 }
 
-function serializeSdkMessages(messages: Context["messages"]): string {
+function serializeSdkMessages(messages: TranscriptContext["messages"]): string {
 	return messages
 		.map((message) => {
 			if (message.role === "user" || message.role === "toolResult") {

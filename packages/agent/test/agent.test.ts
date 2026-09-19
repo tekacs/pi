@@ -395,6 +395,36 @@ describe("Agent", () => {
 		expect(events).toEqual(["agent_start", "turn_start", "message_start", "message_end", "turn_end", "agent_end"]);
 	});
 
+	it("persists a transient turn's prefix and tool declarations but not its input", async () => {
+		const events: AgentEvent[] = [];
+		const agent = new Agent({
+			streamFn: (_model, context) => {
+				expect(context.messages.map((message) => message.role)).toEqual(["system", "user"]);
+				expect(getCurrentSystemMessage(context.messages)?.toolsAdded?.map((tool) => tool.name)).toEqual(["echo"]);
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") }));
+				return stream;
+			},
+		});
+		agent.state.tools = [createTool("echo")];
+		agent.subscribe((event) => {
+			events.push(event);
+		});
+		await agent.promptTransient(
+			{ role: "user", content: "context changed", timestamp: 2 },
+			{
+				prefix: [{ role: "system", content: "durable instructions", timestamp: 1 }],
+			},
+		);
+		expect(agent.state.messages.map((message) => message.role)).toEqual(["system", "assistant"]);
+		expect(agent.state.systemPrompt).toBe("durable instructions");
+		expect(events.flatMap((event) => (event.type === "message_end" ? [event.message.role] : []))).toEqual([
+			"system",
+			"assistant",
+		]);
+		expect(events.at(-1)).toMatchObject({ type: "agent_end", messages: agent.state.messages });
+	});
+
 	it("should await async subscribers before prompt resolves", async () => {
 		const barrier = createDeferred();
 		const agent = new Agent({
