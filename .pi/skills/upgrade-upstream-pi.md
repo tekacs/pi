@@ -11,7 +11,7 @@ Upgrade three repositories as one compatibility operation:
 2. `/Users/amar/repos/amar/pi-kit`
 3. `/Users/amar/repos/amar/agent-fixes`
 
-Use Jujutsu exclusively. Keep every operation local unless Amar separately asks to fetch, push, or publish. Preserve unrelated working-copy changes in every repository.
+Use Jujutsu exclusively. An upstream upgrade includes fetching the latest upstream state unless Amar explicitly requests an offline or cached-state operation. Do not push or publish unless Amar separately asks. Preserve unrelated working-copy changes in every repository.
 
 ## 1. Snapshot the Starting Shape
 
@@ -24,15 +24,23 @@ In each repository, read its instructions and inspect `jj status`. In Pi, record
 
 Do not turn unrelated working-copy changes into upgrade commits.
 
-Read the relevant Pi release commits before rebasing, especially changes overlapping the local stack. Identify semantic combinations that must survive conflict resolution; never choose a side mechanically.
+## 2. Fetch and Rebase Pi
 
-## 2. Rebase Pi
+Fetch upstream after recording the starting shape:
 
-Use the already-present `main@upstream` unless Amar explicitly asks to fetch newer remote state.
+```bash
+jj git fetch --remote upstream
+```
+
+Read the newly fetched upstream commits and relevant Pi release commits before rebasing, especially changes overlapping the local stack. Identify semantic combinations that must survive conflict resolution; never choose a side mechanically.
+
+Use the refreshed `main@upstream`:
 
 ```bash
 jj rebase -b @ -o main@upstream
 ```
+
+For an explicitly offline or cached-state operation, skip fetching and report that upstream freshness was not checked. If fetching fails, report the failure rather than treating cached state as current upstream.
 
 Read the output. `jj rebase` can exit successfully while producing conflicts.
 
