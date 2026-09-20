@@ -4640,11 +4640,11 @@ export class AgentSession {
 				maxRetryDelayMs: this.agent.maxRetryDelayMs,
 			});
 			const response = await events.result();
-			const prompt = response.usage.entryPrompt ?? response.usage;
+			const entry = response.usage.entryPrompt ?? response.usage;
 			const usage = {
-				input: prompt.input,
-				cacheRead: prompt.cacheRead,
-				cacheWrite: prompt.cacheWrite,
+				input: entry.input,
+				cacheRead: entry.cacheRead,
+				cacheWrite: entry.cacheWrite,
 			};
 			const tokens = usage.input + usage.cacheRead + usage.cacheWrite;
 			if (response.stopReason === "error" || response.stopReason === "aborted") {
