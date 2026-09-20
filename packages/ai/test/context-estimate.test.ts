@@ -64,9 +64,9 @@ describe("context token estimation", () => {
 	it("uses explicit active-context usage instead of aggregate billing usage", () => {
 		const assistant = createAssistant(200, 3_000_000);
 		assistant.usage.contextTokens = 900_000;
-		const context: Context = {
+		const context = normalizeContext({
 			messages: [assistant, { role: "user", content: "tail", timestamp: 300 }],
-		};
+		});
 
 		expect(estimateContextTokens(context)).toEqual({
 			tokens: 900_001,

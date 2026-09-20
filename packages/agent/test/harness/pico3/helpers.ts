@@ -210,8 +210,10 @@ export function fake(o: FakeOptions): Models & { calls: number; requests: Reques
 
 /** Common script: tool calls when the user says "tool:<name>", otherwise an answer echoing the user. */
 /** The last non-system message: system messages sit inside `messages` at their historical positions. */
-export const lastMessage = (messages: RequestMessage[]) => [...messages].reverse().find((m) => m.role !== "system")!;
-export const echoScript = (messages: RequestMessage[]): Response => {
+export function lastMessage(messages: RequestMessage[]): RequestMessage {
+	return [...messages].reverse().find((m) => m.role !== "system")!;
+}
+export function echoScript(messages: RequestMessage[]): Response {
 	const last = lastMessage(messages);
 	if (last.role === "toolResult") return { text: "after tools" };
 	const user = String((last as { content?: unknown }).content ?? "");
@@ -224,7 +226,7 @@ export const echoScript = (messages: RequestMessage[]): Response => {
 		};
 	if (user.startsWith("error:")) return { error: user.slice(6) };
 	return { text: `answer to ${user}` };
-};
+}
 
 // ---------------------------------------------------------------------------
 // Tools

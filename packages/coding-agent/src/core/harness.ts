@@ -5,6 +5,7 @@ import {
 	type AssistantMessage,
 	type AssistantMessageEventStream,
 	type AuthResult,
+	type JsonObject,
 	type Model,
 	type SimpleStreamOptions,
 	type TranscriptContext,
@@ -74,7 +75,7 @@ export async function runAgentTool(
 		type: "toolCall",
 		id: callId,
 		name: tool.name,
-		arguments: rawArgs as Record<string, unknown>,
+		arguments: rawArgs as JsonObject,
 	};
 	const assistantMessage: AssistantMessage = {
 		role: "assistant",
@@ -101,7 +102,7 @@ export async function runAgentTool(
 	let preparedArgs: unknown;
 	try {
 		preparedArgs = tool.prepareArguments ? tool.prepareArguments(rawArgs) : rawArgs;
-		preparedArgs = validateToolArguments(tool, { ...toolCall, arguments: preparedArgs as Record<string, unknown> });
+		preparedArgs = validateToolArguments(tool, { ...toolCall, arguments: preparedArgs as JsonObject });
 
 		const beforeResult = await options.beforeToolCall?.(
 			{ assistantMessage, toolCall, args: preparedArgs, context: options.context },
