@@ -237,6 +237,9 @@ export class FooterComponent implements Component {
 
 		// Add model name on the right side, plus thinking level if model supports it
 		const modelName = state.model?.id || "no-model";
+		const statuses = Array.from(this.footerData.getExtensionStatuses().entries()).sort(([a], [b]) =>
+			a.localeCompare(b),
+		);
 
 		let statsLeftWidth = visibleWidth(statsLeft);
 
@@ -261,6 +264,9 @@ export class FooterComponent implements Component {
 		if (routed) {
 			const level = routed.thinkingLevel ? ` • ${routed.thinkingLevel}` : "";
 			rightSideWithoutProvider += ` → ${routed.model.id}${level}`;
+		}
+		for (const [key, text] of statuses) {
+			if (key.startsWith("model:")) rightSideWithoutProvider += ` • ${sanitizeStatusText(text)}`;
 		}
 
 		// Prepend the provider in parentheses if there are multiple providers and there's enough room
@@ -306,12 +312,9 @@ export class FooterComponent implements Component {
 		const lines = [pwdLine, dimStatsLeft + dimRemainder];
 
 		// Add extension statuses on a single line, sorted by key alphabetically
-		const extensionStatuses = this.footerData.getExtensionStatuses();
-		if (extensionStatuses.size > 0) {
-			const sortedStatuses = Array.from(extensionStatuses.entries())
-				.sort(([a], [b]) => a.localeCompare(b))
-				.map(([, text]) => sanitizeStatusText(text));
-			const statusLine = sortedStatuses.join(" ");
+		const extensionStatuses = statuses.filter(([key]) => !key.startsWith("model:"));
+		if (extensionStatuses.length > 0) {
+			const statusLine = extensionStatuses.map(([, text]) => sanitizeStatusText(text)).join(" ");
 			// Truncate to terminal width with dim ellipsis for consistency with footer style
 			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
 		}

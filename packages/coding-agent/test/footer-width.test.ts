@@ -94,10 +94,10 @@ function createSession(options: {
 	return session as unknown as AgentSession;
 }
 
-function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
+function createFooterData(providerCount: number, statuses = new Map<string, string>()): ReadonlyFooterDataProvider {
 	const provider = {
 		getGitBranch: () => "main",
-		getExtensionStatuses: () => new Map<string, string>(),
+		getExtensionStatuses: () => statuses,
 		getAvailableProviderCount: () => providerCount,
 		onBranchChange: (callback: () => void) => {
 			void callback;
@@ -122,6 +122,39 @@ describe("formatCwdForFooter", () => {
 describe("FooterComponent width handling", () => {
 	beforeAll(() => {
 		initTheme(undefined, false);
+	});
+
+	it("places model statuses after reasoning and updates them without duplicating status lines", () => {
+		const statuses = new Map([["model:fast", "FAST"]]);
+		const footer = new FooterComponent(
+			createSession({ sessionName: "", modelId: "gpt-6-astra", reasoning: true, thinkingLevel: "high" }),
+			createFooterData(2, statuses),
+		);
+		expect(stripAnsi(footer.render(120)[1])).toContain("gpt-6-astra • high • FAST");
+		expect(footer.render(120)).toHaveLength(2);
+		statuses.set("model:fast", "normal");
+		statuses.set("compact-at", "compact-at 272k");
+		expect(stripAnsi(footer.render(120)[1])).toContain("gpt-6-astra • high • normal");
+		expect(stripAnsi(footer.render(120)[2])).toBe("compact-at 272k");
+		for (const width of [20, 40, 60, 80]) {
+			for (const line of footer.render(width)) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
+		}
+		statuses.delete("model:fast");
+		expect(stripAnsi(footer.render(120)[1])).not.toContain("normal");
+	});
+
+	it("sorts and sanitizes model statuses on non-reasoning models", () => {
+		const footer = new FooterComponent(
+			createSession({ sessionName: "" }),
+			createFooterData(
+				1,
+				new Map([
+					["model:z", "normal\nmode"],
+					["model:a", "first"],
+				]),
+			),
+		);
+		expect(stripAnsi(footer.render(120)[1])).toContain("test-model • first • normal mode");
 	});
 
 	it("keeps all lines within width for wide session names", () => {
