@@ -141,6 +141,8 @@ agent.prepareRequest = async ({ context }) => ({
 
 `prepareRequest` does not poll queues. Steering queued while it runs waits for the next normal steering poll.
 
+The `Agent` wrapper preserves `promptTransient` inputs across `prepareRequest` and `prepareNextTurn` context replacements: each request-only input stays before its next surviving original message (or at the end when none survives), matched by identity, without being added to state or message events.
+
 `finishTurn` runs after the assistant and all tool results are finalized, but before `turn_end`. It runs for normal, error, and aborted responses:
 
 ```typescript
