@@ -173,7 +173,7 @@ Use `customType` to identify your extension's entries on reload. Interactive mod
 
 Pi stores [virtual model](virtual-models.md) router state as custom entries with `customType` `pi.virtual-model-state` and `data` `{ provider, modelId, state }`.
 
-The reserved `PROJECTION_TYPE` (`pi.context-projection`) is the exception. Its append-only metadata replaces arbitrary source entries in both model context and the interactive transcript without modifying the original entries.
+The reserved `PROJECTION_TYPE` (`pi.context-projection`) is the exception. Its append-only metadata replaces source content in both model context and the interactive transcript without modifying the original entries. System messages are control state, not foldable content: projections cannot suppress them. Suppressing a compaction entry hides its summary but preserves its embedded system/tool checkpoint at that position. Later system patches still replay normally, including explicit tool removals. Folding, closing, or eliding history therefore cannot change the executable tool loadout on resume.
 
 Version 2 is an atomic frame. One frame owns a complete set of disjoint directives under `key`; a later frame with that key replaces the earlier set as a whole. This lets one semantic transaction change many source ranges without exposing intermediate provider contexts. Each replacement is an ordered message sequence, so it can preserve provider protocols across a projected boundary—for example, a synthetic tool result, a summary, and a synthetic tool call.
 
@@ -215,6 +215,22 @@ Directives within a frame must have unique keys and disjoint active source sets.
 An active replacement with `messages: []` suppresses its sources without inserting content. Conversely, a directive with no sources may insert messages at a present `anchorEntryId`. Together these forms separate exact source suppression from independently placed representations while retaining one atomic frame.
 
 When the effective latest frame differs from its predecessor, context materialization conservatively marks the last provider-visible message before the earliest old/new source or anchor as a stable-prefix cache checkpoint. This hint is ephemeral—it is neither written to JSONL nor exposed as provider payload metadata. Anthropic-compatible request builders translate it into an additional `cache_control` breakpoint while retaining the system/tool/current-tail breakpoints.
+
+During an active agent run, `pi.appendEntry(PROJECTION_TYPE, ...)` invalidates the
+request snapshot without rematerializing it inside a partially persisted message
+or tool batch. The complete latest projection is adopted before the next provider
+request, after tool results, `turn_end`, `turn_start`, and pending-message handlers
+have settled. No end-of-run, compaction, or user prompt is required. Multiple
+writes within the boundary coalesce into one materialization; unchanged requests
+do not rebuild history. If the run ends without another request, its final state
+is refreshed before settlement. Idle projection writes refresh immediately.
+
+Context-only messages queued during tool execution are included at the same safe
+boundary. Transient trigger prompts remain request-only and keep their order
+relative to surviving original messages; rematerialization neither persists nor
+duplicates them. Extension `context` transformations still run on the refreshed
+snapshot before conversion to provider messages. Explicit preflight candidates
+remain independent and cannot consume the pending live refresh.
 
 Existing append-only single-directive records and their original single custom-message replacement shape remain readable. A later legacy directive with the same key and `replacement: null` still clears that legacy projection.
 

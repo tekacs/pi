@@ -22,6 +22,7 @@ import type {
 	AgentLoopConfig,
 	AgentLoopTurnUpdate,
 	AgentMessage,
+	AgentRequestUpdate,
 	AgentState,
 	AgentTool,
 	BeforeToolCallContext,
@@ -44,6 +45,36 @@ function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 			message.role === "assistant" ||
 			message.role === "toolResult",
 	);
+}
+
+function retainTransient(
+	previous: AgentContext,
+	next: AgentContext,
+	transient: ReadonlySet<AgentMessage> | undefined,
+): AgentContext {
+	if (next.messages === previous.messages || !transient?.size) return next;
+	// A durable owner cannot reconstruct request-only prompts. Keep them before
+	// their next surviving message, using identity rather than content matching.
+	const retained = new Set(next.messages);
+	const before = new Map<AgentMessage | undefined, AgentMessage[]>();
+	let successor: AgentMessage | undefined;
+	for (let i = previous.messages.length - 1; i >= 0; i--) {
+		const message = previous.messages[i];
+		if (retained.has(message)) successor = message;
+		else if (transient.has(message)) {
+			const group = before.get(successor) ?? [];
+			group.push(message);
+			before.set(successor, group);
+		}
+	}
+	if (before.size === 0) return next;
+	return {
+		...next,
+		messages: [
+			...next.messages.flatMap((message) => [...(before.get(message)?.reverse() ?? []), message]),
+			...(before.get(undefined)?.reverse() ?? []),
+		],
+	};
 }
 
 const EMPTY_USAGE = {
@@ -515,7 +546,9 @@ export class Agent {
 		};
 	}
 
-	private createLoopConfig(options: { skipInitialSteeringPoll?: boolean } = {}): AgentLoopConfig {
+	private createLoopConfig(
+		options: { skipInitialSteeringPoll?: boolean; transient?: ReadonlySet<AgentMessage> } = {},
+	): AgentLoopConfig {
 		let skipInitialSteeringPoll = options.skipInitialSteeringPoll === true;
 		return {
 			model: this._state.model,
@@ -532,16 +565,23 @@ export class Agent {
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			finishTurn: this.finishTurn,
-			prepareRequest: this.prepareRequest,
 			prepareNextTurn:
 				this.prepareNextTurnWithContext || this.prepareNextTurn
 					? async (context) => {
-							if (this.prepareNextTurnWithContext) {
-								return await this.prepareNextTurnWithContext(context, this.signal);
-							}
-							return await this.prepareNextTurn?.(this.signal);
+							const next = this.prepareNextTurnWithContext
+								? await this.prepareNextTurnWithContext(context, this.signal)
+								: await this.prepareNextTurn?.(this.signal);
+							return next?.context
+								? { ...next, context: retainTransient(context.context, next.context, options.transient) }
+								: next;
 						}
 					: undefined,
+			prepareRequest: async (request, signal) => {
+				const next = (await this.prepareRequest?.(request, signal)) as AgentRequestUpdate | undefined;
+				return next?.context
+					? { ...next, context: retainTransient(request.context, next.context, options.transient) }
+					: next;
+			},
 			convertToLlm: this.convertToLlm,
 			transformContext: this.transformContext,
 			getApiKey: this.getApiKey,
