@@ -366,6 +366,24 @@ export function applyContextProjections(entries: SessionEntry[]): SessionEntry[]
 	let checkpoint: SessionEntry | undefined;
 	for (let index = 0; index < entries.length; index++) {
 		const entry = entries[index];
+		// Projection selects content, never the system/tool control baseline. A
+		// compaction bundles both: retain its checkpoint even when hiding its summary.
+		const control =
+			entry.type === "message" && entry.message.role === "system"
+				? entry
+				: entry.type === "compaction" && entry.systemMessage && claimed.has(entry.id)
+					? {
+							type: "message" as const,
+							id: `${entry.id}:system`,
+							parentId: entry.parentId,
+							timestamp: entry.timestamp,
+							message: entry.systemMessage,
+						}
+					: undefined;
+		if (control) {
+			projected.push(control);
+			if (boundary !== undefined && index < boundary) checkpoint = control;
+		}
 		const replacement = replacements.get(index);
 		if (replacement) {
 			projected.push(...replacement);
@@ -375,7 +393,7 @@ export function applyContextProjections(entries: SessionEntry[]): SessionEntry[]
 				}
 			}
 		}
-		if (isProjectionEntry(entry) || claimed.has(entry.id)) continue;
+		if (control || isProjectionEntry(entry) || claimed.has(entry.id)) continue;
 		projected.push(entry);
 		if (boundary !== undefined && index < boundary && carriesContext(entry)) checkpoint = entry;
 	}
