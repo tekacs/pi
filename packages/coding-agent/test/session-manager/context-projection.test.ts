@@ -1,4 +1,4 @@
-import { CACHE_CHECKPOINT } from "@earendil-works/pi-ai";
+import { CACHE_CHECKPOINT, getCurrentSystemPrompt, getCurrentTools, type SystemMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
 	buildContextEntries,
@@ -79,6 +79,62 @@ function projectionFrame(
 }
 
 describe("with projections", () => {
+	it.each([false, true])("preserves system control when suppressing a checkpoint (compacted=%s)", (compacted) => {
+		const system: SystemMessage = {
+			role: "system",
+			content: "Keep these instructions",
+			timestamp: 1,
+			toolsAdded: ["read", "bash"].map((name) => ({
+				name,
+				description: name,
+				parameters: { type: "object", properties: {} },
+			})),
+		};
+		const entries: SessionEntry[] = [
+			{ type: "message", id: "head", parentId: null, timestamp: "2025-01-01T00:00:00Z", message: system },
+			msg("work", "head", "user", "kept work"),
+		];
+		if (compacted)
+			entries.push({
+				type: "compaction",
+				id: "checkpoint",
+				parentId: "work",
+				timestamp: "2025-01-01T00:00:01Z",
+				firstKeptEntryId: "work",
+				summary: "old summary",
+				tokensBefore: 100,
+				systemMessage: system,
+			});
+		entries.push({
+			type: "message",
+			id: "patch",
+			parentId: entries.at(-1)!.id,
+			timestamp: "2025-01-01T00:00:02Z",
+			message: { role: "system", content: "Later instructions", toolsRemoved: [{ name: "bash" }], timestamp: 2 },
+		});
+		entries.push(
+			projection("fold", "patch", {
+				key: "fold",
+				sourceEntryIds: [compacted ? "checkpoint" : "head", "patch"],
+				replacement: { messages: [] },
+			}),
+		);
+		const folded = buildSessionContext(entries).messages;
+		expect(getCurrentTools(folded).map((tool) => tool.name)).toEqual(["read"]);
+		expect(getCurrentSystemPrompt(folded)).toContain("Keep these instructions");
+		expect(getCurrentSystemPrompt(folded)).toContain("Later instructions");
+		expect(folded.filter((m) => m.role === "system")).toHaveLength(2);
+		expect(folded.some((m) => m.role === "compactionSummary")).toBe(false);
+		entries.push(projection("expand", "fold", { key: "fold", sourceEntryIds: [], replacement: null }));
+		const expanded = buildSessionContext(entries).messages;
+		expect(getCurrentTools(expanded)).toEqual(getCurrentTools(folded));
+		expect(expanded.filter((m) => m.role === "system")).toHaveLength(2);
+		expect(expanded.some((m) => m.role === "compactionSummary")).toBe(compacted);
+		// Historical source objects remain intact, and branch rollback selects the old view.
+		expect(buildSessionContext(entries, "fold").messages).toEqual(folded);
+		expect(system.toolsAdded).toHaveLength(2);
+	});
+
 	it("replaces arbitrary source entries at their first position", () => {
 		const entries: SessionEntry[] = [
 			msg("1", null, "user", "search attempt"),
