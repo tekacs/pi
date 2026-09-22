@@ -1995,6 +1995,9 @@ export class AgentSession {
 			this._runSystemPromptOptions = undefined;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
+			// Settle the public transcript on the final projection, including frames
+			// written by a terminating tool that no further request adopted.
+			this._refreshFinalizedContext();
 			await this._emitAgentSettled();
 		}
 	}
@@ -3713,9 +3716,9 @@ export class AgentSession {
 					const entryId = this.sessionManager.appendCustomEntry(customType, data);
 					const entry = this.sessionManager.getEntry(entryId);
 					if (entry) {
-						if (isProjectionEntry(entry)) {
-							this.agent.state.messages = this.sessionManager.buildSessionContext().messages;
-						}
+						// During message_end hooks the current message is not persisted yet; a
+						// running request adopts the frame at its next prepareRequest boundary.
+						if (isProjectionEntry(entry) && !this.isStreaming) this._refreshFinalizedContext();
 						this._emit({ type: "entry_appended", entry });
 					}
 				},
