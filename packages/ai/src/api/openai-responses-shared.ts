@@ -44,6 +44,7 @@ import {
 	resolveGrammarConstrainedSampling,
 	resolveJsonSchemaStrictSampling,
 } from "./constrained-sampling.ts";
+import { getMidConvoBaseline, getStampedEffort, responsesEffortUpdate } from "./mid-convo-effort.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 // =============================================================================
@@ -151,6 +152,8 @@ export interface ConvertResponsesMessagesOptions {
 	grammarToolInputProperties?: ReadonlyMap<string, string>;
 	/** Whether later system messages are sent in place; otherwise they are folded into the leading prompt. */
 	supportsMidConvoSystemMessages?: boolean;
+	/** Replay each stamped effort change as a `configuration_update` before the response it produced. */
+	supportsMidConvoEffort?: boolean;
 	supportsAdditionalTools?: boolean;
 	supportsToolSearch?: boolean;
 	toolOptions?: ConvertResponsesToolsOptions;
@@ -251,6 +254,9 @@ export function convertResponsesMessages<TApi extends Api>(
 
 	let msgIndex = 0;
 	let sourceIndex = 0;
+	let effortInEffect = options?.supportsMidConvoEffort
+		? getMidConvoBaseline(normalizedContext.messages, model)
+		: undefined;
 	for (const msg of transformedMessages) {
 		const isLeadingSystemMessage = sourceIndex++ === 0 && msg.role === "system";
 		if (msg.role === "system") {
@@ -372,6 +378,12 @@ export function convertResponsesMessages<TApi extends Api>(
 				}
 			}
 			if (output.length === 0) continue;
+			// The update sits where the original request appended it: right before this response.
+			const effort = options?.supportsMidConvoEffort ? getStampedEffort(assistantMsg, model) : undefined;
+			if (effort !== undefined && effort !== effortInEffect) {
+				messages.push(responsesEffortUpdate(effort) as unknown as ResponseInputItem);
+				effortInEffect = effort;
+			}
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
 			const [callId] = msg.toolCallId.split("|");

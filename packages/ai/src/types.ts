@@ -875,6 +875,8 @@ export interface OpenAICompletionsCompat {
 	supportsMidConvoSystemMessages?: boolean;
 	/** Whether system messages can introduce additional tools mid-conversation. Requires `supportsMidConvoSystemMessages`. Default: false; the generated model catalog enables it for capable models. */
 	supportsMidConvoToolAdditions?: boolean;
+	/** Whether the exact model accepts OpenRouter's `configuration_update` on content-less system messages, which changes reasoning effort mid-conversation while request-level effort stays pinned. Default: false. */
+	supportsMidConvoEffort?: boolean;
 	/** Whether the provider supports the `strict` field in tool definitions. Default: false; generated capable models enable it explicitly. */
 	supportsStrictMode?: boolean;
 	/** Cache control convention for prompt caching. "anthropic" marks the system prompt, last tool, stable-prefix checkpoints, and latest conversation content. */
@@ -916,6 +918,8 @@ export interface OpenAIResponsesCompat {
 	supportsExplicitPromptCacheMode?: boolean;
 	/** Whether the provider accepts the `max_output_tokens` parameter. Some Codex-protocol gateways reject it. Default: true. */
 	supportsMaxOutputTokens?: boolean;
+	/** Whether the exact model accepts `configuration_update` input items, which change reasoning effort mid-conversation while request-level effort stays pinned. Default: false. */
+	supportsMidConvoEffort?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */

@@ -62,6 +62,13 @@ import {
 	resolveJsonSchemaStrictSampling,
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
+import {
+	completionsEffortUpdate,
+	getMidConvoBaseline,
+	getMidConvoEffort,
+	getStampedEffort,
+	pinMidConvoEffort,
+} from "./mid-convo-effort.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { buildBaseOptions, clampThinkingBudgetToAnswerRoom, thinkingBudgetForLevel } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
@@ -170,6 +177,7 @@ type ResolvedOpenAICompletionsCompat = Omit<
 	| "thinkingTokenBudgetField"
 	| "supportsMidConvoSystemMessages"
 	| "supportsMidConvoToolAdditions"
+	| "supportsMidConvoEffort"
 	| "vllmPriority"
 > & {
 	cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
@@ -368,6 +376,10 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
+			}
+			if (model.compat?.supportsMidConvoEffort) {
+				const { reasoning } = params as { reasoning?: { effort?: string } };
+				output.providerThinkingLevel = getMidConvoEffort(params.messages, reasoning);
 			}
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
@@ -947,6 +959,14 @@ function buildParams(
 		} else if (model.thinkingLevelMap?.off !== null) {
 			openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
 		}
+		if (model.compat?.supportsMidConvoEffort) {
+			pinMidConvoEffort(
+				messages,
+				openRouterParams.reasoning,
+				getMidConvoBaseline(context.messages, model),
+				completionsEffortUpdate,
+			);
+		}
 	} else if (compat.thinkingFormat === "ant-ling" && model.reasoning && options?.reasoningEffort) {
 		const effort = model.thinkingLevelMap?.[options.reasoningEffort];
 		if (typeof effort === "string") {
@@ -1235,6 +1255,9 @@ export function convertMessages(
 	const instructionRole = model.reasoning && compat.supportsDeveloperRole ? "developer" : "system";
 
 	let lastRole: string | null = null;
+	let effortInEffect = model.compat?.supportsMidConvoEffort
+		? getMidConvoBaseline(normalizedContext.messages, model)
+		: undefined;
 
 	for (let i = 0; i < transformedMessages.length; i++) {
 		const msg = transformedMessages[i];
@@ -1403,6 +1426,12 @@ export function convertMessages(
 				(typeof content === "string" ? content.length > 0 : content.length > 0);
 			if (!hasContent && !assistantMsg.tool_calls) {
 				continue;
+			}
+			// The update sits where the original request appended it: right before this response.
+			const effort = model.compat?.supportsMidConvoEffort ? getStampedEffort(msg, model) : undefined;
+			if (effort !== undefined && effort !== effortInEffect) {
+				params.push(completionsEffortUpdate(effort) as unknown as ChatCompletionMessageParam);
+				effortInEffect = effort;
 			}
 			params.push(assistantMsg);
 		} else if (msg.role === "toolResult") {

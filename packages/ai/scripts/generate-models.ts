@@ -954,6 +954,25 @@ function applyOpenAIResponsesTranscriptMetadata(model: Model<Api>): void {
 	};
 }
 
+// GPT-6 standard models accept `configuration_update` for mid-conversation effort changes;
+// pro variants and the Batch API reject it. OpenRouter accepts the Chat Completions form.
+// https://developers.openai.com/api/docs/guides/prompt-caching
+// https://openrouter.ai/docs/cookbook/evaluate-and-optimize/model-migrations/gpt-6
+const OPENAI_MID_CONVO_EFFORT_MODEL_IDS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"]);
+
+function applyOpenAIMidConvoEffortMetadata(model: Model<Api>): void {
+	const supported =
+		(model.provider === "openai" && model.api === "openai-responses") ||
+		(model.provider === "openai-codex" && model.api === "openai-codex-responses")
+			? OPENAI_MID_CONVO_EFFORT_MODEL_IDS.has(model.id)
+			: model.provider === "openrouter" &&
+				model.api === "openai-completions" &&
+				model.id.startsWith("openai/") &&
+				OPENAI_MID_CONVO_EFFORT_MODEL_IDS.has(model.id.slice("openai/".length));
+	if (!supported) return;
+	model.compat = { ...(model.compat as OpenAIResponsesCompat | undefined), supportsMidConvoEffort: true };
+}
+
 // OpenAI charges prompt-cache writes starting with the GPT-5.6 family, and exactly
 // those models accept `prompt_cache_options` and content-block breakpoints; older models reject them.
 // https://developers.openai.com/api/docs/guides/prompt-caching
@@ -3423,6 +3442,7 @@ async function generateModels() {
 		applyOpenAIToolSearchMetadata(model);
 		applyOpenAICompletionsTranscriptMetadata(model);
 		applyOpenAIResponsesTranscriptMetadata(model);
+		applyOpenAIMidConvoEffortMetadata(model);
 		applyOpenAIExplicitPromptCacheMetadata(model);
 		applyPromptCacheMetadata(model);
 		applyImageInputMetadata(model);

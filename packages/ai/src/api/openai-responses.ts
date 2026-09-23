@@ -24,6 +24,12 @@ import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
+import {
+	getMidConvoBaseline,
+	getMidConvoEffort,
+	pinMidConvoEffort,
+	responsesEffortUpdate,
+} from "./mid-convo-effort.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
@@ -91,6 +97,7 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
 		supportsToolSearch: model.compat?.supportsToolSearch ?? false,
 		supportsExplicitPromptCacheMode: model.compat?.supportsExplicitPromptCacheMode ?? false,
 		supportsMaxOutputTokens: model.compat?.supportsMaxOutputTokens ?? true,
+		supportsMidConvoEffort: model.compat?.supportsMidConvoEffort ?? false,
 	};
 }
 
@@ -174,6 +181,9 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as ResponseCreateParamsStreaming;
+			}
+			if (compat.supportsMidConvoEffort) {
+				output.providerThinkingLevel = getMidConvoEffort(params.input, params.reasoning);
 			}
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
@@ -319,6 +329,7 @@ function buildParams(
 		explicitPromptCache,
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: compat.supportsMidConvoSystemMessages,
+		supportsMidConvoEffort: compat.supportsMidConvoEffort,
 		supportsAdditionalTools: compat.supportsAdditionalTools,
 		supportsToolSearch: compat.supportsToolSearch,
 		toolOptions: {
@@ -378,6 +389,14 @@ function buildParams(
 			};
 		}
 		if (model.provider === "xai") params.include = ["reasoning.encrypted_content"];
+		if (compat.supportsMidConvoEffort) {
+			pinMidConvoEffort(
+				messages,
+				params.reasoning,
+				getMidConvoBaseline(context.messages, model),
+				responsesEffortUpdate,
+			);
+		}
 	}
 
 	// Last so custom keys override the named request fields. Per-request keys override model defaults.
