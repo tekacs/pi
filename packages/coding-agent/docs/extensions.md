@@ -213,7 +213,7 @@ Events cover resource discovery, sessions, agent and message lifecycle, provider
 
 Notification handlers should not perform slow work on a streaming event. Transform handlers should preserve fields they do not intentionally own, and gate handlers should fail closed when their safety decision cannot be made.
 
-`before_agent_start` exposes both the current prompt and its structured `systemPromptOptions`. `event.messageType` says what started the run: `"user"` for a prompt or `pi.sendUserMessage()`, with `prompt` and `images`; `"custom"` for `pi.sendMessage(..., { triggerTurn: true })`, with the starting `message` and no `prompt`. A returned `message` is added to either kind of run; check `messageType` to skip runs started by custom messages. Prefer changing prompt sections, selected tools, or guidelines so Pi can append a transcript delta. Returning `systemPrompt`, or setting `forceSystemPrompt`, replaces the whole prompt for that run while the transcript continues recording the structured sections. Providers receive the forced text as their leading system prompt.
+`before_agent_start` exposes both the current prompt and its structured `systemPromptOptions`. `event.messageType` says what started the run: `"user"` for a prompt or `pi.sendUserMessage()`, with `prompt` and `images`; `"custom"` for `pi.sendMessage(..., { triggerTurn: true })`, with the starting `message` and no `prompt`; and `"context"` for `pi.triggerTurn()`, with neither a new message nor a prompt. A returned `message` is added to any kind of run; check `messageType === "user"` for handlers that require user prompt text. Prefer changing prompt sections, selected tools, or guidelines so Pi can append a transcript delta. Returning `systemPrompt`, or setting `forceSystemPrompt`, replaces the whole prompt for that run while the transcript continues recording the structured sections. Providers receive the forced text as their leading system prompt.
 
 `message_end` can replace a finalized message while preserving its role. `tool_call` can mutate input or block execution. `tool_result` handlers compose, with each handler seeing prior changes.
 
@@ -377,6 +377,150 @@ Pi reports handler errors and continues where possible. A `tool_call` handler fa
 Release resources in `session_shutdown` even when normal operation attempted cleanup.
 Keep cleanup idempotent because cancellation, reload, session replacement, and process exit can converge on the same path.
 Use `ctx.shutdown()` to request an orderly process shutdown.
+
+<a id="context-ownership"></a>
+
+## Own model context and embed agent runtimes
+
+These APIs let an extension own what the provider sees: atomic `pi.context-projection` frames (see [Session format](session-format.md#customentry)), provider-exact counting, extension-owned context repair, transcript-free turns, live tree navigation, and provider-scoped harnesses that keep an embedded runtime's inference loop open while Pi executes tools.
+
+### ctx.getContextUsage()
+
+Returns current context usage for the active model. `tokens`/`percent` use the last assistant usage when available, then estimate trailing messages. `providerTokens`/`providerPercent` expose only the latest successful upstream response and remain unchanged while local trailing messages accumulate; they are `null` when no current post-compaction provider settlement exists.
+
+```typescript
+const usage = ctx.getContextUsage();
+if (usage && usage.tokens > 100_000) {
+  // ...
+}
+```
+
+### ctx.reportEffectiveContext()
+
+Installs an exact, provider-measured effective-context baseline bound to the current branch leaf. `getContextUsage()` returns that baseline plus local estimates for trailing messages (`exact: true` only while nothing trails) until newer provider usage or branch divergence supersedes it. The baseline never changes what is sent to the provider; it only corrects what Pi reports.
+
+```typescript
+const count = await ctx.countContextTokens({ entries, leafId }, { signal });
+if (count.ok) ctx.reportEffectiveContext?.({ tokens: count.tokens, source: "repair-preflight" });
+```
+
+### ctx.countContextTokens()
+
+Measures an explicit candidate transcript or hypothetical session branch with the active model/provider. Branch candidates are first materialized through Pi's normal compaction and context-projection pipeline. Pi then applies the normal context transforms, message conversion, system prompt, tools, authentication, payload hooks, and cache/session-affinity options before making a non-persisted provider preflight request capped at one output token. A successful result contains exact provider-reported input/cache token buckets. Neither the candidate nor the probe is appended to session history, but the probe is a real request and may consume provider quota or warm prompt caches. Pass a caller-owned `AbortSignal` to bound or cancel the provider request.
+
+```typescript
+const count = await ctx.countContextTokens(candidateMessages, { signal });
+// Or: await ctx.countContextTokens({ entries: hypotheticalBranch, leafId }, { signal });
+if (count.ok) {
+  const reserve = count.contextWindow - count.tokens;
+  // ...
+} else if (count.overflow) {
+  // The candidate is known not to fit even when the provider omitted usage.
+}
+```
+
+### ctx.contextProjectionVersion
+
+Reports the highest atomic `pi.context-projection` frame version supported by the running Pi. A context owner that depends on atomic source suppression and replacement placement should require the frame version it emits rather than silently degrading to legacy per-directive behavior.
+
+The same capability is available as `pi.contextProjectionVersion` during extension registration, before handlers or tools are installed.
+
+```typescript
+export default function (pi: ExtensionAPI) {
+  if (pi.contextProjectionVersion !== 2) {
+    throw new Error("This extension requires atomic context projection frames v2");
+  }
+  // Register the context owner only after the capability check.
+}
+```
+
+### ctx.reportContextRepair()
+
+Updates the active compaction indicator while an extension owns context repair. Stages are `counting`, `seat`, `transaction`, `recount`, and `handoff`; updates may also identify the auxiliary round, model, and thinking level. This is inspectability only—use the `session_before_compact` event's `signal` to stop work when the operator cancels.
+
+An auxiliary seat may include a bounded `stream` tail. Interactive mode displays it transiently below the compaction indicator and removes it at the next non-streaming stage; the tail is emitted to SDK/RPC listeners but is never written to session history.
+
+```typescript
+ctx.reportContextRepair?.({
+  stage: "seat",
+  message: "Relieving context: auxiliary round 2/6…",
+  round: 2,
+  stream: {
+    channel: "thinking",
+    text: "Comparing summary coverage against the raw frontier…",
+    responseChars: 1842,
+    toolChars: 611,
+    inputTokens: 82_441,
+  },
+});
+```
+
+### pi.contextProjectionVersion
+
+Registration-time atomic context-projection capability. It has the same value as `ctx.contextProjectionVersion`; check it before registering a context owner whose correctness depends on a particular frame version.
+
+### pi.triggerTurn()
+
+Run an agent turn without appending a prompt message. Pi sends a generic transient provider input to establish a fresh request boundary, but does not commit or emit that input; the extension's `context` handler supplies the actual operational tail. This is for extensions whose independently durable state changed. Call it only while the agent is idle; Pi reports an extension error if a turn is already running.
+
+```typescript
+pi.on("context", (event) => ({
+  messages: [...event.messages, currentOperationalTail()],
+}));
+
+// An external event changed the state read by currentOperationalTail().
+pi.triggerTurn();
+```
+
+### pi.navigateTree(targetId, options?)
+
+Navigate the live session to an earlier tree entry from an external callback, while preserving Pi's session hooks, model context, and interactive UI state.
+
+```typescript
+const checkpoint = ctx.sessionManager.getEntries().find(
+  (entry) => ctx.sessionManager.getLabel(entry.id) === "before-refactor",
+);
+if (checkpoint && ctx.isIdle()) {
+  await pi.navigateTree(checkpoint.id, { summarize: false });
+}
+```
+
+The session must be idle. Use this API from callbacks that run outside Pi's extension-event dispatch, such as a socket or file-watcher callback. Do not await it from an event handler. In a registered command, use `ctx.navigateTree()` instead.
+
+### pi.registerHarness(name, stream)
+
+Register a provider-scoped agent harness for an embedded agent runtime whose own inference loop must stay open while Pi executes tools. A harness is selected by `model.provider` before the provider's ordinary `streamSimple` implementation. Register its provider and models separately with `registerProvider`.
+
+The stream receives the ordinary model/context/options plus:
+
+- `auth` — Pi's resolved provider authentication, headers, base URL, and environment.
+- `cwd` and `systemPrompt` — the live session values.
+- `tools` and `agentContext` — Pi's current executable `AgentTool` objects and transcript context, including extension-defined tools.
+- `runTool(call)` — the only supported execution path. It applies `prepareArguments`, schema validation, `tool_call`/`tool_result` hooks, cancellation, partial updates, and `tool_execution_start/update/end` events to the harness's returned stream.
+
+```typescript
+pi.registerProvider("embedded-agent", provider);
+pi.registerHarness("embedded-agent", async (model, context, options) => {
+  const stream = createAssistantMessageEventStream();
+
+  // Keep the vendor run open. For each vendor tool request:
+  const tool = options.tools.find((candidate) => candidate.name === request.name);
+  if (!tool) throw new Error(`Unknown Pi tool: ${request.name}`);
+  const execution = await options.runTool({
+    tool,
+    args: request.arguments,
+    callId: request.id,
+    stream,
+  });
+  await vendorRun.sendToolResult(execution.result, execution.isError);
+
+  // Continue consuming the same vendor run until its semantic turn end,
+  // push the final Pi assistant events, then end the stream.
+  return stream;
+});
+```
+
+The harness function may return the event stream directly or asynchronously. It must return one final Pi assistant response rather than exposing the embedded runtime's internal tool boundaries as provider `toolUse` turns. `unregisterProvider(name)` removes the harness together with the provider registration.
 
 <a id="examples-reference"></a>
 <a id="use-examples-as-the-implementation-reference"></a>
