@@ -9,10 +9,12 @@
 - Added public AgentSession service factories for isolated in-process sessions, projection-boundary cache checkpoints, and stable OpenRouter session affinity.
 - Added `ctx.countContextTokens()` for non-persisted, provider-reported preflight of candidate messages or hypothetical session branches from extensions.
 - Added explicit Claude Fable 5.1 selection to the Claude Agent SDK providers while preserving the `fable` gateway alias on Fable 5.
+- Added explicit Claude Opus 5.5 selection to the Claude Agent SDK providers.
 
 ### Changed
 
 - Updated the Claude Agent SDK to 0.3.257 for Fable 5.1 support and corrected Fable pricing metadata.
+- Updated the Claude Agent SDK to 0.3.280 for Claude Opus 5.5 support.
 - Extended `PI_CACHE_RETENTION=long` to Claude Agent SDK sessions by mapping it to Claude Code's one-hour prompt-cache TTL.
 
 ### Fixed
