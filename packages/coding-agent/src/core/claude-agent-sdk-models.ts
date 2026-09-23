@@ -9,6 +9,7 @@ const standardCost = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 const opus5Cost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
 const fable5Cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
 const fable51Cost = { ...fable5Cost, cacheRead: 0.25 };
+const opus55Cost = { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 };
 
 export const CLAUDE_AGENT_SDK_MODELS = [
 	model("sonnet", "Claude Sonnet", 1000000, 64000, true, { xhigh: "xhigh", max: "max" }),
@@ -23,6 +24,15 @@ export const CLAUDE_AGENT_SDK_MODELS = [
 		true,
 		{ off: null, xhigh: "xhigh", max: "max" },
 		fable51Cost,
+	),
+	model(
+		"claude-opus-5-5",
+		"Claude Opus 5.5",
+		1000000,
+		128000,
+		true,
+		{ off: null, xhigh: "xhigh", max: "max" },
+		opus55Cost,
 	),
 	model("claude-opus-5", "Claude Opus 5", 1000000, 128000, true, { xhigh: "xhigh", max: "max" }, opus5Cost),
 	model("claude-opus-4-5-20251101", "Claude Opus 4.5", 1000000, 64000, true),
