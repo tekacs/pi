@@ -61,10 +61,11 @@ describe("Claude Agent SDK thinking", () => {
 	it("preserves pi's system prompt when using subscription auth", () => {
 		const systemPrompt = "Project context from AGENTS.md";
 
-		expect(sdkSystemPrompt(systemPrompt, false)).toBe(systemPrompt);
+		expect(sdkSystemPrompt(systemPrompt, false)).toEqual({ type: "custom", prompt: systemPrompt, snapshot: false });
 		expect(sdkSystemPrompt(systemPrompt, true)).toEqual({
 			type: "preset",
 			preset: "claude_code",
+			snapshot: false,
 			append: `${systemPrompt}\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.`,
 		});
 	});
@@ -79,6 +80,7 @@ describe("Claude Agent SDK thinking", () => {
 		expect(sdkSystemPrompt(systemPrompt, true)).toEqual({
 			type: "preset",
 			preset: "claude_code",
+			snapshot: false,
 			append:
 				"Generic tool list and usage guidelines\n\n<project_context>\nAGENTS.md instructions\n</project_context>\n\n<available_skills>skills</available_skills>\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.",
 		});

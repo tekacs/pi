@@ -18,12 +18,13 @@ import type {
 	Model,
 	SimpleStreamOptions,
 	Tool,
+	ToolResultMessage,
 	TranscriptContext,
 	Usage,
+	UserMessage,
 } from "@earendil-works/pi-ai";
 import {
 	calculateCost,
-	createAssistantMessageEventStream,
 	getCurrentSystemPrompt,
 	getCurrentTools,
 	registerSessionResourceCleanup,
@@ -31,7 +32,12 @@ import {
 import { z } from "zod/v4";
 import { getPackageDir } from "../config.ts";
 import { CLAUDE_AGENT_SDK_API, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH } from "./claude-agent-sdk-models.ts";
+import { ClaudeCalls } from "./claude-calls.ts";
+import { type ClaudeCheckpoint, ClaudePrefix, selectCheckpoint } from "./claude-checkpoints.ts";
+import { ClaudeHistory } from "./claude-history.ts";
+import { ClaudeMemory, ClaudeStore } from "./claude-store.ts";
 import { runAgentTool } from "./harness.ts";
+import { HarnessOutput } from "./harness-output.ts";
 
 /** Disable the bundled binary's duplicate MCP result ceiling in practice. */
 const SDK_TOOL_RESULT_TOKENS = Number.MAX_SAFE_INTEGER;
@@ -43,6 +49,9 @@ export interface ClaudeAgentSdkStreamOptions extends SimpleStreamOptions {
 	/** Executable host tools; declarations and prompt are replayed from the request transcript. */
 	tools: readonly AgentTool[];
 	agentContext: AgentContext;
+	/** Claude-owned profile storage; omitted for in-process, memory-only history. */
+	nativeRoot?: string;
+	executable?: string;
 	beforeToolCall?: Agent["beforeToolCall"];
 	afterToolCall?: Agent["afterToolCall"];
 }
@@ -51,7 +60,11 @@ type SdkTurn = {
 	model: Model<any>;
 	options: ClaudeAgentSdkStreamOptions;
 	toolLookup: ToolLookup;
-	stream: AssistantMessageEventStream;
+	stream: HarnessOutput;
+	calls: ClaudeCalls;
+	native: ClaudeHistory;
+	commit: (message: AssistantMessage | ToolResultMessage) => Promise<void>;
+	fail: (error: unknown) => void;
 };
 
 type SdkSession = {
@@ -59,16 +72,15 @@ type SdkSession = {
 	query: Query;
 	turn: { current?: SdkTurn };
 	config: string;
-	expectedHistory?: { count: number; hash: string };
-	sdkSessionId?: string;
-	needsReset?: boolean;
+	store: ClaudeStore;
+	checkpoint?: ClaudeCheckpoint;
+	failure?: Error;
 };
 
 type SdkInvocation = {
 	session: SdkSession;
 	persistent: boolean;
-	resumed: boolean;
-	history: TranscriptContext["messages"];
+	native: ClaudeHistory;
 };
 
 type SdkOutputBlock = {
@@ -98,19 +110,32 @@ type SdkOutputState = {
 	partial: Map<string, SdkPartialOutput>;
 	assistants: Map<string, SdkOutputBlock[]>;
 	requests: Map<string, Usage>;
-	committed: AssistantMessage[];
+	publish: (
+		message: AssistantMessage | ToolResultMessage,
+		members?: readonly object[],
+		alreadyStreamed?: boolean,
+	) => Promise<void>;
+	native?: ClaudeHistory;
+	cursor?: string;
 	contextTokens?: number;
 	entryPrompt?: Usage["entryPrompt"];
 	hasText: boolean;
 };
 
-let liveSdkSession: { sessionId: string; session: SdkSession } | undefined;
+const sdkSessions = new Map<string, SdkSession>();
+const memorySessions = new Map<string, ClaudeMemory>();
 
 registerSessionResourceCleanup((sessionId) => {
-	if (sessionId !== undefined && liveSdkSession?.sessionId !== sessionId) return;
-	const session = liveSdkSession?.session;
-	liveSdkSession = undefined;
-	if (session) closeSdkSession(session);
+	for (const [id, session] of sdkSessions) {
+		if (sessionId !== undefined && sessionId !== id) continue;
+		sdkSessions.delete(id);
+		closeSdkSession(session);
+	}
+	for (const [id, memory] of memorySessions) {
+		if (sessionId !== undefined && sessionId !== id) continue;
+		memory.close();
+		memorySessions.delete(id);
+	}
 });
 
 export function streamClaudeAgentSdk(
@@ -118,7 +143,7 @@ export function streamClaudeAgentSdk(
 	context: TranscriptContext,
 	options: ClaudeAgentSdkStreamOptions,
 ) {
-	const stream = createAssistantMessageEventStream();
+	const stream = new HarnessOutput(options.signal);
 
 	void (async () => {
 		const output: AssistantMessage = {
@@ -131,14 +156,23 @@ export function streamClaudeAgentSdk(
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
+		let invocation: SdkInvocation | undefined;
 		const outputState: SdkOutputState = {
 			partial: new Map(),
 			assistants: new Map(),
 			requests: new Map(),
-			committed: [],
 			hasText: false,
+			publish: (message, members, alreadyStreamed = true) => {
+				const receipt = stream.commit(message, alreadyStreamed);
+				void receipt.catch((error: unknown) => invocation?.session.turn.current?.fail(error));
+				outputState.native?.record(message, members, receipt);
+				return receipt;
+			},
 		};
-		let invocation: SdkInvocation | undefined;
+		const commit = (message: AssistantMessage | ToolResultMessage) => {
+			if (message.role === "assistant") commitCurrentOutput(output, stream, outputState);
+			return outputState.publish(message);
+		};
 
 		try {
 			stream.push({ type: "start", partial: output });
@@ -148,16 +182,9 @@ export function streamClaudeAgentSdk(
 				return;
 			}
 
-			invocation = await startSdkInvocation(model, context, options, stream);
-			let result = await readSdkTurn(invocation.session, model, output, stream, outputState, options.signal);
-
-			// A changed model, system prompt, or tool set restarts the process with
-			// `resume`. If Claude no longer has that session, replay Pi's full context.
-			if (invocation.resumed && !outputState.hasText && isResumeFailure(result)) {
-				discardSdkInvocation(options.sessionId, invocation.session);
-				invocation = await startSdkInvocation(model, context, options, stream);
-				result = await readSdkTurn(invocation.session, model, output, stream, outputState, options.signal);
-			}
+			invocation = await startSdkInvocation(model, context, options, stream, commit);
+			outputState.native = invocation.native;
+			const result = await readSdkTurn(invocation.session, model, output, stream, outputState, options.signal);
 
 			const promptTooLong = result.terminal_reason === "prompt_too_long";
 			if (options.signal?.aborted) {
@@ -179,22 +206,16 @@ export function streamClaudeAgentSdk(
 				if (!outputState.hasText && errorText) appendTextBlock(output, stream, errorText);
 			}
 
-			if (invocation.persistent) {
-				if (promptTooLong) {
-					invocation.session.needsReset = true;
-				} else {
-					invocation.session.expectedHistory = historyState([
-						...invocation.history,
-						...outputState.committed,
-						output,
-					]);
-					invocation.session.needsReset = false;
-				}
-			}
-
 			if (output.stopReason === "stop") {
+				if (!outputState.cursor) throw new Error("Claude returned no native checkpoint boundary");
+				invocation.session.checkpoint = await invocation.native.finish(
+					output,
+					result.session_id,
+					outputState.cursor,
+				);
 				stream.push({ type: "done", reason: "stop", message: output });
 			} else {
+				discardSdkInvocation(options.sessionId, invocation.session);
 				stream.push({
 					type: "error",
 					reason: output.stopReason === "aborted" ? "aborted" : "error",
@@ -202,9 +223,10 @@ export function streamClaudeAgentSdk(
 				});
 			}
 		} catch (error) {
+			const failure = invocation?.session.failure ?? error;
 			if (invocation?.persistent) discardSdkInvocation(options.sessionId, invocation.session);
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : String(error);
+			output.errorMessage = failure instanceof Error ? failure.message : String(failure);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 		} finally {
 			if (invocation && !invocation.persistent) closeSdkSession(invocation.session);
@@ -219,108 +241,65 @@ async function startSdkInvocation(
 	model: Model<any>,
 	context: TranscriptContext,
 	options: ClaudeAgentSdkStreamOptions,
-	stream: AssistantMessageEventStream,
+	stream: HarnessOutput,
+	commit: SdkTurn["commit"],
 ): Promise<SdkInvocation> {
-	// The SDK carries the replayed prompt/tool state in its process configuration,
-	// not its user transcript. Config changes resume the same conversational history.
 	const history = context.messages.filter((message) => message.role !== "system");
 	const config = sdkConfig(model, context, options);
 	const sessionId = options.sessionId;
-	const activeSession = liveSdkSession;
-	if (sessionId && activeSession && activeSession.sessionId !== sessionId) {
-		discardSdkInvocation(activeSession.sessionId, activeSession.session);
+	const existing = sessionId === undefined ? undefined : sdkSessions.get(sessionId);
+	if (existing?.turn.current) throw new Error("Claude session already has an active turn");
+	let memory: ClaudeMemory | undefined;
+	if (options.nativeRoot === undefined && sessionId !== undefined) {
+		memory = memorySessions.get(sessionId) ?? new ClaudeMemory();
+		memorySessions.set(sessionId, memory);
 	}
-	const existing =
-		sessionId !== undefined && sessionId === liveSdkSession?.sessionId ? liveSdkSession.session : undefined;
-	const historyContinues = existing ? historyMatches(existing, history) : false;
-	const sameConfig = existing?.config === config.fingerprint;
-	const continues = Boolean(existing && sameConfig && historyContinues && !existing.needsReset);
-	const resets = Boolean(existing && sameConfig && (!historyContinues || existing.needsReset));
-	const expectedCount = existing?.expectedHistory?.count ?? 0;
-	const resume =
-		!continues && !resets && existing && historyContinues && !existing.needsReset ? existing.sdkSessionId : undefined;
-
+	const store = new ClaudeStore(options.nativeRoot ?? memory);
+	const prefix = new ClaudePrefix([]);
+	const checkpoint = selectCheckpoint(store, history, prefix);
+	const continues =
+		existing?.config === config.fingerprint &&
+		checkpoint !== undefined &&
+		existing.checkpoint?.hash === checkpoint.hash;
+	const messages = history.slice(checkpoint?.count ?? 0);
+	if (!messages.length) throw new Error("Claude Agent SDK received no new messages for a persistent session");
+	const inputs = messages.map((message, index): SDKUserMessage => {
+		if (message.role !== "user") throw new Error("Claude continuation accepts only new user messages");
+		return {
+			type: "user",
+			message: { role: "user", content: sdkUserContent(message.content) },
+			parent_tool_use_id: null,
+			client_composed: true,
+			shouldQuery: index === messages.length - 1,
+		};
+	});
 	let session: SdkSession;
-	if (continues && existing) {
-		session = existing;
-	} else if (resets && existing) {
-		try {
-			await resetSdkSession(existing, options.signal);
-			session = existing;
-		} catch (error) {
-			discardSdkInvocation(sessionId, existing);
-			if (options.signal?.aborted) throw error;
-			session = createSdkSession(model, context, options, config, undefined);
-		}
-	} else {
+	if (continues && existing) session = existing;
+	else {
 		if (existing) discardSdkInvocation(sessionId, existing);
-		session = createSdkSession(model, context, options, config, resume);
+		const continuation = checkpoint
+			? await store.fork(checkpoint.key, checkpoint.cursor, options.signal)
+			: { sessionStore: store };
+		session = createSdkSession(model, context, options, config, store, continuation);
 	}
-
-	const persistent = sessionId !== undefined;
-	const turn: SdkTurn = {
+	const fail = (error: unknown) => {
+		session.failure = error instanceof Error ? error : new Error(String(error));
+		closeSdkSession(session);
+	};
+	const native = new ClaudeHistory(session.store, prefix, { base: checkpoint, signal: options.signal, fail });
+	session.turn.current = {
 		model,
 		options,
 		toolLookup: new Map(options.tools.map((tool) => [tool.name, tool])),
 		stream,
+		calls: new ClaudeCalls(),
+		native,
+		commit,
+		fail,
 	};
-	session.turn.current = turn;
-
-	const messages = continues || resume ? history.slice(expectedCount) : history;
-	if (messages.length === 0) {
-		if (persistent && liveSdkSession?.session === session) discardSdkInvocation(sessionId, session);
-		else closeSdkSession(session);
-		throw new Error("Claude Agent SDK received no new messages for a persistent session");
-	}
-	session.input.push({
-		type: "user",
-		message: { role: "user", content: serializeSdkMessages(messages) },
-		parent_tool_use_id: null,
-	});
-	if (persistent) liveSdkSession = { sessionId, session };
-
-	return { session, persistent, resumed: resume !== undefined, history };
-}
-
-async function resetSdkSession(session: SdkSession, signal: AbortSignal | undefined): Promise<void> {
-	if (signal?.aborted) throw new Error("Claude Agent SDK reset aborted");
-
-	const interrupt = () => {
-		void session.query.interrupt().catch(() => closeSdkSession(session));
-	};
-	signal?.addEventListener("abort", interrupt, { once: true });
-	session.input.push({
-		type: "user",
-		message: { role: "user", content: "/clear" },
-		parent_tool_use_id: null,
-	});
-
-	let reset = false;
-	try {
-		while (true) {
-			const next = await session.query.next();
-			if (next.done) throw new Error("Claude Agent SDK process ended while clearing its conversation");
-			const message = next.value;
-			if (message.type === "conversation_reset") reset = true;
-			if (message.type === "system" && message.subtype === "init") {
-				// `new_conversation_id` identifies the reset transcript, but SDK resume
-				// uses the distinct session_id emitted by the following init/result.
-				session.sdkSessionId = message.session_id;
-			}
-			if (message.type !== "result") continue;
-
-			session.sdkSessionId = message.session_id;
-			if (signal?.aborted) throw new Error("Claude Agent SDK reset aborted");
-			if (!reset || message.subtype !== "success") {
-				throw new Error("Claude Agent SDK did not confirm conversation reset");
-			}
-			session.expectedHistory = undefined;
-			session.needsReset = false;
-			return;
-		}
-	} finally {
-		signal?.removeEventListener("abort", interrupt);
-	}
+	for (const input of inputs) session.input.push(input);
+	if (sessionId !== undefined) sdkSessions.set(sessionId, session);
+	return { session, persistent: sessionId !== undefined, native };
 }
 
 function createSdkSession(
@@ -328,7 +307,8 @@ function createSdkSession(
 	context: TranscriptContext,
 	options: ClaudeAgentSdkStreamOptions,
 	config: SdkConfig,
-	resume: string | undefined,
+	store: ClaudeStore,
+	continuation: { sessionStore: ClaudeStore } | Awaited<ReturnType<ClaudeStore["fork"]>>,
 ): SdkSession {
 	const input = new SdkInput();
 	const turn: { current?: SdkTurn } = {};
@@ -340,7 +320,7 @@ function createSdkSession(
 			options: {
 				cwd: options.cwd,
 				model: model.id,
-				pathToClaudeCodeExecutable: findBundledClaude(),
+				pathToClaudeCodeExecutable: options.executable ?? findBundledClaude(),
 				...config.thinking,
 				systemPrompt: config.systemPrompt,
 				settingSources: [],
@@ -348,18 +328,36 @@ function createSdkSession(
 				mcpServers: {
 					pi: createSdkMcpServer({ name: "pi", version: "1.0.0", tools: sdkTools }),
 				},
+				hooks: {
+					PostToolBatch: [
+						{
+							hooks: [
+								async (input) => {
+									if (input.hook_event_name !== "PostToolBatch") return {};
+									const ids = input.tool_calls.map((call) => call.tool_use_id);
+									turn.current?.native.seal(ids);
+									return turn.current?.calls.terminates(ids)
+										? { continue: false, stopReason: "Pi tool batch requested termination" }
+										: {};
+								},
+							],
+						},
+					],
+				},
 				allowedTools: ["mcp__pi__*"],
 				permissionMode: "dontAsk",
 				strictMcpConfig: true,
 				includePartialMessages: true,
 				forwardSubagentText: true,
 				env: config.env,
-				resume,
+				...continuation,
+				sessionStoreFlush: "eager",
 				stderr: process.env.PI_CLAUDE_AGENT_SDK_DEBUG === "1" ? (data) => process.stderr.write(data) : undefined,
 			},
 		}),
 		turn,
 		config: config.fingerprint,
+		store,
 	};
 }
 
@@ -380,23 +378,41 @@ async function readSdkTurn(
 	try {
 		while (true) {
 			const next = await session.query.next();
+			if (session.failure) throw session.failure;
 			if (next.done) throw new Error("Claude Agent SDK process ended before returning a result");
 			const message = next.value;
-			if (message.type === "system" && message.subtype === "init") {
-				session.sdkSessionId = message.session_id;
-			}
+			if (message.type === "system" && message.subtype === "mirror_error")
+				throw new Error("Native Claude transcript persistence failed");
 			if (message.type === "result") {
-				session.sdkSessionId = message.session_id;
+				if (message.subtype === "success" && message.num_turns === 0) continue;
+				session.turn.current?.calls.finish();
 				return message;
+			}
+			if (
+				message.type === "user" &&
+				!message.parent_tool_use_id &&
+				message.uuid &&
+				Array.isArray(message.message.content) &&
+				message.message.content.some((block) => block.type === "tool_result")
+			) {
+				if (!message.session_id) throw new Error("Native tool result has no session identity");
+				outputState.cursor = message.uuid;
+				outputState.native?.result(
+					message.session_id,
+					message.uuid,
+					message.message.content.flatMap((block) => (block.type === "tool_result" ? [block.tool_use_id] : [])),
+				);
 			}
 			if (message.type === "stream_event") {
 				appendSdkStreamEvent(message, output, stream, outputState);
 			} else {
 				appendSdkText(message, model, output, stream, outputState);
+				if (message.type === "assistant") session.turn.current?.calls.observe(message);
 			}
 		}
 	} finally {
 		signal?.removeEventListener("abort", interrupt);
+		session.turn.current?.calls.close();
 		session.turn.current = undefined;
 	}
 }
@@ -414,6 +430,8 @@ function sdkConfig(model: Model<any>, context: TranscriptContext, options: Claud
 			apiKey: options.apiKey,
 			cacheTtl: env.CLAUDE_CODE_PROMPT_CACHE_TTL,
 			cwd: options.cwd,
+			nativeRoot: options.nativeRoot,
+			executable: options.executable,
 			model: model.id,
 			systemPrompt,
 			thinking,
@@ -433,39 +451,17 @@ type SdkConfig = {
 	env: Record<string, string | undefined>;
 };
 
-function historyMatches(session: SdkSession, history: TranscriptContext["messages"]): boolean {
-	if (!session.expectedHistory || history.length < session.expectedHistory.count) return false;
-	return historyState(history.slice(0, session.expectedHistory.count)).hash === session.expectedHistory.hash;
-}
-
-function historyState(messages: TranscriptContext["messages"]): { count: number; hash: string } {
-	return {
-		count: messages.length,
-		hash: fingerprint(messages.map(({ role, content }) => ({ role, content }))),
-	};
-}
-
 function fingerprint(value: unknown): string {
 	return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-function isResumeFailure(result: SDKResultMessage): boolean {
-	return (
-		result.subtype === "error_during_execution" &&
-		result.errors.some((error) =>
-			/failed to resume|session (?:not found|does not exist)|invalid session/i.test(error),
-		)
-	);
-}
-
 function discardSdkInvocation(sessionId: string | undefined, session: SdkSession): void {
-	if (sessionId && liveSdkSession?.sessionId === sessionId && liveSdkSession.session === session) {
-		liveSdkSession = undefined;
-	}
+	if (sessionId && sdkSessions.get(sessionId) === session) sdkSessions.delete(sessionId);
 	closeSdkSession(session);
 }
 
 function closeSdkSession(session: SdkSession): void {
+	session.turn.current?.calls.close();
 	session.input.close();
 	session.query.close();
 }
@@ -508,7 +504,7 @@ class SdkInput implements AsyncIterable<SDKUserMessage>, AsyncIterator<SDKUserMe
 }
 
 export function sdkSystemPrompt(systemPrompt: string, usesSubscriptionAuth: boolean) {
-	if (!usesSubscriptionAuth) return systemPrompt;
+	if (!usesSubscriptionAuth) return { type: "custom" as const, prompt: systemPrompt, snapshot: false };
 
 	const projectContext = systemPrompt.indexOf("\n<project_context>");
 	const piDocs = systemPrompt.indexOf("\nPi documentation (");
@@ -520,6 +516,7 @@ export function sdkSystemPrompt(systemPrompt: string, usesSubscriptionAuth: bool
 	return {
 		type: "preset" as const,
 		preset: "claude_code" as const,
+		snapshot: false,
 		append: `${subscriptionPrompt}\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.`,
 	};
 }
@@ -589,7 +586,7 @@ function createSdkTools(
 		name: toMcpToolName(toolDefinition.name),
 		description: toolDefinition.description,
 		inputSchema: zodShapeFromTypeBox(toolDefinition.parameters),
-		handler: async (args) => {
+		handler: async (_args, extra) => {
 			const turn = getTurn();
 			const agentTool = turn?.toolLookup.get(toolDefinition.name);
 			if (!turn || !agentTool) {
@@ -598,16 +595,34 @@ function createSdkTools(
 					content: [{ type: "text" as const, text: `Pi tool ${toolDefinition.name} is unavailable` }],
 				};
 			}
-			const execution = await runAgentTool(agentTool, args, {
-				model: turn.model,
-				context: turn.options.agentContext,
-				stream: turn.stream,
-				signal: turn.options.signal,
-				idPrefix: "claude-agent-sdk",
-				beforeToolCall: turn.options.beforeToolCall,
-				afterToolCall: turn.options.afterToolCall,
-			});
-			return toolResultToMcp(execution.result, execution.isError);
+			try {
+				const metadata = z
+					.object({ _meta: z.object({ "claudecode/toolUseId": z.string().min(1) }) })
+					.safeParse(extra);
+				if (!metadata.success) throw new Error("Claude MCP request has no native call ID; execution refused");
+				const call = await turn.calls.wait(metadata.data._meta["claudecode/toolUseId"]);
+				if (call.name !== `mcp__pi__${toMcpToolName(toolDefinition.name)}`)
+					throw new Error("Native call names a different tool");
+				const execution = await runAgentTool(agentTool, call.input, {
+					model: turn.model,
+					context: turn.options.agentContext,
+					stream: turn.stream,
+					signal: turn.options.signal,
+					callId: call.id,
+					commit: (message) => {
+						if (message.role === "assistant") message.responseId = call.responseId;
+						return turn.commit(message);
+					},
+					beforeToolCall: turn.options.beforeToolCall,
+					afterToolCall: turn.options.afterToolCall,
+				});
+				turn.calls.complete(call.id, execution.result.terminate === true);
+				return toolResultToMcp(execution.result, execution.isError);
+			} catch (error) {
+				// A failed canonical barrier must not become a retryable MCP tool error.
+				turn.fail(error);
+				throw error;
+			}
 		},
 	}));
 }
@@ -788,31 +803,20 @@ function toolResultToMcp(result: AgentToolResult<unknown>, isError: boolean) {
 	};
 }
 
-function serializeSdkMessages(messages: TranscriptContext["messages"]): string {
-	return messages
-		.map((message) => {
-			if (message.role === "user" || message.role === "toolResult") {
-				const content = Array.isArray(message.content)
-					? message.content
-							.map((part) => (part.type === "text" ? part.text : `[image:${part.mimeType}]`))
-							.join("\n")
-					: String(message.content);
-				return `<${message.role}>\n${content}\n</${message.role}>`;
-			}
-			if (message.role === "assistant") {
-				const content = message.content
-					.map((part) => {
-						if (part.type === "text") return part.text;
-						if (part.type === "thinking") return `<thinking>${part.thinking}</thinking>`;
-						return `<tool_call name="${part.name}">${JSON.stringify(part.arguments)}</tool_call>`;
-					})
-					.join("\n");
-				return `<assistant>\n${content}\n</assistant>`;
-			}
-			return "";
-		})
-		.filter(Boolean)
-		.join("\n\n");
+function sdkUserContent(content: UserMessage["content"]): SDKUserMessage["message"]["content"] {
+	if (typeof content === "string") return content;
+	return content.map((part) =>
+		part.type === "text"
+			? { type: "text", text: part.text }
+			: {
+					type: "image",
+					source: {
+						type: "base64",
+						data: part.data,
+						media_type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]).parse(part.mimeType),
+					},
+				},
+	);
 }
 
 function appendSdkStreamEvent(
@@ -832,11 +836,14 @@ function appendSdkStreamEvent(
 		return;
 	}
 	if (event.type === "message_stop") {
+		if (state.activeMessageId) state.native?.stop(state.activeMessageId);
 		if (state.active) {
 			const empty = [...state.active.blocks.values()].filter(
 				(block) =>
 					(block.content.type === "text" && block.content.text.trim().length === 0) ||
-					(block.content.type === "thinking" && block.content.thinking.trim().length === 0),
+					(block.content.type === "thinking" &&
+						!block.content.redacted &&
+						block.content.thinking.trim().length === 0),
 			);
 			if (removeOutputBlocks(empty, output)) refreshOutput(output, stream);
 		}
@@ -890,13 +897,14 @@ function appendSdkText(
 ): void {
 	if (message.type !== "assistant") return;
 	if (message.parent_tool_use_id) {
-		appendNestedAssistant(message, output, stream, state);
+		state.native?.child();
+		appendNestedAssistant(message, output, state);
 		return;
 	}
 
 	beginSdkMessage(message.message.id, output, stream, state);
 	const usageChanged = recordUsage(message, model, output, state);
-	const removed = removeSupersededBlocks(message.supersedes, output, stream, state);
+	const removed = removeSupersededBlocks(message.supersedes, output, state);
 	const partial = state.partial.get(message.message.id);
 	const takePartialBlock = (kind: SdkOutputBlock["kind"]): SdkOutputBlock | undefined => {
 		if (!partial) return undefined;
@@ -927,9 +935,15 @@ function appendSdkText(
 			} else if (block.thinking) {
 				blocks.push(appendThinkingBlock(output, stream, block.thinking, block.signature));
 			}
+		} else if (block.type === "redacted_thinking") {
+			const opaque = appendThinkingBlock(output, stream, "", block.data);
+			if (opaque.content.type === "thinking") opaque.content.redacted = true;
+			blocks.push(opaque);
 		}
 	}
 
+	state.cursor = message.uuid;
+	state.native?.observe(message.session_id, message.uuid, blocks.map((block) => block.content).filter(visibleBlock));
 	state.assistants.set(message.uuid, blocks);
 	if (removed || usageChanged) refreshOutput(output, stream);
 }
@@ -943,12 +957,12 @@ function beginSdkMessage(
 	if (state.currentMessageId === messageId) return;
 	if (state.currentMessageId) commitCurrentOutput(output, stream, state);
 	state.currentMessageId = messageId;
+	output.responseId = messageId;
 }
 
 function appendNestedAssistant(
 	message: Extract<SDKMessage, { type: "assistant" }>,
 	output: AssistantMessage,
-	stream: AssistantMessageEventStream,
 	state: SdkOutputState,
 ): void {
 	const content = message.message.content.flatMap((block): AssistantMessage["content"] => {
@@ -961,13 +975,13 @@ function appendNestedAssistant(
 	if (content.length === 0) return;
 	const committed: AssistantMessage = {
 		...output,
+		responseId: message.message.id,
 		content,
 		usage: createEmptyUsage(),
 		stopReason: "stop",
 		timestamp: Date.now(),
 	};
-	state.committed.push(committed);
-	stream.push({ type: "assistant_message_commit", message: committed, alreadyStreamed: false });
+	void state.publish(committed, undefined, false);
 }
 
 function appendThinkingBlock(
@@ -1078,7 +1092,6 @@ function reconcileThinkingBlock(
 function removeSupersededBlocks(
 	supersedes: string[] | undefined,
 	output: AssistantMessage,
-	stream: AssistantMessageEventStream,
 	state: SdkOutputState,
 ): boolean {
 	if (!supersedes?.length) return false;
@@ -1091,7 +1104,7 @@ function removeSupersededBlocks(
 		content,
 		kind: content.type === "thinking" ? ("thinking" as const) : ("text" as const),
 	}));
-	return commitOutputBlocks(blocks, output, stream, state);
+	return commitOutputBlocks(blocks, output, state);
 }
 
 function commitCurrentOutput(
@@ -1104,25 +1117,14 @@ function commitCurrentOutput(
 		if (content.type === "text") return [{ content, kind: "text" }];
 		return [];
 	});
-	if (commitOutputBlocks(blocks, output, stream, state)) refreshOutput(output, stream);
+	if (commitOutputBlocks(blocks, output, state)) refreshOutput(output, stream);
 }
 
-function commitOutputBlocks(
-	blocks: SdkOutputBlock[],
-	output: AssistantMessage,
-	stream: AssistantMessageEventStream,
-	state: SdkOutputState,
-): boolean {
+function commitOutputBlocks(blocks: SdkOutputBlock[], output: AssistantMessage, state: SdkOutputState): boolean {
 	const active = blocks.filter((block) => output.content.includes(block.content));
 	if (active.length === 0) return false;
-	const committedContent = active
-		.map((block) => block.content)
-		.filter(
-			(content) =>
-				(content.type === "text" && content.text.trim().length > 0) ||
-				(content.type === "thinking" && content.thinking.trim().length > 0),
-		)
-		.map((content) => ({ ...content }));
+	const members = active.map((block) => block.content).filter(visibleBlock);
+	const committedContent = members.map((content) => ({ ...content }));
 	if (committedContent.length > 0) {
 		const committed: AssistantMessage = {
 			...output,
@@ -1131,10 +1133,16 @@ function commitOutputBlocks(
 			stopReason: "stop",
 			timestamp: Date.now(),
 		};
-		state.committed.push(committed);
-		stream.push({ type: "assistant_message_commit", message: committed });
+		void state.publish(committed, members);
 	}
 	return removeOutputBlocks(active, output);
+}
+
+function visibleBlock(content: AssistantMessage["content"][number]): boolean {
+	return (
+		(content.type === "text" && content.text.trim().length > 0) ||
+		(content.type === "thinking" && (content.redacted === true || content.thinking.trim().length > 0))
+	);
 }
 
 function removeOutputBlocks(blocks: SdkOutputBlock[], output: AssistantMessage): boolean {

@@ -485,11 +485,11 @@ describe("SessionManager session file creation", () => {
 		expect(session.getEntries().map((entry) => entry.id)).toEqual([firstId]);
 
 		chmodSync(file, 0o644);
-		const secondId = session.appendMessage(assistantMsg("second answer"));
-		expect(session.getEntry(secondId)?.parentId).toBe(firstId);
-
+		expect(() => session.appendMessage(assistantMsg("second answer"))).toThrow("reopen before continuing");
 		const reopened = SessionManager.open(file, tempDir);
-		expect(reopened.getBranch().map((entry) => entry.id)).toEqual([firstId, secondId]);
+		const secondId = reopened.appendMessage(assistantMsg("second answer"));
+		expect(reopened.getEntry(secondId)?.parentId).toBe(firstId);
+		expect(SessionManager.open(file, tempDir).getBranch().map((entry) => entry.id)).toEqual([firstId, secondId]);
 	});
 
 	it("does not keep an entry in memory when creating the file fails", () => {
@@ -507,7 +507,10 @@ describe("SessionManager session file creation", () => {
 		expect(session.getLeafId()).toBe(modelChangeId);
 		expect(session.getEntries().map((entry) => entry.id)).toEqual([modelChangeId]);
 
-		session.appendMessage(userMsg("second question"));
-		expect(readSessionFileRoles(session.getSessionFile()!)).toEqual(["session", "model_change", "user"]);
+		expect(() => session.appendMessage(userMsg("second question"))).toThrow("reopen before continuing");
+		const restarted = SessionManager.create(tempDir, sessionDir);
+		restarted.appendModelChange("anthropic", "claude-sonnet-4-5");
+		restarted.appendMessage(userMsg("second question"));
+		expect(readSessionFileRoles(restarted.getSessionFile()!)).toEqual(["session", "model_change", "user"]);
 	});
 });
