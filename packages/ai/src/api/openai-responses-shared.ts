@@ -1,7 +1,6 @@
 import type OpenAI from "openai";
 import type {
 	Tool as OpenAITool,
-	ResponseConfigurationUpdateItemParam,
 	ResponseCreateParamsStreaming,
 	ResponseInput,
 	ResponseInputImage,
@@ -45,6 +44,7 @@ import {
 	resolveGrammarConstrainedSampling,
 	resolveJsonSchemaStrictSampling,
 } from "./constrained-sampling.ts";
+import { getMidConvoBaseline, getStampedEffort, responsesEffortUpdate } from "./mid-convo-effort.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 // =============================================================================
@@ -152,19 +152,15 @@ export interface ConvertResponsesMessagesOptions {
 	grammarToolInputProperties?: ReadonlyMap<string, string>;
 	/** Whether later system messages are sent in place; otherwise they are folded into the leading prompt. */
 	supportsMidConvoSystemMessages?: boolean;
+	/**
+	 * Replay each stamped effort change as a `configuration_update` before the response it produced.
+	 * OpenAI documents the item before user messages only. After tool results it was verified on
+	 * gpt-6-luna (October 2026) to be accepted and to apply to the next reply.
+	 */
+	supportsMidConvoEffort?: boolean;
 	supportsAdditionalTools?: boolean;
 	supportsToolSearch?: boolean;
 	toolOptions?: ConvertResponsesToolsOptions;
-	/**
-	 * Effort for the reply being generated. When set, the thinking level is sent as
-	 * configuration_update items instead of a changing reasoning.effort, which would invalidate the
-	 * prompt cache. Each item sets the effort from that point on: one goes before every earlier
-	 * reply with the level recorded on it (`providerThinkingLevel`), and one with this effort goes
-	 * at the end. Earlier input therefore never changes. OpenAI documents the item before user
-	 * messages only. After tool results it was verified on gpt-6-luna (October 2026) to be accepted
-	 * and to apply to the next reply.
-	 */
-	configurationUpdateEffort?: string;
 }
 
 export interface ConvertResponsesToolsOptions {
@@ -257,17 +253,14 @@ export function convertResponsesMessages<TApi extends Api>(
 		} satisfies ResponseToolSearchOutputItemParam);
 	};
 	const includeInitialSystemMessage = options?.includeSystemPrompt ?? true;
-	const pushConfigurationUpdate = (effort: string): void => {
-		messages.push({
-			type: "configuration_update",
-			reasoning: { effort: effort as NonNullable<ResponseConfigurationUpdateItemParam.Reasoning["effort"]> },
-		} satisfies ResponseConfigurationUpdateItemParam);
-	};
 	const compat = model.compat as { supportsDeveloperRole?: boolean } | undefined;
 	const instructionRole = model.reasoning && compat?.supportsDeveloperRole !== false ? "developer" : "system";
 
 	let msgIndex = 0;
 	let sourceIndex = 0;
+	let effortInEffect = options?.supportsMidConvoEffort
+		? getMidConvoBaseline(normalizedContext.messages, model)
+		: undefined;
 	for (const msg of transformedMessages) {
 		const isLeadingSystemMessage = sourceIndex++ === 0 && msg.role === "system";
 		if (msg.role === "system") {
@@ -388,12 +381,11 @@ export function convertResponsesMessages<TApi extends Api>(
 				}
 			}
 			if (output.length === 0) continue;
-			if (
-				options?.configurationUpdateEffort !== undefined &&
-				isSameModel &&
-				msg.providerThinkingLevel !== undefined
-			) {
-				pushConfigurationUpdate(msg.providerThinkingLevel);
+			// The update sits where the original request appended it: right before this response.
+			const effort = options?.supportsMidConvoEffort ? getStampedEffort(assistantMsg, model) : undefined;
+			if (effort !== undefined && effort !== effortInEffect) {
+				messages.push(responsesEffortUpdate(effort) as unknown as ResponseInputItem);
+				effortInEffect = effort;
 			}
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
@@ -416,7 +408,6 @@ export function convertResponsesMessages<TApi extends Api>(
 		}
 		if (!isLeadingSystemMessage) msgIndex++;
 	}
-	if (options?.configurationUpdateEffort !== undefined) pushConfigurationUpdate(options.configurationUpdateEffort);
 
 	return messages;
 }

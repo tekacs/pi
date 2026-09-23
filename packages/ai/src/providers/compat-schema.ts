@@ -305,6 +305,11 @@ export const OpenAICompletionsCompatSchema = Type.Object(
 				"Whether the exact model accepts system or developer messages after the conversation has started. When false, later system messages are folded into the leading system message. The generated catalog enables this for verified models.",
 			default: false,
 		}),
+		supportsMidConvoEffort: optionalCompatBoolean({
+			description:
+				"Whether the exact model accepts OpenRouter configuration_update on content-less system messages to change reasoning effort mid-conversation while request-level effort stays pinned.",
+			default: false,
+		}),
 		supportsMidConvoToolAdditions: Type.Optional(
 			Type.Boolean({
 				description:
@@ -378,6 +383,11 @@ export const OpenAIResponsesCompatSchema = Type.Object(
 				"Whether to emit OpenAI custom tools with Lark or regex grammar formats. When false, grammar-constrained tools fall back to normal function tools. The generated catalog enables this for capable models.",
 			default: false,
 		}),
+		supportsMidConvoEffort: optionalCompatBoolean({
+			description:
+				"Whether the exact model accepts configuration_update input items to change reasoning effort mid-conversation while request-level effort stays pinned.",
+			default: false,
+		}),
 		supportsAdditionalTools: Type.Optional(
 			Type.Boolean({
 				description: "Whether the model supports message-anchored additional_tools input items.",
@@ -393,13 +403,6 @@ export const OpenAIResponsesCompatSchema = Type.Object(
 		supportsExplicitPromptCacheMode: Type.Optional(
 			Type.Boolean({
 				description: "Whether the model accepts GPT-5.6+ prompt_cache_options and content-block prompt_cache_breakpoint controls. Older OpenAI models reject them.",
-				default: false,
-			}),
-		),
-		supportsMidConvoEffort: Type.Optional(
-			Type.Boolean({
-				description:
-					"Whether thinking level changes are sent as configuration_update input items instead of changing reasoning.effort, so a change keeps the prompt cache. Only used by the openai-responses API, and ignored with Sign in with ChatGPT on the openai provider.",
 				default: false,
 			}),
 		),
@@ -522,6 +525,10 @@ export const MistralConversationsCompatSchema = Type.Object(
 );
 
 const ProviderCompatPropertyOverrides = {
+	supportsMidConvoEffort: optionalCompatBoolean({
+		description: "Whether the exact model transport supports changing reasoning effort mid-conversation.",
+		default: false,
+	}),
 	supportsDeveloperRole: optionalCompatBoolean({
 		description: "Whether the provider supports the developer role instead of system. Defaults are API-specific.",
 	}),
@@ -532,11 +539,6 @@ const ProviderCompatPropertyOverrides = {
 	}),
 	sessionAffinityFormat: optionalSessionAffinityFormat({
 		description: "Session-affinity header format. Defaults are API-specific or auto-detected.",
-	}),
-	supportsMidConvoEffort: optionalCompatBoolean({
-		description:
-			"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages and openai-responses APIs.",
-		default: false,
 	}),
 	supportsLongCacheRetention: optionalCompatBoolean({
 		description:

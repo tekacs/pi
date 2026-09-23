@@ -396,9 +396,6 @@ const OPENAI_CODEX_ADDITIONAL_TOOLS_MODEL_IDS = new Set([
 	"gpt-6-luna",
 	"gpt-6.1-sol",
 ]);
-// OpenAI documents configuration_update for the GPT-6 family.
-// https://developers.openai.com/api/docs/guides/reasoning
-const OPENAI_MID_CONVO_EFFORT_MODEL_IDS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]);
 const OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272000;
 const OPENAI_SHORT_CONTEXT_CAPPED_MODEL_IDS = new Set([
 	"gpt-5.4",
@@ -991,6 +988,25 @@ function applyOpenAIResponsesTranscriptMetadata(model: Model<Api>): void {
 	};
 }
 
+// GPT-6 standard models accept `configuration_update` for mid-conversation effort changes;
+// pro variants and the Batch API reject it. OpenRouter accepts the Chat Completions form.
+// https://developers.openai.com/api/docs/guides/prompt-caching
+// https://openrouter.ai/docs/cookbook/evaluate-and-optimize/model-migrations/gpt-6
+const OPENAI_MID_CONVO_EFFORT_MODEL_IDS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]);
+
+function applyOpenAIMidConvoEffortMetadata(model: Model<Api>): void {
+	const supported =
+		(model.provider === "openai" && model.api === "openai-responses") ||
+		(model.provider === "openai-codex" && model.api === "openai-codex-responses")
+			? OPENAI_MID_CONVO_EFFORT_MODEL_IDS.has(model.id)
+			: model.provider === "openrouter" &&
+				model.api === "openai-completions" &&
+				model.id.startsWith("openai/") &&
+				OPENAI_MID_CONVO_EFFORT_MODEL_IDS.has(model.id.slice("openai/".length));
+	if (!supported) return;
+	model.compat = { ...(model.compat as OpenAIResponsesCompat | undefined), supportsMidConvoEffort: true };
+}
+
 // OpenAI charges prompt-cache writes starting with the GPT-5.6 family, and exactly
 // those models accept `prompt_cache_options` and content-block breakpoints; older models reject them.
 // https://developers.openai.com/api/docs/guides/prompt-caching
@@ -1003,17 +1019,6 @@ function applyOpenAIExplicitPromptCacheMetadata(model: Model<Api>): void {
 	};
 }
 
-// GPT-6 models accept `configuration_update` input items that change the reasoning effort
-// without changing the cached prompt prefix. Not enabled for openai-codex (Codex CLI keeps it
-// behind a flag that is off by default) or proxies.
-function applyOpenAIMidConvoEffortMetadata(model: Model<Api>): void {
-	if (model.provider !== "openai" || model.api !== "openai-responses") return;
-	if (!OPENAI_MID_CONVO_EFFORT_MODEL_IDS.has(model.id)) return;
-	model.compat = {
-		...(model.compat as OpenAIResponsesCompat | undefined),
-		supportsMidConvoEffort: true,
-	};
-}
 
 // Anthropic ephemeral entries have a hard five-minute lifetime; `ttl: "1h"`
 // extends it to one hour. Only direct Anthropic is annotated so cache warming
@@ -3400,8 +3405,8 @@ async function generateModels() {
 		applyOpenAIToolSearchMetadata(model);
 		applyOpenAICompletionsTranscriptMetadata(model);
 		applyOpenAIResponsesTranscriptMetadata(model);
-		applyOpenAIExplicitPromptCacheMetadata(model);
 		applyOpenAIMidConvoEffortMetadata(model);
+		applyOpenAIExplicitPromptCacheMetadata(model);
 		applyPromptCacheMetadata(model);
 		applyImageInputMetadata(model);
 	}

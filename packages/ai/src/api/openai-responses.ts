@@ -24,6 +24,12 @@ import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
+import {
+	getMidConvoBaseline,
+	getMidConvoEffort,
+	pinMidConvoEffort,
+	responsesEffortUpdate,
+} from "./mid-convo-effort.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
 import { buildBaseOptions, resolveSamplingParams } from "./simple-options.ts";
@@ -32,8 +38,6 @@ const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"
 // OpenAI Responses rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
 const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16;
 const CHATGPT_USAGE_URL = "https://chatgpt.com/settings/usage";
-// Fixed reasoning.effort while configuration_update items carry the thinking level.
-const CONFIGURATION_UPDATE_REQUEST_EFFORT = "medium";
 
 /**
  * OpenAI API keys start with `sk-`; a different credential sent directly to OpenAI
@@ -97,23 +101,6 @@ function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCo
 	};
 }
 
-/** Effort to send in configuration_update items, or undefined to send it as reasoning.effort. */
-function getConfigurationUpdateEffort(
-	model: Model<"openai-responses">,
-	options: OpenAIResponsesOptions | undefined,
-	compat: Required<OpenAIResponsesCompat>,
-): string | undefined {
-	if (
-		!compat.supportsMidConvoEffort ||
-		!options?.reasoningEffort ||
-		// Sign in with ChatGPT rejects configuration_update items.
-		isChatGPTSignIn(model, options.apiKey)
-	) {
-		return undefined;
-	}
-	return model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
-}
-
 function getPromptCacheRetention(
 	compat: Required<OpenAIResponsesCompat>,
 	cacheRetention: CacheRetention,
@@ -155,14 +142,12 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 	// Start async processing
 	(async () => {
 		const compat = getCompat(model);
-		const configurationUpdateEffort = getConfigurationUpdateEffort(model, options, compat);
 		const output: AssistantMessage = {
 			role: "assistant",
 			content: [],
 			api: model.api as Api,
 			provider: model.provider,
 			model: model.id,
-			...(configurationUpdateEffort === undefined ? {} : { providerThinkingLevel: configurationUpdateEffort }),
 			usage: {
 				input: 0,
 				output: 0,
@@ -192,17 +177,15 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				options?.fetch,
 				cacheSessionId,
 			);
-			let params = buildParams(
-				model,
-				normalizedContext,
-				options,
-				compat,
-				grammarToolInputProperties,
-				configurationUpdateEffort,
-			);
+			let params = buildParams(model, normalizedContext, options, compat, grammarToolInputProperties);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as ResponseCreateParamsStreaming;
+			}
+			// Sign in with ChatGPT rejects configuration_update items, so such requests
+			// neither send them nor stamp the level they would have carried.
+			if (compat.supportsMidConvoEffort && !isChatGPTSignIn(model, options?.apiKey)) {
+				output.providerThinkingLevel = getMidConvoEffort(params.input, params.reasoning);
 			}
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
@@ -334,7 +317,6 @@ function buildParams(
 	options: OpenAIResponsesOptions | undefined,
 	compat: Required<OpenAIResponsesCompat>,
 	grammarToolInputProperties: ReadonlyMap<string, string>,
-	configurationUpdateEffort: string | undefined,
 ) {
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
 	const explicitPromptCache = cacheRetention !== "none" && compat.supportsExplicitPromptCacheMode;
@@ -342,21 +324,21 @@ function buildParams(
 		context.messages,
 		compat.supportsAdditionalTools || compat.supportsToolSearch,
 	);
+	// Sign in with ChatGPT rejects these request fields and configuration_update items.
+	const omitUnsupportedFields = isChatGPTSignIn(model, options?.apiKey);
+	const midConvoEffort = compat.supportsMidConvoEffort && !omitUnsupportedFields;
 	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
 		explicitPromptCache,
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: compat.supportsMidConvoSystemMessages,
+		supportsMidConvoEffort: midConvoEffort,
 		supportsAdditionalTools: compat.supportsAdditionalTools,
 		supportsToolSearch: compat.supportsToolSearch,
 		toolOptions: {
 			supportsStrictMode: compat.supportsStrictMode,
 			supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
 		},
-		configurationUpdateEffort,
 	});
-
-	// Sign in with ChatGPT rejects these request fields.
-	const omitUnsupportedFields = isChatGPTSignIn(model, options?.apiKey);
 	const params: ResponseCreateParamsStreaming = {
 		model: model.id,
 		input: messages,
@@ -396,9 +378,8 @@ function buildParams(
 			const requestedEffort = options?.reasoningEffort
 				? (model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort)
 				: reasoningEffort;
-			const effort = configurationUpdateEffort === undefined ? requestedEffort : CONFIGURATION_UPDATE_REQUEST_EFFORT;
 			params.reasoning = {
-				effort: effort as NonNullable<typeof params.reasoning>["effort"],
+				effort: requestedEffort as NonNullable<typeof params.reasoning>["effort"],
 				summary: options?.reasoningSummary || "auto",
 			};
 			params.include = ["reasoning.encrypted_content"];
@@ -408,6 +389,14 @@ function buildParams(
 			};
 		}
 		if (model.provider === "xai") params.include = ["reasoning.encrypted_content"];
+		if (midConvoEffort) {
+			pinMidConvoEffort(
+				messages,
+				params.reasoning,
+				getMidConvoBaseline(context.messages, model),
+				responsesEffortUpdate,
+			);
+		}
 	}
 
 	// Last so model and request sampling parameters override named request fields.
