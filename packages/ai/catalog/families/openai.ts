@@ -85,6 +85,15 @@ const GPT_6_MODEL_IDS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-
 
 /** Thinking levels of GPT models on any host. */
 export function applyOpenAiFamilyRules(model: ChatModel): void {
+	const effortId = model.provider === "openrouter" ? model.id.replace(/^openai\//, "") : model.id;
+	if (
+		GPT_6_MODEL_IDS.has(effortId) &&
+		((model.provider === "openai" && model.api === "openai-responses") ||
+			(model.provider === "openai-codex" && model.api === "openai-codex-responses") ||
+			(model.provider === "openrouter" && model.api === "openai-completions" && model.id.startsWith("openai/")))
+	) {
+		mergeCompat(model as Model<"openai-responses">, { supportsMidConvoEffort: true });
+	}
 	if ((model.api === "openai-responses" || model.api === "azure-openai-responses") && model.id.startsWith("gpt-5")) {
 		mergeThinking(model, { off: null });
 	}

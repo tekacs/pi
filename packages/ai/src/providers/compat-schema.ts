@@ -318,6 +318,11 @@ const OpenAICompletionsCompatProperties = {
 			"Whether the exact model accepts system or developer messages after the conversation has started. When false, later system messages are folded into the leading system message. The generated catalog enables this for verified models.",
 		default: false,
 	}),
+	supportsMidConvoEffort: optionalCompatBoolean({
+		description:
+			"Whether the exact model accepts OpenRouter configuration_update on content-less system messages to change reasoning effort mid-conversation while request-level effort stays pinned.",
+		default: false,
+	}),
 	supportsMidConvoToolAdditions: opt(
 		bool({
 			description:
@@ -572,6 +577,14 @@ export const SystemOneCompatSchema = openObject(SystemOneCompatProperties, {
 });
 
 const ProviderCompatPropertyOverrides = {
+	promptCacheKeyMode: optionalPromptCacheKeyMode({
+		description:
+			"Controls the prompt_cache_key request field for openai-completions and openai-responses: auto keeps each API's default, enabled sends it whenever caching is active, disabled never sends it. Default: auto.",
+	}),
+	supportsMidConvoEffort: optionalCompatBoolean({
+		description: "Whether the exact model transport supports changing reasoning effort mid-conversation.",
+		default: false,
+	}),
 	supportsDeveloperRole: optionalCompatBoolean({
 		description: "Whether the provider supports the developer role instead of system. Defaults are API-specific.",
 	}),
@@ -582,15 +595,6 @@ const ProviderCompatPropertyOverrides = {
 	}),
 	sessionAffinityFormat: optionalSessionAffinityFormat({
 		description: "Session-affinity header format. Defaults are API-specific or auto-detected.",
-	}),
-	promptCacheKeyMode: optionalPromptCacheKeyMode({
-		description:
-			"Controls the prompt_cache_key request field for openai-completions and openai-responses: auto keeps each API's default, enabled sends it whenever caching is active, disabled never sends it. Default: auto.",
-	}),
-	supportsMidConvoEffort: optionalCompatBoolean({
-		description:
-			"Whether thinking level changes are sent inside the conversation instead of changing the request's effort, so a change keeps the prompt cache. Used by the anthropic-messages and openai-responses APIs.",
-		default: false,
 	}),
 	supportsLongCacheRetention: optionalCompatBoolean({
 		description:
