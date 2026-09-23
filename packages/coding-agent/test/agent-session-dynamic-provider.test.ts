@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type AssistantMessage, createAssistantMessageEventStream, type Provider } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Provider } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { HarnessOutput } from "../src/core/harness-output.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
 import type { ExtensionFactory } from "../src/core/sdk.ts";
@@ -210,7 +211,8 @@ describe("AgentSession dynamic provider registration", () => {
 					captured.cwd = options.cwd;
 					captured.systemPrompt = options.systemPrompt;
 					captured.contextMessages = options.agentContext.messages.length;
-					const stream = createAssistantMessageEventStream();
+					captured.sessionId = options.session.getSessionId();
+					const stream = new HarnessOutput(options.signal);
 					queueMicrotask(async () => {
 						const tool = options.tools.find((candidate) => candidate.name === "host_echo");
 						if (!tool) throw new Error("host_echo was not supplied to the harness");
@@ -264,6 +266,18 @@ describe("AgentSession dynamic provider registration", () => {
 		});
 		expect(captured.systemPrompt).toEqual(expect.any(String));
 		expect(captured.contextMessages).toBeGreaterThan(0);
+		expect(captured.sessionId).toBe(session.sessionManager.getSessionId());
+		expect(
+			session.state.messages.some(
+				(message) =>
+					message.role === "assistant" &&
+					message.content.some((block) => block.type === "toolCall" && block.id === "vendor-call"),
+			),
+		).toBe(true);
+		expect(session.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+			toolCallId: "vendor-call",
+			content: [{ type: "text", text: "after-hook" }],
+		});
 		expect(lifecycle).toEqual(["tool_execution_start", "tool_execution_update", "tool_execution_end"]);
 		expect(session.state.messages.at(-1)).toMatchObject({
 			role: "assistant",

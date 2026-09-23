@@ -3596,6 +3596,7 @@ export class InteractiveMode {
 							this.getMarkdownThemeWithSettings(),
 							this.hiddenThinkingLabel,
 							this.outputPad,
+							this.getMarkdownTransformers(),
 						);
 						this.chatContainer.addChild(this.streamingComponent);
 					}
@@ -3641,13 +3642,15 @@ export class InteractiveMode {
 				break;
 
 			case "message_commit":
-				if (event.alreadyStreamed === false) {
+				if (event.message.role === "toolResult") break; // The tool lifecycle card owns this display.
+				if (event.alreadyStreamed === false || !this.streamingComponent) {
 					const component = new AssistantMessageComponent(
 						event.message,
 						this.hideThinkingBlock,
 						this.getMarkdownThemeWithSettings(),
 						this.hiddenThinkingLabel,
 						this.outputPad,
+						this.getMarkdownTransformers(),
 					);
 					const streamingIndex = this.streamingComponent
 						? this.chatContainer.children.indexOf(this.streamingComponent)
@@ -3655,9 +3658,13 @@ export class InteractiveMode {
 					if (streamingIndex === -1) this.chatContainer.addChild(component);
 					else this.chatContainer.children.splice(streamingIndex, 0, component);
 				} else {
-					// The segment is already visible in the streaming component. Freeze it
-					// in place; the next provider text/thinking start creates a new segment.
+					// Queued partials may already reference the provider's cleared buffer.
+					// Finalize from the stable commit, not the last streamed rendering.
+					this.streamingComponent.updateContent(event.message, false);
+				}
+				if (event.alreadyStreamed !== false) {
 					this.streamingComponent = undefined;
+					this.streamingContentStart = 0;
 				}
 				this.ui.requestRender();
 				break;

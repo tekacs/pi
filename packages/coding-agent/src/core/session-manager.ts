@@ -18,6 +18,7 @@ import {
 	closeSync,
 	createReadStream,
 	existsSync,
+	fsyncSync,
 	mkdirSync,
 	openSync,
 	readdirSync,
@@ -27,7 +28,7 @@ import {
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
-import { basename, join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
@@ -1011,6 +1012,8 @@ export class SessionManager {
 	private cwd: string;
 	private persist: boolean;
 	private flushed: boolean = false;
+	private writeError?: Error;
+	private syncedFile?: string;
 	private fileEntries: FileEntry[] = [];
 	private byId: Map<string, SessionEntry> = new Map();
 	private labelsById: Map<string, string> = new Map();
@@ -1094,6 +1097,7 @@ export class SessionManager {
 		this.labelTimestampsById.clear();
 		this.leafId = null;
 		this.flushed = false;
+		this.writeError = undefined;
 
 		if (this.persist) {
 			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
@@ -1118,6 +1122,7 @@ export class SessionManager {
 		}
 
 		this._buildIndex();
+		this.writeError = undefined;
 	}
 
 	private _buildIndex(): void {
@@ -1208,11 +1213,43 @@ export class SessionManager {
 		}
 	}
 
-	private _appendEntry(entry: SessionEntry): void {
+	private _persistDurable(entry: SessionEntry): void {
+		if (!this.persist || !this.sessionFile) return;
+		const fresh = !this.flushed;
+		const fd = openSync(this.sessionFile, fresh ? "wx" : "a", 0o600);
+		try {
+			for (const record of fresh ? this.fileEntries : [entry]) writeFileSync(fd, `${JSON.stringify(record)}\n`);
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		if (this.syncedFile !== this.sessionFile && process.platform !== "win32") {
+			const directory = openSync(dirname(this.sessionFile), "r");
+			try {
+				fsyncSync(directory);
+			} finally {
+				closeSync(directory);
+			}
+		}
+		this.syncedFile = this.sessionFile;
+		this.flushed = true;
+	}
+
+	private _appendEntry(entry: SessionEntry, durable = false): void {
+		if (this.writeError) throw this.writeError;
 		this.fileEntries.push(entry);
+		if (durable) {
+			try {
+				this._persistDurable(entry);
+			} catch (cause) {
+				this.fileEntries.pop();
+				this.writeError = new Error("Durable session append failed; reopen before continuing", { cause });
+				throw this.writeError;
+			}
+		}
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
-		this._persist(entry);
+		if (!durable) this._persist(entry);
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -1221,7 +1258,7 @@ export class SessionManager {
 	 * so it is easier to find them.
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
-	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+	appendMessage(message: Message | CustomMessage | BashExecutionMessage, options: { durable?: boolean } = {}): string {
 		const entry: SessionMessageEntry = {
 			type: "message",
 			id: generateId(this.byId),
@@ -1229,7 +1266,7 @@ export class SessionManager {
 			timestamp: new Date().toISOString(),
 			message,
 		};
-		this._appendEntry(entry);
+		this._appendEntry(entry, options.durable);
 		return entry.id;
 	}
 
