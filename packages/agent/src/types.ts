@@ -523,7 +523,7 @@ export type AgentEvent =
 	// Only emitted for assistant messages during streaming
 	| { type: "message_update"; message: AgentMessage; assistantMessageEvent: AssistantMessageEvent }
 	// Immutable provider-managed segment committed while the response continues streaming
-	| { type: "message_commit"; message: AssistantMessage; alreadyStreamed?: boolean }
+	| { type: "message_commit"; message: AssistantMessage | ToolResultMessage; alreadyStreamed?: boolean }
 	| { type: "message_end"; message: AgentMessage }
 	// Tool execution lifecycle
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: any }

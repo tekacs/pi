@@ -420,6 +420,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					systemPrompt: getCurrentSystemPrompt(context.messages),
 					tools,
 					agentContext,
+					session: sessionManager,
 					runTool: (call) => {
 						if (!tools.includes(call.tool)) {
 							throw new Error(`Harness requested an inactive Pi tool: ${call.tool.name}`);
@@ -447,6 +448,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					apiKey: options?.apiKey ?? auth.auth.apiKey,
 					env: auth.env || options?.env ? { ...(auth.env ?? {}), ...(options?.env ?? {}) } : undefined,
 					cwd,
+					nativeRoot: sessionManager.getSessionFile() ? join(agentDir, "harness", "claude") : undefined,
 					tools: agent.state.tools,
 					agentContext: {
 						messages: agent.state.messages,

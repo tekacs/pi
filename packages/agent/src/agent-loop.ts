@@ -247,16 +247,19 @@ async function runLoop(
 				streamFunction,
 			);
 			newMessages.push(...committedMessages, message);
+			const toolResults = committedMessages.filter(
+				(message): message is ToolResultMessage => message.role === "toolResult",
+			);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {
 				lastCompletedTurn = {
 					message,
-					toolResults: [],
+					toolResults,
 					context: currentContext,
 					newMessages,
 				};
 				await config.finishTurn?.(lastCompletedTurn, signal);
-				await emit({ type: "turn_end", message, toolResults: [] });
+				await emit({ type: "turn_end", message, toolResults });
 				await emit({ type: "agent_end", messages: newMessages });
 				return;
 			}
@@ -264,7 +267,6 @@ async function runLoop(
 			// Check for tool calls
 			const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
-			const toolResults: ToolResultMessage[] = [];
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
 				// A "length" stop means the output was cut off by the token limit, so
@@ -277,7 +279,7 @@ async function runLoop(
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
 
-				for (const result of toolResults) {
+				for (const result of executedToolBatch.messages) {
 					currentContext.messages.push(result);
 					newMessages.push(result);
 				}
@@ -391,7 +393,7 @@ async function streamAssistantResponse(
 	signal: AbortSignal | undefined,
 	emit: AgentEventSink,
 	streamFunction: StreamFn,
-): Promise<{ message: AssistantMessage; committedMessages: AssistantMessage[] }> {
+): Promise<{ message: AssistantMessage; committedMessages: (AssistantMessage | ToolResultMessage)[] }> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
 	let messages = context.messages;
 	if (config.transformContext) {
@@ -417,7 +419,7 @@ async function streamAssistantResponse(
 
 	let partialMessage: AssistantMessage | null = null;
 	let addedPartial = false;
-	const committedMessages: AssistantMessage[] = [];
+	const committedMessages: (AssistantMessage | ToolResultMessage)[] = [];
 
 	for await (const event of response) {
 		switch (event.type) {
@@ -429,15 +431,21 @@ async function streamAssistantResponse(
 				break;
 
 			case "assistant_message_commit": {
-				committedMessages.push(event.message);
-				const partialIndex = partialMessage ? context.messages.lastIndexOf(partialMessage) : -1;
-				if (partialIndex === -1) context.messages.push(event.message);
-				else context.messages.splice(partialIndex, 0, event.message);
-				await emit({
-					type: "message_commit",
-					message: event.message,
-					...(event.alreadyStreamed !== undefined ? { alreadyStreamed: event.alreadyStreamed } : {}),
-				});
+				try {
+					await emit({
+						type: "message_commit",
+						message: event.message,
+						...(event.alreadyStreamed !== undefined ? { alreadyStreamed: event.alreadyStreamed } : {}),
+					});
+					committedMessages.push(event.message);
+					const partialIndex = partialMessage ? context.messages.lastIndexOf(partialMessage) : -1;
+					if (partialIndex === -1) context.messages.push(event.message);
+					else context.messages.splice(partialIndex, 0, event.message);
+					event.acknowledge?.();
+				} catch (error) {
+					event.acknowledge?.(error ?? new Error("Harness commit failed"));
+					throw error;
+				}
 				break;
 			}
 

@@ -619,6 +619,8 @@ export type ToolResultMessage<TDetails = JsonValue> = IsJsonCompatible<TDetails>
 			usage?: Usage;
 			/** Calls this tool made to other tools. Kept for the session record; not sent to the model. */
 			nestedCalls?: NestedToolCalls;
+			/** Final tool-loop decision, retained when an embedded harness reuses this outcome. */
+			terminate?: boolean;
 			isError: boolean;
 			timestamp: number; // Unix timestamp in milliseconds
 		}
@@ -785,9 +787,9 @@ export type TranscriptContext = {
  *
  * Providers that execute tools internally may emit `tool_execution_*` events so
  * hosts can render that lifecycle without adding executable tool calls to the
- * final AssistantMessage. They may also commit completed assistant segments
- * before the final message so hosts can persist long-running provider-managed
- * turns without conflating live snapshot replacement with durable history.
+ * final AssistantMessage. They may also commit completed assistant segments and
+ * tool results before the final message. An optional harness acknowledgement is
+ * settled after host persistence, independently of live snapshot rendering.
  */
 export type AssistantMessageEvent =
 	| { type: "start"; partial: AssistantMessage }
@@ -803,7 +805,13 @@ export type AssistantMessageEvent =
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown }
 	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }
-	| { type: "assistant_message_commit"; message: AssistantMessage; alreadyStreamed?: boolean }
+	| {
+			type: "assistant_message_commit";
+			message: AssistantMessage | ToolResultMessage;
+			alreadyStreamed?: boolean;
+			/** Harness acknowledgement, after the host has persisted the canonical message. */
+			acknowledge?: (error?: unknown) => void;
+	  }
 	| {
 			type: "done";
 			reason: Extract<StopReason, "stop" | "length" | "toolUse" | "deferred">;
