@@ -10,11 +10,15 @@ active loop continues with a separate copied array. A faux-provider reproduction
 confirmed that request 2 retains originals after a successful fold, even though
 session materialization and agent state both select the fold.
 
-The source repair introduces a final `prepareRequest` boundary, coalesces
-active-run projection invalidations, and materializes after message/tool
-persistence. It also refreshes before between-turn compaction checks and at
-final settlement. Transient prompts survive snapshot replacement without
-becoming durable.
+Request adoption now rides on the upstream `prepareRequest` boundary
+(pi v0.87.0, "canonical session context boundaries"): `AgentSession` rebuilds
+the request from `SessionManager.buildSessionProjection()` before every provider
+request, so no separate dirty flag or copied array exists to go stale.
+Projection frames apply inside `buildContextEntries()`, underneath that
+projection, and the public transcript is re-settled at run end. Transient
+prompts survive request and next-turn snapshot replacement through agent-core's
+`retainTransient`, which re-seats them before their next surviving message by
+identity without making them durable.
 
 The live failure also folded a native compaction entry carrying the complete
 system/tool checkpoint. Projection now preserves control messages independently
@@ -31,10 +35,11 @@ following outgoing request. These repairs are installed locally as of 2026-09-22
   checks, TypeScript, browser smoke).
 - 40 coding-agent tests pass across six files; five real-provider compaction
   e2e tests were skipped. 55 agent-core tests pass across two files.
-- The new faux-provider regressions cover fold/restore in one parallel or
+- The faux-provider regressions cover fold/restore in one parallel or
   sequential run, lifecycle writes, preservation of the active assistant call,
-  transient triggers, queued custom/steering messages, no rebuilding unchanged
-  requests, terminating runs, and tool restoration after a folded compaction.
+  transient triggers, queued custom/steering messages, terminating runs, and
+  tool restoration after a folded compaction. Rebuild-count assertions were
+  dropped: upstream re-projects every request by design.
 - Read-only replay of the actual failing session at five historical leaves
   preserves all 26 tool declarations with the fix, versus three at four of
   those leaves beforehand. The durable call/result exchange was intact.
