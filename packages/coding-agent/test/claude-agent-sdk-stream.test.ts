@@ -1,11 +1,12 @@
 import type { Query, SDKMessage, SDKResultMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, AssistantMessageEvent, Context } from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent, Context, Message } from "@earendil-works/pi-ai";
 import { cleanupSessionResources, isContextOverflow, normalizeContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_AGENT_SDK_MODELS, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH } from "../src/core/claude-agent-sdk-models.ts";
 import { streamClaudeAgentSdk } from "../src/core/claude-agent-sdk-stream.ts";
+import { type MockServer, type QueryInput, sdkQuery } from "./claude-sdk-fixture.ts";
 
 const sdk = vi.hoisted(() => ({
 	createServer: vi.fn(),
@@ -16,25 +17,6 @@ vi.mock("@anthropic-ai/claude-agent-sdk", () => ({
 	createSdkMcpServer: sdk.createServer,
 	query: sdk.query,
 }));
-
-type MockServer = {
-	tools: Array<{
-		name: string;
-		inputSchema: Record<string, { safeParse: (value: unknown) => { success: boolean } }>;
-		handler: (args: Record<string, unknown>, extra: unknown) => Promise<unknown>;
-	}>;
-};
-
-type QueryInput = {
-	prompt: AsyncIterable<SDKUserMessage>;
-	options: {
-		env: Record<string, string | undefined>;
-		mcpServers: { pi: MockServer };
-		forwardSubagentText: boolean;
-		systemPrompt: string;
-		resume?: string;
-	};
-};
 
 const testSessions = [
 	"claude-sdk-persistent",
@@ -77,7 +59,7 @@ function assistant(
 		uuid: metadata.uuid,
 		supersedes: metadata.supersedes,
 		message: {
-			id: metadata.id,
+			id: metadata.id ?? "native-response",
 			content,
 			usage: metadata.usage ?? { input_tokens: 0, output_tokens: 0 },
 		},
@@ -131,10 +113,7 @@ function promptTooLong(sessionId = "sdk-session"): SDKResultMessage {
 }
 
 function mockQuery(messages: AsyncGenerator<SDKMessage>, close = vi.fn()): Query {
-	return Object.assign(messages, {
-		close,
-		interrupt: vi.fn(async () => undefined),
-	}) as unknown as Query;
+	return sdkQuery(messages, (sdk.query.mock.calls.at(-1)![0] as QueryInput).options, close);
 }
 
 async function nextInput(input: AsyncIterable<SDKUserMessage>): Promise<SDKUserMessage> {
@@ -153,17 +132,26 @@ async function collect(
 		tools?: readonly AgentTool[];
 		systemPrompt?: string;
 	},
-): Promise<{ result: AssistantMessage; events: AssistantMessageEvent[] }> {
+): Promise<{ result: AssistantMessage; events: AssistantMessageEvent[]; committed: Message[] }> {
 	const { systemPrompt, ...streamOptions } = options;
 	const tools = [...(options.tools ?? [])];
+	const agentContext = { messages: [...context.messages], tools };
 	const stream = streamClaudeAgentSdk(fableModel(), normalizeContext({ systemPrompt, ...context }), {
 		...streamOptions,
 		tools,
-		agentContext: { messages: [], tools },
+		agentContext,
 	});
 	const events: AssistantMessageEvent[] = [];
-	for await (const event of stream) events.push(event);
-	return { result: await stream.result(), events };
+	const committed: Message[] = [];
+	for await (const event of stream) {
+		events.push(event);
+		if (event.type === "assistant_message_commit") {
+			committed.push(event.message);
+			agentContext.messages.push(event.message);
+			event.acknowledge?.();
+		}
+	}
+	return { result: await stream.result(), events, committed };
 }
 
 function user(text: string) {
@@ -179,6 +167,93 @@ describe("Claude Agent SDK stream", () => {
 
 	afterEach(() => {
 		for (const sessionId of testSessions) cleanupSessionResources(sessionId);
+	});
+
+	it("waits for native frames when MCP dispatch overtakes the iterator", async () => {
+		const execute = vi.fn(async () => ({ content: [{ type: "text" as const, text: "result" }], details: {} }));
+		const tool: AgentTool = {
+			name: "probe",
+			label: "Probe",
+			description: "Probe",
+			parameters: Type.Object({}),
+			execute,
+		};
+		sdk.query.mockImplementation(({ prompt, options }: QueryInput) =>
+			mockQuery(
+				(async function* () {
+					await nextInput(prompt);
+					const pending = options.mcpServers.pi.tools[0].handler(
+						{},
+						{ _meta: { "claudecode/toolUseId": "early" } },
+					);
+					expect(execute).not.toHaveBeenCalled();
+					yield assistant([{ type: "text", text: "Before the call." }]);
+					yield assistant([{ type: "tool_use", id: "early", name: "mcp__pi__probe", input: {} }]);
+					await pending;
+					yield success("done");
+				})(),
+			),
+		);
+		const { result, committed } = await collect(
+			{ messages: [user("run")], tools: [tool] },
+			{ cwd: process.cwd(), tools: [tool] },
+		);
+		expect(result.stopReason).toBe("stop");
+		expect(execute).toHaveBeenCalledTimes(1);
+		expect(committed).toMatchObject([
+			{ role: "assistant", responseId: "native-response", content: [{ type: "text", text: "Before the call." }] },
+			{ role: "assistant", responseId: "native-response", content: [{ type: "toolCall", id: "early" }] },
+			{ role: "toolResult", toolCallId: "early" },
+		]);
+	});
+
+	it.each(["missing", "conflicting"] as const)("refuses %s API identity for a native call", async (mode) => {
+		sdk.query.mockImplementation(({ prompt }: QueryInput) =>
+			mockQuery(
+				(async function* () {
+					await nextInput(prompt);
+					const content = [{ type: "tool_use", id: "same-call", name: "mcp__pi__probe", input: {} }];
+					yield assistant(content, null, { id: mode === "missing" ? "" : "response-one" });
+					if (mode === "conflicting") yield assistant(content, null, { id: "response-two" });
+					yield success("unreachable");
+				})(),
+			),
+		);
+		const { result } = await collect({ messages: [user("run")] }, { cwd: process.cwd() });
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain(
+			mode === "missing" ? "no API response identity" : "Conflicting native call identity",
+		);
+	});
+
+	it("refuses a missing native call ID before executing a tool", async () => {
+		const execute = vi.fn(async () => ({ content: [], details: {} }));
+		const tool: AgentTool = {
+			name: "probe",
+			label: "Probe",
+			description: "Probe",
+			parameters: Type.Object({}),
+			execute,
+		};
+		const close = vi.fn();
+		sdk.query.mockImplementation(({ prompt, options }: QueryInput) =>
+			mockQuery(
+				(async function* () {
+					await nextInput(prompt);
+					await options.mcpServers.pi.tools[0].handler({}, {});
+					yield success("unreachable");
+				})(),
+				close,
+			),
+		);
+		const { result } = await collect(
+			{ messages: [user("run")], tools: [tool] },
+			{ cwd: process.cwd(), tools: [tool] },
+		);
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("no native call ID");
+		expect(execute).not.toHaveBeenCalled();
+		expect(close).toHaveBeenCalled();
 	});
 
 	it("maps Pi's long cache retention to Claude Code's one-hour TTL", async () => {
@@ -249,7 +324,13 @@ describe("Claude Agent SDK stream", () => {
 							usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 900_000 },
 						},
 					);
-					mcpResult = await options.mcpServers.pi.tools[0].handler({ value: "hello" }, {});
+					yield assistant([
+						{ type: "tool_use", id: "native-echo", name: "mcp__pi__echo", input: { value: "hello" } },
+					]);
+					mcpResult = await options.mcpServers.pi.tools[0].handler(
+						{ value: "hello" },
+						{ _meta: { "claudecode/toolUseId": "native-echo" } },
+					);
 					yield assistant([{ type: "text", text: "Second assistant turn." }], null, {
 						usage: {
 							input_tokens: 2,
@@ -269,21 +350,37 @@ describe("Claude Agent SDK stream", () => {
 			tools: [tool],
 		});
 
-		expect(result.errorMessage).toBeUndefined();
-		expect(result.content).toEqual([
-			{ type: "thinking", thinking: "Considering the request.", thinkingSignature: "sig-1" },
-			{ type: "text", text: "First assistant turn." },
-			{ type: "text", text: "Second assistant turn." },
-		]);
-		expect(events.filter((event) => event.type === "assistant_message_commit")).toEqual([
-			expect.objectContaining({
+		// Rendering remains available, but unsupported native children cannot acquire a parent-only checkpoint.
+		expect(result.errorMessage).toContain("Native child checkpoints are not implemented");
+		expect(result.content).toEqual([{ type: "text", text: "Second assistant turn." }]);
+		expect(events.filter((event) => event.type === "assistant_message_commit")).toMatchObject([
+			{
 				alreadyStreamed: false,
-				message: expect.objectContaining({
-					content: [{ type: "text", text: "Subagent progress that must remain visible." }],
-				}),
-			}),
+				message: { content: [{ type: "text", text: "Subagent progress that must remain visible." }] },
+			},
+			{
+				message: {
+					content: [
+						{ type: "thinking", thinking: "Considering the request.", thinkingSignature: "sig-1" },
+						{ type: "text", text: "First assistant turn." },
+					],
+				},
+			},
+			{
+				message: {
+					role: "assistant",
+					content: [{ type: "toolCall", id: "native-echo", name: "echo", arguments: { value: "hello" } }],
+				},
+			},
+			{
+				message: {
+					role: "toolResult",
+					toolCallId: "native-echo",
+					content: [{ type: "text", text: "echoed: hello" }],
+				},
+			},
 		]);
-		expect(events.flatMap((event) => (event.type === "text_start" ? [event.contentIndex] : []))).toEqual([1, 2]);
+		expect(events.flatMap((event) => (event.type === "text_start" ? [event.contentIndex] : []))).toEqual([1, 0]);
 		expect(events.flatMap((event) => (event.type === "thinking_start" ? [event.contentIndex] : []))).toEqual([0]);
 		expect(result.usage).toMatchObject({
 			input: 2,
@@ -311,7 +408,7 @@ describe("Claude Agent SDK stream", () => {
 		]);
 		const start = events.find((event) => event.type === "tool_execution_start");
 		const end = events.find((event) => event.type === "tool_execution_end");
-		expect(start).toMatchObject({ toolName: "echo", args: { value: "hello" } });
+		expect(start).toMatchObject({ toolCallId: "native-echo", toolName: "echo", args: { value: "hello" } });
 		expect(end).toMatchObject({
 			toolName: "echo",
 			result: { content: [{ type: "text", text: "echoed: hello" }], details: { value: "hello" } },
@@ -412,7 +509,7 @@ describe("Claude Agent SDK stream", () => {
 		});
 	});
 
-	it("hands prompt overflow to Pi and clears the overfull transcript before replay", async () => {
+	it("hands prompt overflow to Pi and starts fresh from a user-only compaction summary", async () => {
 		const calls: QueryInput[] = [];
 		const prompts: string[] = [];
 		const close = vi.fn();
@@ -421,22 +518,13 @@ describe("Claude Agent SDK stream", () => {
 			return mockQuery(
 				(async function* () {
 					yield init("overfull-sdk-session");
-					let overfull = true;
+					let overfull = calls.length === 1;
 					while (true) {
 						const prompt = contentText(await nextInput(input.prompt));
 						prompts.push(prompt);
 						if (overfull) {
 							overfull = false;
 							yield promptTooLong("overfull-sdk-session");
-						} else if (prompt === "/clear") {
-							yield {
-								type: "conversation_reset",
-								new_conversation_id: "00000000-0000-0000-0000-000000000001",
-								uuid: "00000000-0000-0000-0000-000000000002",
-								session_id: "overfull-sdk-session",
-							} as SDKMessage;
-							yield init("fresh-sdk-session");
-							yield success("", "fresh-sdk-session");
 						} else {
 							yield assistant([{ type: "text", text: "recovered" }], null, {
 								id: "recovered-request",
@@ -459,19 +547,15 @@ describe("Claude Agent SDK stream", () => {
 			errorMessage: "Claude Agent SDK prompt is too long",
 		});
 		expect(isContextOverflow(first.result, fableModel().contextWindow)).toBe(true);
-		expect(close).not.toHaveBeenCalled();
+		expect(close).toHaveBeenCalledTimes(1);
 
 		const second = await collect(
 			{ messages: [user("Pi compaction summary")], tools: [] },
 			{ cwd: process.cwd(), systemPrompt: "system", sessionId: "claude-sdk-overflow" },
 		);
 		expect(second.result.content).toEqual([{ type: "text", text: "recovered" }]);
-		expect(calls).toHaveLength(1);
-		expect(prompts).toEqual([
-			"<user>\noverfull history\n</user>",
-			"/clear",
-			"<user>\nPi compaction summary\n</user>",
-		]);
+		expect(calls).toHaveLength(2);
+		expect(prompts).toEqual(["overfull history", "Pi compaction summary"]);
 	});
 
 	it("streams partial text and replaces superseded assistant frames", async () => {
@@ -641,6 +725,8 @@ describe("Claude Agent SDK stream", () => {
 				}),
 			}),
 		]);
+		// This renderer fixture deliberately leaves its native call unexecuted: it must not claim continuation.
+		expect(result.errorMessage).toContain("histories differ");
 		expect(result.content).toEqual([
 			{ type: "thinking", thinking: "The value is ready.", thinkingSignature: "after-signature" },
 			{ type: "text", text: "Final answer." },
@@ -705,10 +791,14 @@ describe("Claude Agent SDK stream", () => {
 
 		expect(events.filter((event) => event.type === "assistant_message_commit")).toEqual([
 			expect.objectContaining({
-				message: expect.objectContaining({ content: [{ type: "text", text: "Intermediate message." }] }),
+				message: expect.objectContaining({
+					responseId: "intermediate-message",
+					content: [{ type: "text", text: "Intermediate message." }],
+				}),
 			}),
 		]);
 		expect(result.content).toEqual([{ type: "text", text: "Final message." }]);
+		expect(result.responseId).toBe("final-message");
 	});
 
 	it("leaves an explicit tool-result ceiling to the operator", async () => {
@@ -812,9 +902,38 @@ describe("Claude Agent SDK stream", () => {
 
 		expect(second.result.content).toEqual([{ type: "text", text: "second reply" }]);
 		expect(sdk.query).toHaveBeenCalledTimes(1);
-		expect(prompts).toEqual(["<user>\nfirst\n</user>", "<user>\nsecond\n</user>"]);
+		expect(prompts).toEqual(["first", "second"]);
 		cleanupSessionResources("claude-sdk-persistent");
 		expect(close).toHaveBeenCalledTimes(1);
+	});
+
+	it("releases memory-only checkpoints on session cleanup, not on native process replacement", async () => {
+		sdk.query.mockImplementation(({ prompt }: QueryInput) =>
+			mockQuery(
+				(async function* () {
+					while (true) {
+						await nextInput(prompt);
+						yield assistant([{ type: "text", text: "reply" }]);
+						yield success("reply");
+					}
+				})(),
+			),
+		);
+		const context: Context = { messages: [user("start")] };
+		const options = { cwd: process.cwd(), sessionId: "claude-sdk-persistent" };
+		const first = await collect(context, { ...options, systemPrompt: "one" });
+		expect(first.result.stopReason).toBe("stop");
+		const continued: Context = { messages: [...context.messages, first.result, user("next")] };
+		const second = await collect(continued, { ...options, systemPrompt: "two" });
+		expect(second.result.stopReason).toBe("stop");
+		expect(sdk.query).toHaveBeenCalledTimes(2);
+		cleanupSessionResources(options.sessionId);
+		const released = await collect(
+			{ messages: [...continued.messages, second.result, user("after cleanup")] },
+			options,
+		);
+		expect(released.result.errorMessage).toContain("No exact native checkpoint");
+		expect(sdk.query).toHaveBeenCalledTimes(2);
 	});
 
 	it("restarts with resume when SDK configuration changes without Pi-context divergence", async () => {
@@ -828,8 +947,9 @@ describe("Claude Agent SDK stream", () => {
 					const message = await nextInput(input.prompt);
 					const text = contentText(message);
 					prompts.push(text);
-					yield assistant([{ type: "text", text: text.includes("second") ? "second reply" : "first reply" }]);
-					yield success("reply", "resume-sdk-session");
+					const reply = text.includes("second") ? "second reply" : "first reply";
+					yield assistant([{ type: "text", text: reply }]);
+					yield success(reply, "resume-sdk-session");
 				})(),
 			);
 		});
@@ -851,8 +971,9 @@ describe("Claude Agent SDK stream", () => {
 		});
 
 		expect(calls).toHaveLength(2);
-		expect(calls[1].options.resume).toBe("resume-sdk-session");
-		expect(prompts[1]).toBe("<user>\nsecond\n</user>");
+		expect(calls[1].options.resume).toEqual(expect.any(String));
+		expect(calls[1].options.resume).not.toBe("resume-sdk-session");
+		expect(prompts[1]).toBe("second");
 	});
 
 	it("replays transcript sections and tool changes while resuming conversational history", async () => {
@@ -875,7 +996,18 @@ describe("Claude Agent SDK stream", () => {
 				(async function* () {
 					yield init("resume-sdk-session");
 					prompts.push(contentText(await nextInput(input.prompt)));
-					await input.options.mcpServers.pi.tools[0].handler({}, {});
+					yield assistant([
+						{
+							type: "tool_use",
+							id: `call-${calls.length}`,
+							name: `mcp__pi__${input.options.mcpServers.pi.tools[0].name}`,
+							input: {},
+						},
+					]);
+					await input.options.mcpServers.pi.tools[0].handler(
+						{},
+						{ _meta: { "claudecode/toolUseId": `call-${calls.length}` } },
+					);
 					yield success("reply", "resume-sdk-session");
 				})(),
 			);
@@ -892,6 +1024,7 @@ describe("Claude Agent SDK stream", () => {
 			{
 				messages: [
 					...context.messages,
+					...first.committed,
 					first.result,
 					{
 						role: "system",
@@ -907,15 +1040,42 @@ describe("Claude Agent SDK stream", () => {
 			options,
 		);
 		expect(calls).toHaveLength(2);
-		expect(calls[0].options.systemPrompt).toBe("base\n\nbefore");
-		expect(calls[1].options.systemPrompt).toBe("base\n\nafter");
-		expect(calls[1].options.resume).toBe("resume-sdk-session");
+		expect(calls[0].options.systemPrompt).toMatchObject({ prompt: "base\n\nbefore", snapshot: false });
+		expect(calls[1].options.systemPrompt).toMatchObject({ prompt: "base\n\nafter", snapshot: false });
+		expect(calls[1].options.resume).toEqual(expect.any(String));
 		expect(calls[1].options.mcpServers.pi.tools.map((tool) => tool.name)).toEqual(["new"]);
 		expect(executed).toEqual(["old", "new"]);
-		expect(prompts).toEqual(["<user>\nfirst\n</user>", "<user>\nsecond\n</user>"]);
+		expect(prompts).toEqual(["first", "second"]);
 	});
 
-	it("falls back to a fresh process when the SDK does not confirm reset", async () => {
+	it("refuses modified assistant history instead of replaying it as user text", async () => {
+		sdk.query.mockImplementation(({ prompt }: QueryInput) =>
+			mockQuery(
+				(async function* () {
+					await nextInput(prompt);
+					yield assistant([{ type: "text", text: "original" }]);
+					yield success("original");
+				})(),
+			),
+		);
+		const context: Context = { messages: [user("start")] };
+		const first = await collect(context, { cwd: process.cwd() });
+		expect(first.result.stopReason).toBe("stop");
+		const second = await collect(
+			{
+				messages: [
+					...context.messages,
+					{ ...first.result, content: [{ type: "text", text: "altered" }] },
+					user("continue"),
+				],
+			},
+			{ cwd: process.cwd() },
+		);
+		expect(second.result.errorMessage).toContain("No exact native checkpoint");
+		expect(sdk.query).toHaveBeenCalledTimes(1);
+	});
+
+	it("uses a fresh process for a rewritten user-only conversation without sending clear", async () => {
 		const calls: QueryInput[] = [];
 		const prompts: string[] = [];
 		const close = vi.fn();
@@ -945,36 +1105,24 @@ describe("Claude Agent SDK stream", () => {
 
 		expect(calls).toHaveLength(2);
 		expect(calls[1].options.resume).toBeUndefined();
-		expect(prompts).toEqual(["<user>\noriginal\n</user>", "<user>\nrewritten\n</user>"]);
+		expect(prompts).toEqual(["original", "rewritten"]);
 		expect(close).toHaveBeenCalledTimes(1);
 	});
 
-	it("clears and reuses the SDK process after a history divergence", async () => {
+	it("resumes the replacement conversation after a subsequent configuration change", async () => {
 		const calls: QueryInput[] = [];
 		const prompts: string[] = [];
 		sdk.query.mockImplementation((input: QueryInput) => {
 			calls.push(input);
 			return mockQuery(
 				(async function* () {
-					let currentSessionId = input.options.resume ?? "divergence-sdk-session";
+					const currentSessionId = input.options.resume ?? "divergence-sdk-session";
 					yield init(currentSessionId);
 					while (true) {
 						const prompt = contentText(await nextInput(input.prompt));
 						prompts.push(prompt);
-						if (prompt === "/clear") {
-							yield {
-								type: "conversation_reset",
-								new_conversation_id: "00000000-0000-0000-0000-000000000003",
-								uuid: "00000000-0000-0000-0000-000000000004",
-								session_id: "divergence-sdk-session",
-							} as SDKMessage;
-							currentSessionId = "reset-sdk-session";
-							yield init(currentSessionId);
-							yield success("", currentSessionId);
-						} else {
-							yield assistant([{ type: "text", text: "reply" }]);
-							yield success("reply", currentSessionId);
-						}
+						yield assistant([{ type: "text", text: "reply" }]);
+						yield success("reply", currentSessionId);
 					}
 				})(),
 			);
@@ -1001,13 +1149,9 @@ describe("Claude Agent SDK stream", () => {
 			},
 		);
 
-		expect(calls).toHaveLength(2);
-		expect(calls[1].options.resume).toBe("reset-sdk-session");
-		expect(prompts).toEqual([
-			"<user>\noriginal\n</user>",
-			"/clear",
-			"<user>\nrewritten\n</user>",
-			"<user>\nafter reset\n</user>",
-		]);
+		expect(calls).toHaveLength(3);
+		expect(calls[1].options.resume).toBeUndefined();
+		expect(calls[2].options.resume).toEqual(expect.any(String));
+		expect(prompts).toEqual(["original", "rewritten", "after reset"]);
 	});
 });

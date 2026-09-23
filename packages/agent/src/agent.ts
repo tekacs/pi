@@ -707,8 +707,14 @@ export class Agent {
 		if (!signal) {
 			throw new Error("Agent listener invoked outside active run");
 		}
-		for (const listener of this.listeners) {
-			await listener(event, signal);
+		try {
+			for (const listener of this.listeners) await listener(event, signal);
+		} catch (error) {
+			if (event.type === "message_commit") {
+				const index = this._state.messages.lastIndexOf(event.message);
+				if (index >= 0) this._state.messages.splice(index, 1);
+			}
+			throw error;
 		}
 	}
 }
