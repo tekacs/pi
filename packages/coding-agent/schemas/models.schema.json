@@ -978,6 +978,11 @@
           "description": "Whether the exact model accepts system or developer messages after the conversation has started. When false, later system messages are folded into the leading system message.",
           "default": false
         },
+        "supportsMidConvoEffort": {
+          "type": "boolean",
+          "description": "Whether the exact model transport supports changing reasoning effort mid-conversation.",
+          "default": false
+        },
         "supportsMidConvoToolAdditions": {
           "type": "boolean",
           "description": "Whether system messages can introduce additional tools mid-conversation. Requires supportsMidConvoSystemMessages. The generated catalog enables this for capable models.",

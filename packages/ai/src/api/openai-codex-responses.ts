@@ -40,6 +40,12 @@ import {
 } from "../utils/transcript.ts";
 import { uuidv7 } from "../utils/uuid.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
+import {
+	getMidConvoBaseline,
+	getMidConvoEffort,
+	pinMidConvoEffort,
+	responsesEffortUpdate,
+} from "./mid-convo-effort.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import {
 	convertResponsesMessages,
@@ -283,6 +289,9 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			const nextBody = await options?.onPayload?.(body, model);
 			if (nextBody !== undefined) {
 				body = nextBody as RequestBody;
+			}
+			if (model.compat?.supportsMidConvoEffort) {
+				output.providerThinkingLevel = getMidConvoEffort(body.input, body.reasoning);
 			}
 			const websocketRequestId = codexSessionId || uuidv7();
 			// Codex expects an originator on every request; it is not attribution.
@@ -560,6 +569,7 @@ function buildRequestBody(
 		includeSystemPrompt: false,
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
+		supportsMidConvoEffort: model.compat?.supportsMidConvoEffort ?? false,
 		supportsAdditionalTools,
 		supportsToolSearch,
 		toolOptions: { strict: null, supportsStrictMode, supportsOpenAIGrammarTools },
@@ -611,6 +621,9 @@ function buildRequestBody(
 		}
 	} else if (model.reasoning && model.thinkingLevelMap?.off !== null) {
 		body.reasoning = { effort: model.thinkingLevelMap?.off ?? "none" };
+	}
+	if (model.compat?.supportsMidConvoEffort) {
+		pinMidConvoEffort(messages, body.reasoning, getMidConvoBaseline(context.messages, model), responsesEffortUpdate);
 	}
 
 	return body;
