@@ -35,6 +35,7 @@ export class ClaudeHistory {
 	private members = new WeakMap<object, { position: number; snapshot: object }>();
 	private segments = new Map<Boundary, readonly object[]>();
 	private tail = Promise.resolve();
+	private completion = new AbortController();
 	private failure?: Error;
 	private children = false;
 	private count = 0;
@@ -151,8 +152,14 @@ export class ClaudeHistory {
 		if (this.failure) throw this.failure;
 	}
 
-	async finish(message: AssistantMessage, sessionId: string, cursor: string): Promise<ClaudeCheckpoint> {
+	/** Called only after the SDK has flushed its mirror and delivered the terminal result. */
+	async settle(): Promise<void> {
+		this.completion.abort();
 		await this.flush();
+	}
+
+	async finish(message: AssistantMessage, sessionId: string, cursor: string): Promise<ClaudeCheckpoint> {
+		await this.settle();
 		if (this.children) throw new Error("Native child checkpoints are not implemented; exact continuation refused");
 		if (message.content.some((member) => !this.sources.has(member)))
 			throw new Error("Assistant output has no authoritative native frame; exact continuation refused");
@@ -182,7 +189,7 @@ export class ClaudeHistory {
 
 	private async bind(boundary: Boundary, sessionId: string, cursor: string): Promise<ClaudeCheckpoint | undefined> {
 		if (this.children || boundary.stamp.count <= this.count || !this.complete(boundary.stamp.count)) return undefined;
-		const key = await this.store.wait(sessionId, cursor, this.options.signal);
+		const key = await this.store.wait(sessionId, cursor, this.options.signal, this.completion.signal);
 		if (this.cursor && this.store.position(key, cursor) < this.store.position(key, this.cursor)) return undefined;
 		const entries = this.store.prefix(key, cursor, this.cursor);
 		const calls = new Set<string>();
