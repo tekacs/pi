@@ -7,7 +7,7 @@ Target: `harness.md`. Maintenance-bounded reconstruction after rejecting the pre
 - Stable committed-snapshot rendering; canonical original-ID tool calls/results; persistence acknowledgements; duplicate, conflicting and unresolved execution refusal.
 - Claude-owned durable storage, immutable checkpoint bindings, genuine response IDs, canonical-prefix validation, and fresh-namespace native resume. `/clear`, XML replay and resume-failure replay are removed.
 - Real AgentSession + disk v3 + installed native executable against a loopback fake model: cross-project result forks, intermediate signed/redacted-thinking forks, independent cold and concurrent warm continuation, no duplicate effects or branch leakage, prompt replacement, missing-state refusal, and tool/blocked/after-hook/mixed termination.
-- Publication refuses incomplete batches, failed canonical acknowledgements, uncommitted native frames, late snapshot mutation, unsupported child histories and fallback text without native frames.
+- Publication refuses unresolved calls inside the selected prefix, failed canonical acknowledgements, uncommitted native frames, late snapshot mutation, unsupported child histories and fallback text without native frames.
 - Final evidence: `harness-final-tests` **138 tests / 16 files**, exit 0; `harness-final-check` full `npm run check`, including browser smoke, exit 0 with no formatting fixes. Earlier unchanged Agent/AI seam evidence: 43 Agent tests and 26 AI tests, exit 0. Counts from overlapping earlier matrices are not additive.
 - Generic EventStream, session format v3, parsing, migrations and navigation remain unchanged. SessionManager has only the approved opt-in durable append change (47-line diff), no checkpoint records/indexes.
 
@@ -37,10 +37,16 @@ A long streamed tool call exposed an invalid 65-second publication deadline: a p
 
 Focused evidence: **44 tests / 5 files**, including simulated two-minute mirror delay, missing-at-settlement and process-close refusal, real native continuation/interruption, and terminal error/abort rendering. Full root check/browser smoke passed with no fixes. Local installation, Node/Bun consumer smoke tests and installed version/help checks passed. No tracked generated-source drift remains.
 
+## Verified streaming-effect prefixes
+
+Publication certifies exact closed call/result prefixes independently of the rest of the model response. Whole-response stop and batch-seal bookkeeping is removed. Unresolved effects inside either selected prefix still prevent continuation.
+
+Focused evidence: **31 tests / 5 files** and full root check/browser smoke passed. The real native regression executes a tool while the same response streams another call, interrupts on native result delivery before transcript flush, then cold-resumes the original and a result fork with the effect executed exactly once and the unfinished call excluded. Unit tests retain unmatched-native-call and unresolved-canonical-call refusal and incremental scan coverage. Existing stored call/result records also passed read-only certification without tool execution or transcript modification. Local installation and Node/Bun SDK, CLI and launcher checks passed. No tracked generated-source drift remains.
+
 ## Explicit cut and operating limits
 
 - Native child checkpoint vectors are not implemented. Native child tools remain disabled; observed children prevent exact checkpoint publication, and child resources prevent parent-only staging. They are never silently flattened.
-- Partial/unresolved tool batches are not resumable boundaries. Missing native checkpoints/resources, including older Claude conversations without native state, fail closed rather than replaying text. Foreign-provider history takes the explicit structured-import path.
+- Prefixes containing unresolved tool calls are not resumable boundaries. Missing native checkpoints/resources, including older Claude conversations without native state, fail closed rather than replaying text. Foreign-provider history takes the explicit structured-import path.
 - Moving between profiles requires native resources as well as canonical session files. Native resources live at `agentDir/harness/claude`; memory-only sessions retain them only in process.
 
 The preceding implementation is installed locally via `release:local`. Node/Bun consumer smoke tests and both installed launchers' `--version`/`--help` passed (0.87.1). Its installation regenerated two upstream image-catalog entries; the catalog's 11 tests and post-install root check passed. The interrupted-continuation repair is also installed; its Node/Bun SDK and CLI consumer smoke tests and both installed launchers' version/help checks passed. Catalog regeneration introduced no semantic source changes.
