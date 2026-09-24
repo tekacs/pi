@@ -1,7 +1,7 @@
 import type { AssistantMessage, Message, ToolResultMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { bindCheckpoint, ClaudePrefix } from "../src/core/claude-checkpoints.ts";
-import { emptyAttempt, importHistory, selectHistory } from "../src/core/claude-import.ts";
+import { displayOnly, importHistory, selectHistory } from "../src/core/claude-import.ts";
 import { ClaudeStore } from "../src/core/claude-store.ts";
 
 function assistant(content: AssistantMessage["content"], native = false): AssistantMessage {
@@ -115,7 +115,7 @@ describe("structured foreign-provider import", () => {
 		expect(selected.checkpoint).toBeUndefined();
 		expect(selected.count).toBe(2);
 		expect(selected.imported).toEqual([user, foreign]);
-		expect(emptyAttempt(failed)).toBe(true);
+		expect(displayOnly(failed)).toBe(true);
 		expect(prefix.stamp(assistant([]))).toEqual(new ClaudePrefix(messages).stamp(assistant([])));
 	});
 
@@ -130,6 +130,45 @@ describe("structured foreign-provider import", () => {
 		expect(selected.checkpoint?.cursor).toBe("cursor");
 		expect(selected.imported).toEqual(suffix);
 		expect(selected.count).toBe(5);
+	});
+
+	it("retains interrupted output in the fingerprint without importing it or requiring its checkpoint", async () => {
+		const store = new ClaudeStore();
+		const partial = {
+			...assistant([{ type: "thinking", thinking: "unfinished", thinkingSignature: "" }], true),
+			stopReason: "aborted" as const,
+		};
+		const messages = [user, partial, user];
+		const prefix = new ClaudePrefix([]);
+		const first = selectHistory(store, messages, prefix);
+		expect(first.checkpoint).toBeUndefined();
+		expect(first.count).toBe(0);
+		expect(messages.slice(first.count).filter((message) => !displayOnly(message))).toEqual([user, user]);
+		expect(importHistory(messages)).toMatchObject([{ type: "user" }]);
+		expect(JSON.stringify(importHistory(messages))).not.toContain("unfinished");
+		const complete = assistant([{ type: "text", text: "complete after interruption" }], true);
+		prefix.add(complete);
+		expect(prefix.stamp(complete)).toEqual(new ClaudePrefix([...messages, complete]).stamp(complete));
+		await store.append({ projectKey: "project", sessionId: "session" }, [{ type: "assistant", uuid: "cursor" }]);
+		await bindCheckpoint(store, prefix.stamp(complete), "session", "cursor");
+		const selected = selectHistory(store, [...messages, complete, user, partial, user], new ClaudePrefix([]));
+		expect(selected.checkpoint?.cursor).toBe("cursor");
+		expect(selected.count).toBe(4);
+		expect(selected.imported).toEqual([]);
+	});
+
+	it("never skips calls, nonempty errors or foreign interruptions, or bypasses a missing completed boundary", () => {
+		const partial = { ...assistant([{ type: "text", text: "unfinished" }], true), stopReason: "aborted" as const };
+		for (const unsafe of [
+			{ ...call(), api: "claude-agent-sdk", stopReason: "aborted" as const },
+			{ ...partial, stopReason: "error" as const },
+			{ ...partial, api: "openai-responses" },
+		])
+			expect(displayOnly(unsafe)).toBe(false);
+		const complete = assistant([{ type: "text", text: "complete" }], true);
+		expect(() =>
+			selectHistory(new ClaudeStore(), [user, complete, user, partial, user], new ClaudePrefix([])),
+		).toThrow("No exact native checkpoint");
 	});
 
 	it("does not use foreign output or empty failure shells to bypass missing native state", () => {

@@ -34,7 +34,7 @@ import { CLAUDE_AGENT_SDK_API, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH } from "./clau
 import { ClaudeCalls, mcpName } from "./claude-calls.ts";
 import { type ClaudeCheckpoint, ClaudePrefix } from "./claude-checkpoints.ts";
 import { ClaudeHistory } from "./claude-history.ts";
-import { emptyAttempt, importHistory, selectHistory, userContent } from "./claude-import.ts";
+import { displayOnly, importHistory, selectHistory, userContent } from "./claude-import.ts";
 import { ClaudeMemory, ClaudeStore } from "./claude-store.ts";
 import { runAgentTool } from "./harness.ts";
 import { HarnessOutput } from "./harness-output.ts";
@@ -68,6 +68,7 @@ type SdkTurn = {
 };
 
 type SdkSession = {
+	lifetime: AbortController;
 	input: SdkInput;
 	query: Query;
 	turn: { current?: SdkTurn };
@@ -264,7 +265,7 @@ async function startSdkInvocation(
 		existing?.config === config.fingerprint &&
 		checkpoint !== undefined &&
 		existing.checkpoint?.hash === checkpoint.hash;
-	const messages = history.slice(count).filter((message) => !emptyAttempt(message));
+	const messages = history.slice(count).filter((message) => !displayOnly(message));
 	if (!messages.length) throw new Error("Claude Agent SDK received no new messages for a persistent session");
 	const inputs = messages.map((message, index): SDKUserMessage => {
 		if (message.role !== "user") throw new Error("Claude continuation accepts only new user messages");
@@ -291,7 +292,8 @@ async function startSdkInvocation(
 		session.failure = error instanceof Error ? error : new Error(String(error));
 		closeSdkSession(session);
 	};
-	const native = new ClaudeHistory(session.store, prefix, { cursor, signal: options.signal, fail });
+	// Cancelling inference must not cancel certification of already acknowledged effects.
+	const native = new ClaudeHistory(session.store, prefix, { cursor, signal: session.lifetime.signal, fail });
 	session.turn.current = {
 		model,
 		options,
@@ -319,6 +321,7 @@ function createSdkSession(
 	const turn: { current?: SdkTurn } = {};
 	const sdkTools = createSdkTools(getCurrentTools(context.messages), () => turn.current);
 	return {
+		lifetime: new AbortController(),
 		input,
 		query: query({
 			prompt: input,
@@ -391,6 +394,7 @@ async function readSdkTurn(
 			if (message.type === "result") {
 				if (message.subtype === "success" && message.num_turns === 0) continue;
 				session.turn.current?.calls.finish();
+				await session.turn.current?.native.flush();
 				return message;
 			}
 			if (
@@ -466,6 +470,7 @@ function discardSdkInvocation(sessionId: string | undefined, session: SdkSession
 }
 
 function closeSdkSession(session: SdkSession): void {
+	session.lifetime.abort();
 	session.turn.current?.calls.close();
 	session.input.close();
 	session.query.close();

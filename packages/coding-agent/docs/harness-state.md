@@ -23,10 +23,18 @@ The Claude-local adapter imports structured foreign-provider history on first en
 
 `claude-switching-final-matrix`: **154 tests / 18 files**, exit 0 on Node 25.6.1. Real AgentSession model switches verify first entry, failed-switch retry, tool-result images and normalized IDs, native result forks, switching away/back while preserving signed/redacted native reasoning, independent cold resume, and refusal after native-resource loss. `claude-switching-final-check`: full root check/browser smoke, exit 0, no fixes. An initial older-runtime run timed out in three existing mocked-fs tests; the complete pinned-runtime matrix passed without changing those tests. The repair is installed locally; Node/Bun consumer smoke tests and installed launcher version/help checks passed. Catalog regeneration was formatting-only; no generated-source drift remains.
 
+## Verified interrupted continuation
+
+Ordinary abort→continue failed because Pi persisted partial thinking with stopReason aborted, while native storage retained only the user request/interruption marker after its valid earlier checkpoint. The adapter incorrectly treated that partial display record as a required native boundary.
+
+The Claude-local selector omits explicit interrupted display output from native input while retaining it in canonical history and its fingerprint. Publication belongs to the native process lifetime, not the inference cancellation signal, and drains before closing. Missing completed boundaries and uncertified effects remain strict.
+
+The interruption matrix passed **163 tests / 19 files**, including real native first-turn/later-turn thinking and text interruption, continuation immediately or after cold reopen, navigation back to interrupted output, completed effects executed once, and refusal of unresolved effects. Full root check/browser smoke passed with no formatting changes. Read-only selection against the originally affected session found its valid earlier native checkpoint and pending users, with the canonical file unchanged.
+
 ## Explicit cut and operating limits
 
 - Native child checkpoint vectors are not implemented. Native child tools remain disabled; observed children prevent exact checkpoint publication, and child resources prevent parent-only staging. They are never silently flattened.
 - Partial/unresolved tool batches are not resumable boundaries. Missing native checkpoints/resources, including older Claude conversations without native state, fail closed rather than replaying text. Foreign-provider history takes the explicit structured-import path.
 - Moving between profiles requires native resources as well as canonical session files. Native resources live at `agentDir/harness/claude`; memory-only sessions retain them only in process.
 
-Committed in `d1c34478` and installed locally via `release:local`. Node/Bun consumer smoke tests and both installed launchers' `--version`/`--help` passed (0.87.1). Installation regenerated two upstream image-catalog entries; the catalog's 11 tests and post-install root check passed. No push performed. The rejected candidate is archived at `/Users/amar/.local/state/pi-recovery/claude-harness-7e71ab98/`; its historical test counts do not certify this reconstruction.
+The preceding implementation is installed locally via `release:local`. Node/Bun consumer smoke tests and both installed launchers' `--version`/`--help` passed (0.87.1). Its installation regenerated two upstream image-catalog entries; the catalog's 11 tests and post-install root check passed. The interrupted-continuation repair is also installed; its Node/Bun SDK and CLI consumer smoke tests and both installed launchers' version/help checks passed. Catalog regeneration introduced no semantic source changes.
