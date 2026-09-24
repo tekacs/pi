@@ -3648,6 +3648,7 @@ export class InteractiveMode {
 					}
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
+						if (!this.streamingComponent) this.addMessageToChat({ ...this.streamingMessage, content: [] });
 						if (!errorMessage) {
 							errorMessage = this.streamingMessage.errorMessage || "Error";
 						}

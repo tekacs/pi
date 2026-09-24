@@ -31,6 +31,12 @@ The Claude-local selector omits explicit interrupted display output from native 
 
 The interruption matrix passed **163 tests / 19 files**, including real native first-turn/later-turn thinking and text interruption, continuation immediately or after cold reopen, navigation back to interrupted output, completed effects executed once, and refusal of unresolved effects. Full root check/browser smoke passed with no formatting changes. Read-only selection against the originally affected session found its valid earlier native checkpoint and pending users, with the canonical file unchanged.
 
+## Verified mirror timing and terminal errors
+
+A long streamed tool call exposed an invalid 65-second publication deadline: a preceding assistant frame could be observed before the native runtime persisted the completed response. Publication now waits on native durability until the SDK's flushed terminal result, not elapsed time. A missing record at settlement, process closure or persistence failure still fails explicitly. Terminal errors render even after the preceding segment has been committed.
+
+Focused evidence: **44 tests / 5 files**, including simulated two-minute mirror delay, missing-at-settlement and process-close refusal, real native continuation/interruption, and terminal error/abort rendering. Full root check/browser smoke passed with no fixes. Local installation, Node/Bun consumer smoke tests and installed version/help checks passed. No tracked generated-source drift remains.
+
 ## Explicit cut and operating limits
 
 - Native child checkpoint vectors are not implemented. Native child tools remain disabled; observed children prevent exact checkpoint publication, and child resources prevent parent-only staging. They are never silently flattened.
