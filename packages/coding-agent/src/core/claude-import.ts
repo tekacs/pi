@@ -7,13 +7,15 @@ import { mcpName } from "./claude-calls.ts";
 import { type ClaudePrefix, selectCheckpoint } from "./claude-checkpoints.ts";
 import type { ClaudeStore } from "./claude-store.ts";
 
-/** Failed entry attempts carry no native state and must not prevent retrying a provider switch. */
-export function emptyAttempt(message: Message): boolean {
+/** Retained in Pi and its fingerprint, but neither native resume boundaries nor native input. */
+export function displayOnly(message: Message): boolean {
+	if (message.role !== "assistant") return false;
+	if (!message.responseId && message.content.length === 0)
+		return message.stopReason === "error" || message.stopReason === "aborted";
 	return (
-		message.role === "assistant" &&
-		!message.responseId &&
-		message.content.length === 0 &&
-		(message.stopReason === "error" || message.stopReason === "aborted")
+		message.api === CLAUDE_AGENT_SDK_API &&
+		message.stopReason === "aborted" &&
+		!message.content.some((block) => block.type === "toolCall")
 	);
 }
 
@@ -23,7 +25,7 @@ export function selectHistory(store: ClaudeStore, history: readonly Message[], p
 	let native = -1;
 	let boundary = -1;
 	for (const [index, message] of history.entries()) {
-		if (emptyAttempt(message) || message.role === "user" || message.role === "system") continue;
+		if (displayOnly(message) || message.role === "user" || message.role === "system") continue;
 		let own: boolean;
 		if (message.role === "assistant") {
 			own = message.api === CLAUDE_AGENT_SDK_API;
@@ -76,7 +78,7 @@ export function importHistory(history: readonly Message[], parent: string | null
 		else messages.push({ role, content });
 	};
 	for (const message of history) {
-		if (message.role === "system" || emptyAttempt(message)) continue;
+		if (message.role === "system" || displayOnly(message)) continue;
 		if (message.role === "user") {
 			if (outstanding) throw new Error("Cannot import unresolved tool effects across a user boundary");
 			const content = userContent(message.content);
