@@ -8,6 +8,10 @@ interface NativeCall {
 	input: unknown;
 }
 
+export function mcpName(name: string): string {
+	return name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
+}
+
 /** MCP dispatch may overtake transcript consumption; native IDs join the two paths. */
 export class ClaudeCalls {
 	private observed = new Map<string, NativeCall>();
