@@ -23,4 +23,4 @@ The fixup returns published checkpoints directly, reuses one incoming-history di
 - Partial/unresolved tool batches are not resumable boundaries. Missing checkpoints/resources, including older or imported conversations without native state, fail closed rather than replaying text.
 - Moving between profiles requires native resources as well as canonical session files. Native resources live at `agentDir/harness/claude`; memory-only sessions retain them only in process.
 
-Local commit and installation are authorized. No push requested. The rejected candidate is archived at `/Users/amar/.local/state/pi-recovery/claude-harness-7e71ab98/`; its historical test counts do not certify this reconstruction.
+Committed in `d1c34478` and installed locally via `release:local`. Node/Bun consumer smoke tests and both installed launchers' `--version`/`--help` passed (0.87.1). Installation regenerated two upstream image-catalog entries; the catalog's 11 tests and post-install root check passed. No push performed. The rejected candidate is archived at `/Users/amar/.local/state/pi-recovery/claude-harness-7e71ab98/`; its historical test counts do not certify this reconstruction.
