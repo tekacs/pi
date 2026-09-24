@@ -15,10 +15,7 @@ export type NativeBlock =
 
 /** Real native protocol, deterministic loopback responses, no provider credentials. */
 export async function nativeEndpoint(
-	respond: (
-		body: NativeRequest,
-		index: number,
-	) => NativeBlock[] | { partial: Extract<NativeBlock, { type: "text" | "thinking" }> },
+	respond: (body: NativeRequest, index: number) => NativeBlock[] | { before?: NativeBlock[]; partial: NativeBlock },
 ) {
 	const requests: NativeRequest[] = [];
 	const server = createServer(async (request, response) => {
@@ -38,7 +35,7 @@ export async function nativeEndpoint(
 		requests.push(body);
 		const reply = respond(body, requests.length);
 		const partial = !Array.isArray(reply);
-		const content = Array.isArray(reply) ? reply : [reply.partial];
+		const content = Array.isArray(reply) ? reply : [...(reply.before ?? []), reply.partial];
 		response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
 		const emit = (type: string, value: Record<string, unknown>) =>
 			response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`);
@@ -55,6 +52,7 @@ export async function nativeEndpoint(
 			},
 		});
 		for (const [index, block] of content.entries()) {
+			const unfinished = partial && index === content.length - 1;
 			emit("content_block_start", {
 				index,
 				content_block:
@@ -70,16 +68,28 @@ export async function nativeEndpoint(
 				emit("content_block_delta", { index, delta: { type: "text_delta", text: block.text } });
 			if (block.type === "thinking") {
 				emit("content_block_delta", { index, delta: { type: "thinking_delta", thinking: block.thinking } });
-				if (!partial)
+				if (!unfinished)
 					emit("content_block_delta", { index, delta: { type: "signature_delta", signature: block.signature } });
 			}
 			if (block.type === "tool_use")
 				emit("content_block_delta", {
 					index,
-					delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) },
+					delta: {
+						type: "input_json_delta",
+						partial_json: unfinished ? JSON.stringify(block.input).slice(0, -1) : JSON.stringify(block.input),
+					},
 				});
-			// Keep the HTTP stream unfinished until the real native runtime interrupts it.
-			if (partial) return;
+			// Keep generating an unfinished tool argument, rather than simulate a stalled HTTP connection.
+			if (unfinished) {
+				if (block.type === "tool_use") {
+					const tokens = setInterval(
+						() => emit("content_block_delta", { index, delta: { type: "input_json_delta", partial_json: " " } }),
+						10,
+					);
+					response.once("close", () => clearInterval(tokens));
+				}
+				return;
+			}
 			emit("content_block_stop", { index });
 		}
 		emit("message_delta", {

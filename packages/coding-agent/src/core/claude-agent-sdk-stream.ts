@@ -343,7 +343,6 @@ function createSdkSession(
 								async (input) => {
 									if (input.hook_event_name !== "PostToolBatch") return {};
 									const ids = input.tool_calls.map((call) => call.tool_use_id);
-									turn.current?.native.seal(ids);
 									return turn.current?.calls.terminates(ids)
 										? { continue: false, stopReason: "Pi tool batch requested termination" }
 										: {};
@@ -830,7 +829,6 @@ function appendSdkStreamEvent(
 		return;
 	}
 	if (event.type === "message_stop") {
-		if (state.activeMessageId) state.native?.stop(state.activeMessageId);
 		if (state.active) {
 			const empty = [...state.active.blocks.values()].filter(
 				(block) =>
