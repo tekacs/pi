@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ClaudeHistory } from "../src/core/claude-history.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { nativeEndpoint } from "./claude-native-fixture.ts";
 import { nativeSession, settled } from "./claude-session-fixture.ts";
@@ -121,6 +122,72 @@ describe("interrupted native Claude continuation", () => {
 		},
 		60_000,
 	);
+
+	it("resumes a durable result while the same native response is still streaming its next call", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-claude-streaming-effect-"));
+		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+		const endpoint = await nativeEndpoint((_body, index) =>
+			index === 1
+				? {
+						before: [{ type: "tool_use", id: "early-call", name: "mcp__pi__probe", input: {} }],
+						partial: { type: "tool_use", id: "unfinished-call", name: "mcp__pi__probe", input: {} },
+					}
+				: [{ type: "text", text: "Continued without repeating the effect." }],
+		);
+		cleanups.push(endpoint.close);
+		let effects = 0;
+		let interrupt = () => {};
+		const observe = ClaudeHistory.prototype.result;
+		// Native outcome delivery precedes transcript flush; waiting for the flush to abort is circular.
+		const mirror = vi.spyOn(ClaudeHistory.prototype, "result").mockImplementation(function (
+			this: ClaudeHistory,
+			sessionId,
+			cursor,
+			ids,
+		) {
+			observe.call(this, sessionId, cursor, ids);
+			if (ids?.includes("early-call")) interrupt();
+		});
+		cleanups.push(() => mirror.mockRestore());
+		const tool: AgentTool = {
+			name: "probe",
+			label: "Probe",
+			description: "Local effect",
+			parameters: Type.Object({}),
+			async execute(id) {
+				expect(id).toBe("early-call");
+				effects++;
+				return { content: [{ type: "text", text: "Completed streaming effect." }], details: {} };
+			},
+		};
+		const manager = SessionManager.create(root, join(root, "sessions"));
+		const state = await host(manager, root, endpoint.url, tool);
+		interrupt = () => state.agent.abort();
+		await state.session.prompt("Execute the first tool while generating the next.");
+		mirror.mockRestore();
+		expect(state.session.messages.at(-1)).toMatchObject({ role: "assistant", stopReason: "aborted" });
+		const result = manager
+			.getEntries()
+			.find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+		if (!result) throw new Error("Completed result absent");
+		expect(effects).toBe(1);
+		state.close();
+		const cold = await host(SessionManager.open(manager.getSessionFile()!), root, endpoint.url, tool);
+		await cold.session.prompt("Stop after the completed effect.");
+		settled(cold.session);
+		const fork = SessionManager.open(manager.getSessionFile()!).createBranchedSession(result.id)!;
+		const branch = await host(SessionManager.open(fork), root, endpoint.url, tool);
+		await branch.session.prompt("Continue the result fork.");
+		settled(branch.session);
+		for (const request of endpoint.requests.slice(1)) {
+			const input = JSON.stringify(request.messages);
+			expect(input).toContain("early-call");
+			expect(input).toContain("Completed streaming effect.");
+			expect(input).not.toContain("unfinished-call");
+		}
+		expect(effects).toBe(1);
+		expect(endpoint.requests).toHaveLength(3);
+	}, 60_000);
 
 	it("refuses an interrupted unresolved tool effect on warm retry and cold reopen", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-claude-unresolved-"));
