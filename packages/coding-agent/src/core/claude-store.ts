@@ -188,23 +188,26 @@ export class ClaudeStore implements SessionStore {
 		);
 	}
 
-	wait(sessionId: string, uuid: string, signal?: AbortSignal): Promise<SessionKey> {
+	/** Wait for durability while the producer is live; settlement proves no missing record can still arrive. */
+	wait(sessionId: string, uuid: string, signal?: AbortSignal, settled?: AbortSignal): Promise<SessionKey> {
 		return new Promise((resolve, reject) => {
-			const deadline = AbortSignal.timeout(65_000);
-			const aborted = AbortSignal.any([this.memory.signal, deadline, ...(signal ? [signal] : [])]);
+			const aborted = AbortSignal.any([this.memory.signal, ...(signal ? [signal] : [])]);
 			const inspect = () => {
 				const key = [...this.logs.values()].find(
 					(log) => log.key.sessionId === sessionId && !log.key.subpath && log.ids.has(uuid),
 				)?.key;
-				if (!this.failure && !aborted.aborted && !key) return;
+				if (!this.failure && !aborted.aborted && !settled?.aborted && !key) return;
 				this.listeners.delete(inspect);
 				aborted.removeEventListener("abort", inspect);
+				settled?.removeEventListener("abort", inspect);
 				if (this.failure || aborted.aborted)
-					reject(this.failure ?? new Error("Native mirror did not reach the observed boundary"));
-				else resolve(structuredClone(key!));
+					reject(this.failure ?? new Error("Native mirror closed before reaching the observed boundary"));
+				else if (!key) reject(new Error("Native mirror is missing the observed boundary after turn completion"));
+				else resolve(structuredClone(key));
 			};
 			this.listeners.add(inspect);
 			aborted.addEventListener("abort", inspect, { once: true });
+			settled?.addEventListener("abort", inspect, { once: true });
 			inspect();
 		});
 	}

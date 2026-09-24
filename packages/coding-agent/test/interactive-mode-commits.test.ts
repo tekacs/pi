@@ -48,6 +48,15 @@ function view() {
 		settingsManager: { getShowImages: () => false, getImageWidthCells: () => undefined },
 		sessionManager: { getCwd: () => process.cwd() },
 		toolOutputExpanded: false,
+		session: { retryAttempt: 0 },
+		bugReportHintShown: false,
+		addMessageToChat: Reflect.get(InteractiveMode.prototype, "addMessageToChat") as (
+			message: AssistantMessage,
+		) => void,
+		maybeSuggestBugReport: Reflect.get(InteractiveMode.prototype, "maybeSuggestBugReport") as (
+			message: AssistantMessage,
+		) => void,
+		suggestBugReport: Reflect.get(InteractiveMode.prototype, "suggestBugReport") as () => void,
 		maybeShowThinkingDropNotice: vi.fn(),
 		maybeShowCacheMissNotice: vi.fn(),
 	};
@@ -65,6 +74,25 @@ function view() {
 beforeEach(() => initTheme("dark"));
 
 describe("committed assistant segments", () => {
+	test.each(["error", "aborted"] as const)(
+		"renders terminal %s after the preceding segment was committed",
+		async (reason) => {
+			const ui = view();
+			const output = assistant([{ type: "text", text: "Now writing the large file." }]);
+			await ui.send({ type: "message_start", message: output });
+			await ui.send({ type: "message_commit", message: structuredClone(output) });
+			output.content = [];
+			output.stopReason = reason;
+			output.errorMessage = "Native mirror is missing the observed boundary after turn completion";
+			await ui.send({ type: "message_end", message: output });
+			const text = ui.text();
+			const error = reason === "error" ? output.errorMessage : "Operation aborted";
+			expect(text.split("Now writing the large file.")).toHaveLength(2);
+			expect(text.split(error)).toHaveLength(2);
+			if (reason === "error") expect(text.indexOf(error)).toBeLessThan(text.indexOf("If this looks like a pi bug"));
+		},
+	);
+
 	test.each(["thinking", "text"] as const)(
 		"finalizes %s from the commit after queued partial mutation",
 		async (kind) => {
