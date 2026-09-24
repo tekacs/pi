@@ -37,11 +37,11 @@ const result = (id: string): ToolResultMessage => ({
 	timestamp: 3,
 });
 
-function fixture() {
+function fixture(signal?: AbortSignal) {
 	const store = new ClaudeStore();
 	const key = { projectKey: "fixture", sessionId: randomUUID() };
 	const messages: Message[] = [{ role: "user", content: randomUUID(), timestamp: 1 }];
-	const history = new ClaudeHistory(store, new ClaudePrefix(messages));
+	const history = new ClaudeHistory(store, new ClaudePrefix(messages), { signal });
 	const record = (
 		message: AssistantMessage | ToolResultMessage,
 		members?: readonly object[],
@@ -71,6 +71,56 @@ function fixture() {
 }
 
 describe("Claude checkpoint publication", () => {
+	it("allows observed output to wait through a long generation before native persistence", async () => {
+		vi.useFakeTimers();
+		const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), ms);
+			return controller.signal;
+		});
+		try {
+			const f = fixture();
+			const member = { type: "text" as const, text: "Now writing the large file." };
+			f.history.observe(f.key.sessionId, "delayed", [member]);
+			f.record(assistant([{ ...member }]), [member]);
+			let outcome = "pending";
+			const pending = f.history.flush().then(
+				() => {
+					outcome = "done";
+				},
+				() => {
+					outcome = "failed";
+				},
+			);
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(outcome).toBe("pending");
+			await f.store.append(f.key, [{ type: "assistant", uuid: "delayed", message: { content: [member] } }]);
+			await pending;
+			expect(outcome).toBe("done");
+			await f.history.settle();
+			expect(selectCheckpoint(f.store, f.messages)?.cursor).toBe("delayed");
+		} finally {
+			timeout.mockRestore();
+			vi.useRealTimers();
+		}
+	});
+
+	it.each(["settled", "closed"] as const)(
+		"rejects an absent mirror boundary when the producer is %s",
+		async (mode) => {
+			const lifetime = new AbortController();
+			const f = fixture(lifetime.signal);
+			const member = { type: "text" as const, text: "Observed but never persisted." };
+			f.history.observe(f.key.sessionId, "missing", [member]);
+			f.record(assistant([{ ...member }]), [member]);
+			if (mode === "closed") lifetime.abort();
+			await expect(mode === "settled" ? f.history.settle() : f.history.flush()).rejects.toThrow(
+				mode === "settled" ? "after turn completion" : "closed before reaching",
+			);
+			expect(() => selectCheckpoint(f.store, f.messages)).toThrow("No exact native checkpoint");
+		},
+	);
+
 	it("certifies long loops by disjoint intervals rather than rescanning the turn", async () => {
 		const f = fixture();
 		const scanned: string[] = [];

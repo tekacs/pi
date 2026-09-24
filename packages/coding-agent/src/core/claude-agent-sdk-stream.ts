@@ -394,7 +394,7 @@ async function readSdkTurn(
 			if (message.type === "result") {
 				if (message.subtype === "success" && message.num_turns === 0) continue;
 				session.turn.current?.calls.finish();
-				await session.turn.current?.native.flush();
+				await session.turn.current?.native.settle();
 				return message;
 			}
 			if (
