@@ -17,10 +17,16 @@ The fixup returns published checkpoints directly, reuses one incoming-history di
 
 `harness-fixup-tests`: **142 tests / 16 files**, exit 0, including real native continuation, 64 sequential rounds with no repeated record scans, a 64-call batch with no scan before all native results, and memory cleanup/late-write fencing. `harness-fixup-final-check`: full root check/browser smoke, exit 0, no fixes applied. The only change after the test run was an explicit public `AbortSignal` type annotation.
 
+## Verified provider transitions
+
+The Claude-local adapter imports structured foreign-provider history on first entry, and imports only the foreign suffix after an exact native prefix on return. Canonical IDs remain unchanged, historical tools never execute, readable foreign thinking converts to text and opaque foreign signatures do not transfer. Empty failed-switch shells allow retry; unresolved exchanges and missing native checkpoints still fail explicitly.
+
+`claude-switching-final-matrix`: **154 tests / 18 files**, exit 0 on Node 25.6.1. Real AgentSession model switches verify first entry, failed-switch retry, tool-result images and normalized IDs, native result forks, switching away/back while preserving signed/redacted native reasoning, independent cold resume, and refusal after native-resource loss. `claude-switching-final-check`: full root check/browser smoke, exit 0, no fixes. An initial older-runtime run timed out in three existing mocked-fs tests; the complete pinned-runtime matrix passed without changing those tests. The repair is installed locally; Node/Bun consumer smoke tests and installed launcher version/help checks passed. Catalog regeneration was formatting-only; no generated-source drift remains.
+
 ## Explicit cut and operating limits
 
 - Native child checkpoint vectors are not implemented. Native child tools remain disabled; observed children prevent exact checkpoint publication, and child resources prevent parent-only staging. They are never silently flattened.
-- Partial/unresolved tool batches are not resumable boundaries. Missing checkpoints/resources, including older or imported conversations without native state, fail closed rather than replaying text.
+- Partial/unresolved tool batches are not resumable boundaries. Missing native checkpoints/resources, including older Claude conversations without native state, fail closed rather than replaying text. Foreign-provider history takes the explicit structured-import path.
 - Moving between profiles requires native resources as well as canonical session files. Native resources live at `agentDir/harness/claude`; memory-only sessions retain them only in process.
 
 Committed in `d1c34478` and installed locally via `release:local`. Node/Bun consumer smoke tests and both installed launchers' `--version`/`--help` passed (0.87.1). Installation regenerated two upstream image-catalog entries; the catalog's 11 tests and post-install root check passed. No push performed. The rejected candidate is archived at `/Users/amar/.local/state/pi-recovery/claude-harness-7e71ab98/`; its historical test counts do not certify this reconstruction.

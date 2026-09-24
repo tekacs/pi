@@ -265,15 +265,25 @@ export class ClaudeStore implements SessionStore {
 		key: SessionKey,
 		cursor: string,
 		signal?: AbortSignal,
-	): Promise<{
-		resume: string;
-		resumeSessionAt: string;
-		sessionStore: SessionStore;
-	}> {
+		imported: readonly SessionStoreEntry[] = [],
+	): Promise<ReturnType<ClaudeStore["stage"]>> {
 		if (this.writer) throw new Error("Native fork requires a fresh writer");
 		if (key.subpath || (await this.listSubkeys(key)).length)
 			throw new Error("Native child cuts are not implemented; exact continuation refused");
 		const records = await this.cut(key, cursor, signal);
+		return this.stage([...records, ...imported]);
+	}
+
+	/** Stage an existing native cut or a structured provider import with the same writer contract. */
+	stage(entries: readonly SessionStoreEntry[]): {
+		resume: string;
+		resumeSessionAt: string;
+		sessionStore: SessionStore;
+	} {
+		if (this.writer) throw new Error("Native fork requires a fresh writer");
+		const records = structuredClone([...entries]);
+		const cursor = records.at(-1)?.uuid;
+		if (!cursor) throw new Error("Native staging requires a final record identity");
 		const resume = randomUUID();
 		let project: string | undefined;
 		let staging: Promise<void> | undefined;

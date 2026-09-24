@@ -14,6 +14,12 @@ Harnesses receive existing read-only session identity and entry information. The
 
 ## Native continuation
 
+Entering the Claude harness from another provider imports structured canonical history: user and assistant roles, text/images, and completed tool exchanges retain their roles. A return to Claude preserves the last exact native prefix and imports only the intervening foreign suffix. Historical tools are records, never execution requests. This import is a provider transition, not a fallback for damaged or missing Claude checkpoints.
+
+Imported tool IDs are deterministically made Anthropic-compatible and tool names use the same MCP mapping as live calls. Readable foreign reasoning becomes assistant text; opaque foreign reasoning and provider-specific signatures do not transfer. The canonical Pi messages, including their original IDs, remain unchanged. Unresolved, duplicate or mismatched tool exchanges are refused before starting native inference. Empty failed-attempt assistant shells without response identities do not turn a failed first switch into an apparent native resume. Actual Claude history still requires its exact checkpoint.
+
+The first genuine Claude response after import binds the entire canonical prefix to native storage, so later cold resumes and forks use the ordinary checkpoint path. Imports reuse fresh-namespace staging; they add no session records or shared-core APIs.
+
 Claude binds its native state to canonical boundaries in harness-owned storage. A fork at a completed tool result preserves the exchange and permits independent cold continuation of both branches without repeating the tool. Missing or mismatched native state fails explicitly; text replay is not exact continuation.
 
 Claude carries genuine native API response IDs in the existing `AssistantMessage.responseId` field. A tool result locates that ID through its original call ID and the preceding canonical call. Native IDs identify checkpoint resources; a canonical-prefix fingerprint validates the selected boundary rather than guessing conversation identity. Normal v3 forks copy those references with their messages, including a fork exactly at a result, without new Pi metadata records or fork hooks.
