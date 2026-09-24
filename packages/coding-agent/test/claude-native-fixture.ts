@@ -14,7 +14,12 @@ export type NativeBlock =
 	| { type: "tool_use"; id: string; name: string; input: Record<string, unknown> };
 
 /** Real native protocol, deterministic loopback responses, no provider credentials. */
-export async function nativeEndpoint(respond: (body: NativeRequest, index: number) => NativeBlock[]) {
+export async function nativeEndpoint(
+	respond: (
+		body: NativeRequest,
+		index: number,
+	) => NativeBlock[] | { partial: Extract<NativeBlock, { type: "text" | "thinking" }> },
+) {
 	const requests: NativeRequest[] = [];
 	const server = createServer(async (request, response) => {
 		let raw = "";
@@ -31,7 +36,9 @@ export async function nativeEndpoint(respond: (body: NativeRequest, index: numbe
 		}
 		const body: NativeRequest = JSON.parse(raw);
 		requests.push(body);
-		const content = respond(body, requests.length);
+		const reply = respond(body, requests.length);
+		const partial = !Array.isArray(reply);
+		const content = Array.isArray(reply) ? reply : [reply.partial];
 		response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
 		const emit = (type: string, value: Record<string, unknown>) =>
 			response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...value })}\n\n`);
@@ -63,13 +70,16 @@ export async function nativeEndpoint(respond: (body: NativeRequest, index: numbe
 				emit("content_block_delta", { index, delta: { type: "text_delta", text: block.text } });
 			if (block.type === "thinking") {
 				emit("content_block_delta", { index, delta: { type: "thinking_delta", thinking: block.thinking } });
-				emit("content_block_delta", { index, delta: { type: "signature_delta", signature: block.signature } });
+				if (!partial)
+					emit("content_block_delta", { index, delta: { type: "signature_delta", signature: block.signature } });
 			}
 			if (block.type === "tool_use")
 				emit("content_block_delta", {
 					index,
 					delta: { type: "input_json_delta", partial_json: JSON.stringify(block.input) },
 				});
+			// Keep the HTTP stream unfinished until the real native runtime interrupts it.
+			if (partial) return;
 			emit("content_block_stop", { index });
 		}
 		emit("message_delta", {
