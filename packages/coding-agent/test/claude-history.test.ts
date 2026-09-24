@@ -135,8 +135,6 @@ describe("Claude checkpoint publication", () => {
 			await f.nativeCall(id);
 			f.record(call(id));
 			f.record(result(id));
-			f.history.seal([id]);
-			f.history.stop("native-api-response");
 			await f.nativeResult(id);
 			await f.history.flush();
 			expect(selectCheckpoint(f.store, f.messages)?.cursor).toBe(`result-${id}`);
@@ -154,8 +152,6 @@ describe("Claude checkpoint publication", () => {
 			f.record(call(id));
 		}
 		for (const id of ids) f.record(result(id));
-		f.history.seal(ids);
-		f.history.stop("native-api-response");
 		const prefix = vi.spyOn(f.store, "prefix");
 		for (const id of ids.slice(0, -1)) {
 			await f.nativeResult(id);
@@ -168,7 +164,7 @@ describe("Claude checkpoint publication", () => {
 		expect(selectCheckpoint(f.store, f.messages)?.cursor).toBe("result-63");
 	});
 
-	it("binds only a complete parallel batch, even when the first result overtakes later frames", async () => {
+	it("binds a closed prefix before later calls in the same response exist", async () => {
 		const f = fixture();
 		await f.nativeCall("a");
 		f.record(call("a"));
@@ -179,13 +175,10 @@ describe("Claude checkpoint publication", () => {
 		f.record(call("b"));
 		f.record(result("b"));
 		const complete = [...f.messages];
-		f.history.seal(["a", "b"]);
 		await f.nativeResult("b");
 		await f.history.flush();
-		expect(() => selectCheckpoint(f.store, complete)).toThrow("No exact native checkpoint");
-		f.history.stop("native-api-response");
 		await f.finish("result-b");
-		expect(() => selectCheckpoint(f.store, partial)).toThrow("No exact native checkpoint");
+		expect(selectCheckpoint(f.store, partial)?.cursor).toBe("result-a");
 		expect(selectCheckpoint(f.store, complete)?.cursor).toBe("result-b");
 		expect(selectCheckpoint(f.store, f.messages)?.cursor).toBe("result-b");
 	});
@@ -262,19 +255,30 @@ describe("Claude checkpoint publication", () => {
 		expect(() => selectCheckpoint(f.store, f.messages)).toThrow("No exact native checkpoint");
 	});
 
-	it("rejects final publication without a closed batch or with future uncommitted native text", async () => {
+	it("refuses a native call inside the cut that has no canonical result", async () => {
 		const f = fixture();
 		await f.nativeCall("a");
 		f.record(call("a"));
 		f.record(result("a"));
+		await f.nativeCall("unrepresented");
+		await f.nativeResult("a");
+		await f.history.flush();
+		expect(() => selectCheckpoint(f.store, f.messages)).toThrow("No exact native checkpoint");
+	});
+
+	it("rejects unresolved calls or uncommitted text inside the native cut", async () => {
+		const f = fixture();
+		await f.nativeCall("a");
+		f.record(call("a"));
+		f.record(result("a"));
+		await f.nativeCall("unresolved");
+		f.record(call("unresolved"));
 		await f.nativeResult("a");
 		await expect(f.finish("result-a")).rejects.toThrow("histories differ");
 		const g = fixture();
 		await g.nativeCall("a");
 		g.record(call("a"));
 		g.record(result("a"));
-		g.history.seal(["a"]);
-		g.history.stop("native-api-response");
 		await g.store.append(g.key, [
 			{ type: "assistant", uuid: "future", message: { content: [{ type: "text", text: "not canonical" }] } },
 		]);

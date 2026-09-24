@@ -17,7 +17,6 @@ interface Source {
 }
 interface Call {
 	position: number;
-	responseId: string;
 	result?: number;
 }
 
@@ -27,8 +26,6 @@ export class ClaudeHistory {
 	private prefix: ClaudePrefix;
 	private options: { cursor?: string; signal?: AbortSignal; fail?: (error: Error) => void };
 	private calls = new Map<string, Call>();
-	private batches = new Map<string, ReadonlySet<string>>();
-	private stopped = new Set<string>();
 	private pending: Boundary[] = [];
 	private frames = new Map<string, Source>();
 	private sources = new WeakMap<object, Source>();
@@ -43,7 +40,6 @@ export class ClaudeHistory {
 	private certifiedTools = 0;
 	private nativeResults = new Set<string>();
 	private cursor?: string;
-	private lastResult?: { sessionId: string; cursor: string };
 
 	constructor(store: ClaudeStore, prefix: ClaudePrefix, options: ClaudeHistory["options"] = {}) {
 		this.store = store;
@@ -59,7 +55,7 @@ export class ClaudeHistory {
 			for (const block of message.content)
 				if (block.type === "toolCall") {
 					if (this.calls.has(block.id)) throw new Error("Duplicate canonical native call");
-					this.calls.set(block.id, { position: boundary.stamp.count, responseId: boundary.stamp.responseId });
+					this.calls.set(block.id, { position: boundary.stamp.count });
 					boundary.tools = ++this.tools;
 				}
 		} else {
@@ -90,25 +86,8 @@ export class ClaudeHistory {
 		this.bindSegments();
 	}
 
-	/** A batch is closed only when both PostToolBatch and message_stop have arrived. */
-	seal(ids: readonly string[]): void {
-		const batch = new Set(ids);
-		for (const id of batch) {
-			const previous = this.batches.get(id);
-			if (previous && !isDeepStrictEqual(previous, batch)) throw new Error("Conflicting native batch identity");
-			this.batches.set(id, batch);
-		}
-		if (this.lastResult) this.result(this.lastResult.sessionId, this.lastResult.cursor);
-	}
-
-	stop(responseId: string): void {
-		this.stopped.add(responseId);
-		if (this.lastResult) this.result(this.lastResult.sessionId, this.lastResult.cursor);
-	}
-
 	result(sessionId: string, cursor: string, ids: readonly string[] = []): void {
 		for (const id of ids) this.nativeResults.add(id);
-		this.lastResult = { sessionId, cursor };
 		const boundary = this.pending.at(-1);
 		if (boundary && boundary.tools - this.certifiedTools === this.nativeResults.size)
 			this.track(() => this.bind(boundary, sessionId, cursor));
@@ -173,17 +152,8 @@ export class ClaudeHistory {
 	}
 
 	private complete(position: number): boolean {
-		const checked = new Set<ReadonlySet<string>>();
-		for (const [id, call] of this.calls) {
-			if (call.position > position) continue;
-			const batch = this.batches.get(id);
-			if (call.result === undefined || call.result > position || !this.stopped.has(call.responseId) || !batch)
-				return false;
-			if (!checked.has(batch)) {
-				checked.add(batch);
-				for (const member of batch) if ((this.calls.get(member)?.position ?? Infinity) > position) return false;
-			}
-		}
+		for (const call of this.calls.values())
+			if (call.position <= position && (call.result === undefined || call.result > position)) return false;
 		return true;
 	}
 
@@ -227,7 +197,6 @@ export class ClaudeHistory {
 		for (const [id, call] of this.calls)
 			if (call.position <= this.count) {
 				this.calls.delete(id);
-				this.batches.delete(id);
 				this.nativeResults.delete(id);
 			}
 		this.pending = this.pending.filter((entry) => entry.stamp.count > this.count);
