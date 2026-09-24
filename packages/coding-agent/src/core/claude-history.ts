@@ -25,7 +25,7 @@ interface Call {
 export class ClaudeHistory {
 	private store: ClaudeStore;
 	private prefix: ClaudePrefix;
-	private options: { base?: ClaudeCheckpoint; signal?: AbortSignal; fail?: (error: Error) => void };
+	private options: { cursor?: string; signal?: AbortSignal; fail?: (error: Error) => void };
 	private calls = new Map<string, Call>();
 	private batches = new Map<string, ReadonlySet<string>>();
 	private stopped = new Set<string>();
@@ -48,7 +48,7 @@ export class ClaudeHistory {
 		this.store = store;
 		this.prefix = prefix;
 		this.options = options;
-		this.cursor = options.base?.cursor;
+		this.cursor = options.cursor;
 	}
 
 	record(message: Commit, members?: readonly object[], receipt = Promise.resolve()): void {

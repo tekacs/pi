@@ -21,7 +21,6 @@ import type {
 	ToolResultMessage,
 	TranscriptContext,
 	Usage,
-	UserMessage,
 } from "@earendil-works/pi-ai";
 import {
 	calculateCost,
@@ -32,9 +31,10 @@ import {
 import { z } from "zod/v4";
 import { getPackageDir } from "../config.ts";
 import { CLAUDE_AGENT_SDK_API, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH } from "./claude-agent-sdk-models.ts";
-import { ClaudeCalls } from "./claude-calls.ts";
-import { type ClaudeCheckpoint, ClaudePrefix, selectCheckpoint } from "./claude-checkpoints.ts";
+import { ClaudeCalls, mcpName } from "./claude-calls.ts";
+import { type ClaudeCheckpoint, ClaudePrefix } from "./claude-checkpoints.ts";
 import { ClaudeHistory } from "./claude-history.ts";
+import { emptyAttempt, importHistory, selectHistory, userContent } from "./claude-import.ts";
 import { ClaudeMemory, ClaudeStore } from "./claude-store.ts";
 import { runAgentTool } from "./harness.ts";
 import { HarnessOutput } from "./harness-output.ts";
@@ -256,18 +256,21 @@ async function startSdkInvocation(
 	}
 	const store = new ClaudeStore(options.nativeRoot ?? memory);
 	const prefix = new ClaudePrefix([]);
-	const checkpoint = selectCheckpoint(store, history, prefix);
+	const { checkpoint, count, imported } = selectHistory(store, history, prefix);
+	const seed = importHistory(imported, checkpoint?.cursor);
+	const cursor = seed.at(-1)?.uuid ?? checkpoint?.cursor;
 	const continues =
+		imported.length === 0 &&
 		existing?.config === config.fingerprint &&
 		checkpoint !== undefined &&
 		existing.checkpoint?.hash === checkpoint.hash;
-	const messages = history.slice(checkpoint?.count ?? 0);
+	const messages = history.slice(count).filter((message) => !emptyAttempt(message));
 	if (!messages.length) throw new Error("Claude Agent SDK received no new messages for a persistent session");
 	const inputs = messages.map((message, index): SDKUserMessage => {
 		if (message.role !== "user") throw new Error("Claude continuation accepts only new user messages");
 		return {
 			type: "user",
-			message: { role: "user", content: sdkUserContent(message.content) },
+			message: { role: "user", content: userContent(message.content) },
 			parent_tool_use_id: null,
 			client_composed: true,
 			shouldQuery: index === messages.length - 1,
@@ -278,15 +281,17 @@ async function startSdkInvocation(
 	else {
 		if (existing) discardSdkInvocation(sessionId, existing);
 		const continuation = checkpoint
-			? await store.fork(checkpoint.key, checkpoint.cursor, options.signal)
-			: { sessionStore: store };
+			? await store.fork(checkpoint.key, checkpoint.cursor, options.signal, seed)
+			: seed.length
+				? store.stage(seed)
+				: { sessionStore: store };
 		session = createSdkSession(model, context, options, config, store, continuation);
 	}
 	const fail = (error: unknown) => {
 		session.failure = error instanceof Error ? error : new Error(String(error));
 		closeSdkSession(session);
 	};
-	const native = new ClaudeHistory(session.store, prefix, { base: checkpoint, signal: options.signal, fail });
+	const native = new ClaudeHistory(session.store, prefix, { cursor, signal: options.signal, fail });
 	session.turn.current = {
 		model,
 		options,
@@ -583,7 +588,7 @@ function createSdkTools(
 	getTurn: () => SdkTurn | undefined,
 ): SdkMcpToolDefinition<z.ZodRawShape>[] {
 	return activeTools.map((toolDefinition) => ({
-		name: toMcpToolName(toolDefinition.name),
+		name: mcpName(toolDefinition.name),
 		description: toolDefinition.description,
 		inputSchema: zodShapeFromTypeBox(toolDefinition.parameters),
 		handler: async (_args, extra) => {
@@ -601,7 +606,7 @@ function createSdkTools(
 					.safeParse(extra);
 				if (!metadata.success) throw new Error("Claude MCP request has no native call ID; execution refused");
 				const call = await turn.calls.wait(metadata.data._meta["claudecode/toolUseId"]);
-				if (call.name !== `mcp__pi__${toMcpToolName(toolDefinition.name)}`)
+				if (call.name !== `mcp__pi__${mcpName(toolDefinition.name)}`)
 					throw new Error("Native call names a different tool");
 				const execution = await runAgentTool(agentTool, call.input, {
 					model: turn.model,
@@ -801,22 +806,6 @@ function toolResultToMcp(result: AgentToolResult<unknown>, isError: boolean) {
 		// Claude Code passes structuredContent to the model instead of content.
 		// Pi details belong to the UI; content is the model-facing tool result.
 	};
-}
-
-function sdkUserContent(content: UserMessage["content"]): SDKUserMessage["message"]["content"] {
-	if (typeof content === "string") return content;
-	return content.map((part) =>
-		part.type === "text"
-			? { type: "text", text: part.text }
-			: {
-					type: "image",
-					source: {
-						type: "base64",
-						data: part.data,
-						media_type: z.enum(["image/png", "image/jpeg", "image/gif", "image/webp"]).parse(part.mimeType),
-					},
-				},
-	);
 }
 
 function appendSdkStreamEvent(
@@ -1282,10 +1271,6 @@ function createEmptyUsage(): Usage {
 		totalTokens: 0,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
-}
-
-function toMcpToolName(toolName: string): string {
-	return toolName.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128);
 }
 
 export function isClaudeAgentSdkModel(model: Model<any>): boolean {
