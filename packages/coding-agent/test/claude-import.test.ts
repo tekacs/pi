@@ -35,7 +35,23 @@ const result = (id = "call|foreign"): ToolResultMessage => ({
 	timestamp: 3,
 });
 
-describe("structured foreign-provider import", () => {
+describe("structured conversation reconstruction", () => {
+	it.each([true, false])("closes uncertain effects truthfully for native=%s without altering history", (native) => {
+		const interrupted = {
+			...call(),
+			api: native ? "claude-agent-sdk" : "openai-responses",
+			stopReason: "aborted" as const,
+		};
+		const history = [user, interrupted, user];
+		const original = structuredClone(history);
+		const reconstructed = JSON.stringify(importHistory(history));
+		expect(reconstructed).toContain("outcome unknown");
+		expect(reconstructed).toContain("Changes may already have occurred");
+		expect(reconstructed).toContain("Do not automatically repeat");
+		expect(reconstructed).toContain("call|foreign");
+		expect(history).toEqual(original);
+	});
+
 	it("keeps roles, tool pairing and images without changing canonical IDs or treating signatures as portable", () => {
 		const messages: Message[] = [
 			user,
@@ -102,8 +118,28 @@ describe("structured foreign-provider import", () => {
 			[call(), { ...result(), toolName: "different" }],
 			[call("a"), call("b"), result("a"), assistant([{ type: "text", text: "too early" }]), result("b")],
 		].map((messages) => [messages]),
-	)("refuses unresolved or malformed tool exchanges", (messages) => {
-		expect(() => importHistory(messages as Message[])).toThrow(/Cannot import/);
+	)("reconstructs unresolved or malformed tool exchanges as complete, non-executable history", (messages) => {
+		const original = structuredClone(messages);
+		const records = importHistory(messages as Message[]);
+		const pending = new Set<string>();
+		for (const record of records) {
+			const native = record.message as {
+				role: string;
+				content: { type: string; id?: string; tool_use_id?: string }[];
+			};
+			if (native.role === "assistant") expect(pending.size).toBe(0);
+			for (const block of native.content) {
+				if (block.type === "tool_use") {
+					expect(pending.has(block.id!)).toBe(false);
+					pending.add(block.id!);
+				}
+				if (block.type === "tool_result") {
+					expect(pending.delete(block.tool_use_id!)).toBe(true);
+				}
+			}
+		}
+		expect(pending.size).toBe(0);
+		expect(messages).toEqual(original);
 	});
 
 	it("selects first entry without needing a foreign response ID and retries empty failed switch attempts", () => {
@@ -132,7 +168,7 @@ describe("structured foreign-provider import", () => {
 		expect(selected.count).toBe(5);
 	});
 
-	it("retains interrupted output in the fingerprint without importing it or requiring its checkpoint", async () => {
+	it("retains interrupted content without its signature and includes it in the fingerprint", async () => {
 		const store = new ClaudeStore();
 		const partial = {
 			...assistant([{ type: "thinking", thinking: "unfinished", thinkingSignature: "" }], true),
@@ -142,10 +178,10 @@ describe("structured foreign-provider import", () => {
 		const prefix = new ClaudePrefix([]);
 		const first = selectHistory(store, messages, prefix);
 		expect(first.checkpoint).toBeUndefined();
-		expect(first.count).toBe(0);
-		expect(messages.slice(first.count).filter((message) => !displayOnly(message))).toEqual([user, user]);
-		expect(importHistory(messages)).toMatchObject([{ type: "user" }]);
-		expect(JSON.stringify(importHistory(messages))).not.toContain("unfinished");
+		expect(first.count).toBe(2);
+		expect(messages.slice(first.count)).toEqual([user]);
+		expect(JSON.stringify(importHistory(messages))).toContain("unfinished");
+		expect(JSON.stringify(importHistory(messages))).toContain("may be incomplete");
 		const complete = assistant([{ type: "text", text: "complete after interruption" }], true);
 		prefix.add(complete);
 		expect(prefix.stamp(complete)).toEqual(new ClaudePrefix([...messages, complete]).stamp(complete));
@@ -153,11 +189,11 @@ describe("structured foreign-provider import", () => {
 		await bindCheckpoint(store, prefix.stamp(complete), "session", "cursor");
 		const selected = selectHistory(store, [...messages, complete, user, partial, user], new ClaudePrefix([]));
 		expect(selected.checkpoint?.cursor).toBe("cursor");
-		expect(selected.count).toBe(4);
-		expect(selected.imported).toEqual([]);
+		expect(selected.count).toBe(6);
+		expect(selected.imported).toEqual([user, partial]);
 	});
 
-	it("never skips calls, nonempty errors or foreign interruptions, or bypasses a missing completed boundary", () => {
+	it("reconstructs calls, nonempty errors and foreign interruptions when native state is missing", () => {
 		const partial = { ...assistant([{ type: "text", text: "unfinished" }], true), stopReason: "aborted" as const };
 		for (const unsafe of [
 			{ ...call(), api: "claude-agent-sdk", stopReason: "aborted" as const },
@@ -166,22 +202,22 @@ describe("structured foreign-provider import", () => {
 		])
 			expect(displayOnly(unsafe)).toBe(false);
 		const complete = assistant([{ type: "text", text: "complete" }], true);
-		expect(() =>
-			selectHistory(new ClaudeStore(), [user, complete, user, partial, user], new ClaudePrefix([])),
-		).toThrow("No exact native checkpoint");
+		const selected = selectHistory(new ClaudeStore(), [user, complete, user, partial, user], new ClaudePrefix([]));
+		expect(selected.checkpoint).toBeUndefined();
+		expect(selected.imported).toEqual([user, complete, user, partial]);
 	});
 
-	it("does not use foreign output or empty failure shells to bypass missing native state", () => {
+	it("continues without native metadata using public history instead of claiming an exact checkpoint", () => {
 		const native = assistant([{ type: "text", text: "native" }], true);
 		const foreign = assistant([{ type: "text", text: "foreign" }]);
 		for (const messages of [
 			[user, native, user],
 			[user, native, user, foreign, user],
 		]) {
-			expect(() => selectHistory(new ClaudeStore(), messages, new ClaudePrefix([]))).toThrow(
-				"No exact native checkpoint",
-			);
+			const selected = selectHistory(new ClaudeStore(), messages, new ClaudePrefix([]));
+			expect(selected.checkpoint).toBeUndefined();
+			expect(JSON.stringify(importHistory(selected.imported))).toContain("native");
 		}
-		expect(() => importHistory([native])).toThrow("Native Claude history requires its checkpoint");
+		expect(JSON.stringify(importHistory([native]))).toContain("native");
 	});
 });

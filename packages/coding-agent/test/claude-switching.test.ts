@@ -187,19 +187,20 @@ describe("real Pi provider transitions into Claude", () => {
 		settled(cold.session);
 		expect(effects).toBe(3);
 		expect(endpoint.requests).toHaveLength(6);
-		// A foreign suffix must not hide loss of an existing native prefix.
+		// Native resource loss reduces fidelity, not the ability to continue.
 		await cold.session.setModel(foreignModel);
 		await cold.session.prompt("Foreign turn before loss");
 		settled(cold.session);
 		rmSync(join(root, "native"), { recursive: true, force: true });
 		await cold.session.setModel(nativeModel);
-		await cold.session.prompt("Do not silently reconstruct missing native state");
-		expect(cold.session.messages.at(-1)).toMatchObject({
-			role: "assistant",
-			stopReason: "error",
-			errorMessage: expect.stringContaining("No exact native checkpoint"),
-		});
-		expect(endpoint.requests).toHaveLength(6);
+		await cold.session.prompt("Continue from canonical history after native state loss");
+		settled(cold.session);
+		expect(endpoint.requests).toHaveLength(7);
+		const recovered = JSON.stringify(endpoint.requests[6].messages);
+		expect(recovered).toContain("Native private reasoning.");
+		expect(recovered).not.toContain("native-signature");
+		expect(recovered).not.toContain("native-opaque-reasoning");
+		expect(recovered).toContain("Foreign turn before loss");
 		expect(effects).toBe(4);
 	}, 60_000);
 });
