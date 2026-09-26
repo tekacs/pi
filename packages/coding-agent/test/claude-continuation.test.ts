@@ -119,16 +119,17 @@ describe("Pi sessions backed by native Claude checkpoints", () => {
 		branch.close();
 		original.close();
 		earlier.close();
-		// A canonical file is not a portable native transcript by itself.
+		// Without native resources, canonical history still reconstructs the conversation.
 		rmSync(join(root, "native"), { recursive: true, force: true });
 		const missing = await host(SessionManager.open(source), root, endpoint.url, tool);
 		await missing.session.prompt("Continue without native resources");
-		expect(missing.session.messages.at(-1)).toMatchObject({
-			role: "assistant",
-			stopReason: "error",
-			errorMessage: expect.stringContaining("No exact native checkpoint"),
-		});
-		expect(endpoint.requests).toHaveLength(8);
+		settled(missing.session);
+		expect(endpoint.requests).toHaveLength(9);
+		const rebuilt = JSON.stringify(endpoint.requests[8].messages);
+		expect(rebuilt).toContain("Completed call-1-0.");
+		expect(rebuilt).toContain("Native final 2.");
+		expect(rebuilt).not.toContain("fixture-signature");
+		expect(rebuilt).not.toContain("opaque-thinking-payload");
 		expect(effects).toBe(4);
 	}, 60_000);
 
