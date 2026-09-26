@@ -82,13 +82,21 @@ export function selectCheckpoint(
 	if (message.role !== "assistant" && message.role !== "toolResult")
 		throw new Error("Invalid native continuation boundary");
 	const stamp = prefix.stamp(message);
+	const checkpoint = readCheckpoint(store, stamp);
+	if (!checkpoint) throw new Error("No exact native checkpoint for this boundary; text replay was not attempted");
+	for (const message of history.slice(boundary + 1)) prefix.add(message);
+	return checkpoint;
+}
+
+export function readCheckpoint(
+	store: ClaudeStore,
+	stamp: Pick<ClaudeCheckpoint, "responseId" | "count" | "hash">,
+): ClaudeCheckpoint | undefined {
 	const stored = store.binding(checkpointId(stamp));
-	if (stored === undefined)
-		throw new Error("No exact native checkpoint for this boundary; text replay was not attempted");
+	if (stored === undefined) return undefined;
 	const checkpoint = format.parse(stored);
 	if (checkpoint.hash !== stamp.hash || checkpoint.responseId !== stamp.responseId || checkpoint.count !== stamp.count)
 		throw new Error("Native checkpoint does not match canonical history");
-	for (const message of history.slice(boundary + 1)) prefix.add(message);
 	return checkpoint;
 }
 

@@ -258,8 +258,8 @@ async function startSdkInvocation(
 	const store = new ClaudeStore(options.nativeRoot ?? memory);
 	const prefix = new ClaudePrefix([]);
 	const { checkpoint, count, imported } = selectHistory(store, history, prefix);
-	const seed = importHistory(imported, checkpoint?.cursor);
-	const cursor = seed.at(-1)?.uuid ?? checkpoint?.cursor;
+	let seed = importHistory(imported, checkpoint?.cursor);
+	let cursor = seed.at(-1)?.uuid ?? checkpoint?.cursor;
 	const continues =
 		imported.length === 0 &&
 		existing?.config === config.fingerprint &&
@@ -281,11 +281,20 @@ async function startSdkInvocation(
 	if (continues && existing) session = existing;
 	else {
 		if (existing) discardSdkInvocation(sessionId, existing);
-		const continuation = checkpoint
-			? await store.fork(checkpoint.key, checkpoint.cursor, options.signal, seed)
-			: seed.length
-				? store.stage(seed)
-				: { sessionStore: store };
+		let continuation: Parameters<typeof createSdkSession>[5];
+		try {
+			continuation = checkpoint
+				? await store.fork(checkpoint.key, checkpoint.cursor, options.signal, seed)
+				: seed.length
+					? store.stage(seed)
+					: { sessionStore: store };
+		} catch (error) {
+			if (options.signal?.aborted) throw error;
+			// Pre-inference only: no historical effects execute and no failed query is retried.
+			seed = importHistory(history.slice(0, count));
+			cursor = seed.at(-1)?.uuid;
+			continuation = seed.length ? store.stage(seed) : { sessionStore: store };
+		}
 		session = createSdkSession(model, context, options, config, store, continuation);
 	}
 	const fail = (error: unknown) => {

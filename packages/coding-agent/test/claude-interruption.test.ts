@@ -96,7 +96,8 @@ describe("interrupted native Claude continuation", () => {
 			expect(resumed).toContain("Original interrupted question.");
 			expect(resumed.match(/Original interrupted question\./g)).toHaveLength(1);
 			expect(resumed).toContain("Additional clarification.");
-			expect(resumed).not.toContain("Unfinished display output.");
+			expect(resumed).toContain("Unfinished display output.");
+			expect(resumed).toContain("may be incomplete");
 			if (base === "tools") expect(resumed).toContain("Durable effect result.");
 			if (base === "completed") expect(resumed).toContain("Complete native reply 1.");
 			expect(effects).toBe(expectedEffects);
@@ -108,7 +109,7 @@ describe("interrupted native Claude continuation", () => {
 			await cold.session.prompt("Cold continuation.");
 			settled(cold.session);
 			expect(JSON.stringify(endpoint.requests.at(-1)!.messages)).toContain("Additional clarification.");
-			expect(JSON.stringify(endpoint.requests.at(-1)!.messages)).not.toContain("Unfinished display output.");
+			expect(JSON.stringify(endpoint.requests.at(-1)!.messages)).toContain("Unfinished display output.");
 			await cold.session.navigateTree(partial.id);
 			await cold.session.prompt("Different clarification after navigation.");
 			settled(cold.session);
@@ -117,7 +118,7 @@ describe("interrupted native Claude continuation", () => {
 			expect(branch).toContain("Different clarification after navigation.");
 			expect(branch).not.toContain("Additional clarification.");
 			expect(branch).not.toContain("Cold continuation.");
-			expect(branch).not.toContain("Unfinished display output.");
+			expect(branch).toContain("Unfinished display output.");
 			expect(effects).toBe(expectedEffects);
 		},
 		60_000,
@@ -189,12 +190,14 @@ describe("interrupted native Claude continuation", () => {
 		expect(endpoint.requests).toHaveLength(3);
 	}, 60_000);
 
-	it("refuses an interrupted unresolved tool effect on warm retry and cold reopen", async () => {
+	it("continues after an uncertain tool effect without repeating it, including cold reopen", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-claude-unresolved-"));
 		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
-		const endpoint = await nativeEndpoint(() => [
-			{ type: "tool_use", id: "uncertain-call", name: "mcp__pi__probe", input: {} },
-		]);
+		const endpoint = await nativeEndpoint((_body, index) =>
+			index === 1
+				? [{ type: "tool_use", id: "uncertain-call", name: "mcp__pi__probe", input: {} }]
+				: [{ type: "text", text: "Acknowledged uncertain outcome without repeating the call." }],
+		);
 		cleanups.push(endpoint.close);
 		let effects = 0;
 		let interrupt = () => {};
@@ -215,20 +218,13 @@ describe("interrupted native Claude continuation", () => {
 		await state.session.prompt("Execute effect.");
 		expect(effects).toBe(1);
 		await state.session.prompt("Continue after interruption.");
-		expect(state.session.messages.at(-1)).toMatchObject({
-			role: "assistant",
-			stopReason: "error",
-			errorMessage: expect.stringContaining("No exact native checkpoint"),
-		});
+		settled(state.session);
+		expect(JSON.stringify(endpoint.requests.at(-1)!.messages)).toContain("outcome unknown");
 		state.close();
 		const cold = await host(SessionManager.open(manager.getSessionFile()!), root, endpoint.url, tool);
 		await cold.session.prompt("Retry after reopening.");
-		expect(cold.session.messages.at(-1)).toMatchObject({
-			role: "assistant",
-			stopReason: "error",
-			errorMessage: expect.stringContaining("No exact native checkpoint"),
-		});
+		settled(cold.session);
 		expect(effects).toBe(1);
-		expect(endpoint.requests).toHaveLength(1);
+		expect(endpoint.requests).toHaveLength(3);
 	}, 60_000);
 });

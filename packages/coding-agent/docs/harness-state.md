@@ -43,10 +43,16 @@ Publication certifies exact closed call/result prefixes independently of the res
 
 Focused evidence: **31 tests / 5 files** and full root check/browser smoke passed. The real native regression executes a tool while the same response streams another call, interrupts on native result delivery before transcript flush, then cold-resumes the original and a result fork with the effect executed exactly once and the unfinished call excluded. Unit tests retain unmatched-native-call and unresolved-canonical-call refusal and incremental scan coverage. Existing stored call/result records also passed read-only certification without tool execution or transcript modification. Local installation and Node/Bun SDK, CLI and launcher checks passed. No tracked generated-source drift remains.
 
-## Explicit cut and operating limits
+## Verified conversation recovery
 
-- Native child checkpoint vectors are not implemented. Native child tools remain disabled; observed children prevent exact checkpoint publication, and child resources prevent parent-only staging. They are never silently flattened.
-- Prefixes containing unresolved tool calls are not resumable boundaries. Missing native checkpoints/resources, including older Claude conversations without native state, fail closed rather than replaying text. Foreign-provider history takes the explicit structured-import path.
-- Moving between profiles requires native resources as well as canonical session files. Native resources live at `agentDir/harness/claude`; memory-only sessions retain them only in process.
+Exact native checkpoints are optional for conversation continuity. The adapter reconstructs from canonical Pi history when necessary, including interrupted foreign/native responses, missing resources and unresolved exchanges. Reconstruction closes unknown outcomes only in request-local records, preserving the transcript and uncertainty without automatically replaying effects.
+
+Evidence: **72 tests / 9 files** passed, including real native recovery from aborted/error foreign history, legacy native messages, unresolved effects, duplicate/orphan records and missing/corrupt native resources. Cold continuation and unchanged canonical histories are asserted. After a TypeScript narrowing correction in unpaired-result rendering, all **24 import/recovery tests** and the full root check/browser smoke passed. Read-only reconstruction of the originally failing conversation processed 628 canonical messages and closed 151 historical exchanges with no pending calls, transcript changes or tool execution. Local installation, Node/Bun SDK and CLI smoke tests, and installed launcher version/help checks passed. No tracked generated-source drift remains.
+
+## Exact-fidelity limits
+
+- Native child checkpoint vectors are not implemented. Native child tools remain disabled; child resources cannot be staged as exact parent-only cuts. Canonical reconstruction remains available.
+- Prefixes containing unresolved calls cannot receive exact checkpoints, but their reconstructed exchanges can be closed with explicit unknown outcomes.
+- Native resources at `agentDir/harness/claude` preserve exact fidelity across profiles. Canonical files alone support reconstruction. Memory-only resources last only for the owning process.
 
 The preceding implementation is installed locally via `release:local`. Node/Bun consumer smoke tests and both installed launchers' `--version`/`--help` passed (0.87.1). Its installation regenerated two upstream image-catalog entries; the catalog's 11 tests and post-install root check passed. The interrupted-continuation repair is also installed; its Node/Bun SDK and CLI consumer smoke tests and both installed launchers' version/help checks passed. Catalog regeneration introduced no semantic source changes.
