@@ -8,6 +8,7 @@ import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { CLAUDE_AGENT_SDK_API } from "../src/core/claude-agent-sdk-models.ts";
 import { findBundledClaude, streamClaudeAgentSdk } from "../src/core/claude-agent-sdk-stream.ts";
+import { convertToLlm } from "../src/core/messages.ts";
 import type { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { nativeEnv } from "./claude-native-fixture.ts";
@@ -29,6 +30,7 @@ export async function nativeSession(
 	const agent = new Agent({
 		initialState: { model: nativeModel, messages: manager.buildSessionContext().messages, thinkingLevel: "high" },
 		sessionId: manager.getSessionId(),
+		convertToLlm,
 		getApiKey: () => "local-test-key",
 		streamFn: (requestModel, context, options) =>
 			streamClaudeAgentSdk(requestModel, context, {
