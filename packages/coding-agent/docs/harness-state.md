@@ -49,6 +49,12 @@ Exact native checkpoints are optional for conversation continuity. The adapter r
 
 Evidence: **72 tests / 9 files** passed, including real native recovery from aborted/error foreign history, legacy native messages, unresolved effects, duplicate/orphan records and missing/corrupt native resources. Cold continuation and unchanged canonical histories are asserted. After a TypeScript narrowing correction in unpaired-result rendering, all **24 import/recovery tests** and the full root check/browser smoke passed. Read-only reconstruction of the originally failing conversation processed 628 canonical messages and closed 151 historical exchanges with no pending calls, transcript changes or tool execution. Local installation, Node/Bun SDK and CLI smoke tests, and installed launcher version/help checks passed. No tracked generated-source drift remains.
 
+## Verified destination-leaf selection
+
+Destination staging explicitly selects its cursor as the native leaf, overriding stale source `last-prompt` metadata before Claude applies `resumeSessionAt`. Original source records remain unchanged; their producer may still append independently.
+
+Evidence: the originally failing native history now resumes successfully against a local endpoint. The store/inbox matrix passed **15 tests / 2 files**, including real extension-triggered wake, native signature preservation, imported suffixes and manual follow-up. The other **23 continuation/switching/recovery/interruption tests** passed in the preceding matrix. Full root checking exposed unrelated stale Fireworks/OpenRouter model-catalog references in AI tests; installation is explicitly authorized without repairing that separate gate. Local installation, Node/Bun consumer smoke tests and installed launcher checks passed. No tracked generated-source drift remains.
+
 ## Exact-fidelity limits
 
 - Native child checkpoint vectors are not implemented. Native child tools remain disabled; child resources cannot be staged as exact parent-only cuts. Canonical reconstruction remains available.

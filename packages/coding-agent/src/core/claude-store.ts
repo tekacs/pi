@@ -296,7 +296,12 @@ export class ClaudeStore implements SessionStore {
 			if (project !== undefined && project !== requested.projectKey)
 				throw new Error("Native fork project changed during staging");
 			project = requested.projectKey;
-			staging ??= this.append(requested, records);
+			// The native loader selects a branch before applying resumeSessionAt.
+			// Override source metadata that can still point at an older leaf.
+			staging ??= this.append(requested, [
+				...records,
+				{ type: "last-prompt", sessionId: resume, leafUuid: cursor, explicit: true },
+			]);
 			await staging;
 		};
 		return {
