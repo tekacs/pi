@@ -88,15 +88,37 @@ describe("Claude-owned native storage", () => {
 			fork.sessionStore.load(destination),
 			fork.sessionStore.listSubkeys!(destination),
 		]);
-		expect(entries).toEqual([record("a")]);
+		const leaf = { type: "last-prompt", sessionId: fork.resume, leafUuid: "a", explicit: true };
+		expect(entries).toEqual([record("a"), leaf]);
 		expect(subkeys).toEqual([]);
 		await fork.sessionStore.append(destination, [record("branch", "a")]);
-		expect(await target.load(destination)).toEqual([record("a"), record("branch", "a")]);
+		expect(await target.load(destination)).toEqual([record("a"), leaf, record("branch", "a")]);
 		expect(await source.load(key)).toEqual([record("a"), record("b", "a")]);
 		await expect(fork.sessionStore.load({ ...destination, projectKey: "changed" })).rejects.toThrow(
 			"project changed",
 		);
 		await expect(fork.sessionStore.load(key)).rejects.toThrow("unexpected resource");
+	});
+
+	it("overrides stale leaf metadata after an imported suffix without rewriting source records", async () => {
+		const entries = [
+			record("a"),
+			{ type: "last-prompt", sessionId: key.sessionId, leafUuid: "a", explicit: true },
+			record("b", "a"),
+		];
+		const source = new ClaudeStore(directory);
+		await source.append(key, entries);
+		const target = new ClaudeStore(directory);
+		const imported = record("imported", "b");
+		const fork = await target.fork(key, "b", undefined, [imported]);
+		const staged = await fork.sessionStore.load({ projectKey: "destination", sessionId: fork.resume });
+		expect(staged).toEqual([
+			...entries,
+			imported,
+			{ type: "last-prompt", sessionId: fork.resume, leafUuid: "imported", explicit: true },
+		]);
+		expect(fork.resumeSessionAt).toBe("imported");
+		expect(await source.load(key)).toEqual(entries);
 	});
 
 	it("refuses missing boundaries and child flattening before native staging", async () => {
