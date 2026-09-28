@@ -55,6 +55,12 @@ Destination staging explicitly selects its cursor as the native leaf, overriding
 
 Evidence: the originally failing native history now resumes successfully against a local endpoint. The store/inbox matrix passed **15 tests / 2 files**, including real extension-triggered wake, native signature preservation, imported suffixes and manual follow-up. The other **23 continuation/switching/recovery/interruption tests** passed in the preceding matrix. Full root checking exposed unrelated stale Fireworks/OpenRouter model-catalog references in AI tests; installation is explicitly authorized without repairing that separate gate. Local installation, Node/Bun consumer smoke tests and installed launcher checks passed. No tracked generated-source drift remains.
 
+## Verified publication degradation
+
+Publication failures degrade exact fidelity instead of failing a completed turn; canonical persistence failures remain fatal. Native-only outcomes, such as a call to a nonexistent tool rejected by the native runtime, are committed canonically so both histories stay aligned.
+
+Evidence: **109 tests / 11 files** passed. A real native run with a hallucinated tool name completes, records the rejected call and its error result, and cold-resumes through exact continuation, preserving the native signature and executing nothing. Two mock tests still asserting the superseded fail-closed policy now assert reconstruction as structured assistant records. Type checking of changed code passed; unrelated stale AI catalog tests remain the known waived gate. Local installation, Node/Bun consumer smoke tests and installed launcher checks passed.
+
 ## Exact-fidelity limits
 
 - Native child checkpoint vectors are not implemented. Native child tools remain disabled; child resources cannot be staged as exact parent-only cuts. Canonical reconstruction remains available.

@@ -64,8 +64,9 @@ function fixture(signal?: AbortSignal) {
 	};
 	const finish = async (cursor: string) => {
 		const final = assistant([]);
-		await history.finish(final, key.sessionId, cursor);
+		const checkpoint = await history.finish(final, key.sessionId, cursor);
 		messages.push(final);
+		return checkpoint;
 	};
 	return { store, key, history, messages, record, nativeCall, nativeResult, finish };
 }
@@ -106,7 +107,7 @@ describe("Claude checkpoint publication", () => {
 	});
 
 	it.each(["settled", "closed"] as const)(
-		"rejects an absent mirror boundary when the producer is %s",
+		"degrades an absent mirror boundary without failing the turn when the producer is %s",
 		async (mode) => {
 			const lifetime = new AbortController();
 			const f = fixture(lifetime.signal);
@@ -114,10 +115,9 @@ describe("Claude checkpoint publication", () => {
 			f.history.observe(f.key.sessionId, "missing", [member]);
 			f.record(assistant([{ ...member }]), [member]);
 			if (mode === "closed") lifetime.abort();
-			await expect(mode === "settled" ? f.history.settle() : f.history.flush()).rejects.toThrow(
-				mode === "settled" ? "after turn completion" : "closed before reaching",
-			);
+			await (mode === "settled" ? f.history.settle() : f.history.flush());
 			expect(() => selectCheckpoint(f.store, f.messages)).toThrow("No exact native checkpoint");
+			expect(await f.history.finish(assistant([]), f.key.sessionId, "missing")).toBeUndefined();
 		},
 	);
 
@@ -212,7 +212,7 @@ describe("Claude checkpoint publication", () => {
 			},
 		]);
 		f.history.observe(f.key.sessionId, "thinking", [member]);
-		await expect(f.finish("thinking")).rejects.toThrow("histories differ");
+		expect(await f.finish("thinking")).toBeUndefined();
 		expect(() => selectCheckpoint(f.store, partial)).toThrow("No exact native checkpoint");
 	});
 
@@ -239,9 +239,7 @@ describe("Claude checkpoint publication", () => {
 		f.history.observe(f.key.sessionId, "native", []);
 		if (mode === "child") f.history.child();
 		const final = assistant(mode === "fallback" ? [{ type: "text", text: "not from a native frame" }] : []);
-		await expect(f.history.finish(final, f.key.sessionId, "native")).rejects.toThrow(
-			mode === "child" ? "Native child checkpoints" : "no authoritative native frame",
-		);
+		expect(await f.history.finish(final, f.key.sessionId, "native")).toBeUndefined();
 		expect(() => selectCheckpoint(f.store, [...f.messages, final])).toThrow("No exact native checkpoint");
 	});
 
@@ -274,7 +272,7 @@ describe("Claude checkpoint publication", () => {
 		await f.nativeCall("unresolved");
 		f.record(call("unresolved"));
 		await f.nativeResult("a");
-		await expect(f.finish("result-a")).rejects.toThrow("histories differ");
+		expect(await f.finish("result-a")).toBeUndefined();
 		const g = fixture();
 		await g.nativeCall("a");
 		g.record(call("a"));
@@ -283,6 +281,6 @@ describe("Claude checkpoint publication", () => {
 			{ type: "assistant", uuid: "future", message: { content: [{ type: "text", text: "not canonical" }] } },
 		]);
 		await g.nativeResult("a");
-		await expect(g.finish("result-a")).rejects.toThrow("histories differ");
+		expect(await g.finish("result-a")).toBeUndefined();
 	});
 });
