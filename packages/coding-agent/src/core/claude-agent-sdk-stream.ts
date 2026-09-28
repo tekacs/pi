@@ -117,6 +117,8 @@ type SdkOutputState = {
 		alreadyStreamed?: boolean,
 	) => Promise<void>;
 	native?: ClaudeHistory;
+	/** Text of a synthetic native API-error reply; it is an error, never model output. */
+	apiError?: string;
 	cursor?: string;
 	contextTokens?: number;
 	entryPrompt?: Usage["entryPrompt"];
@@ -190,6 +192,11 @@ export function streamClaudeAgentSdk(
 			const promptTooLong = result.terminal_reason === "prompt_too_long";
 			if (options.signal?.aborted) {
 				output.stopReason = "aborted";
+			} else if (outputState.apiError) {
+				// Pi's error classification (e.g. context overflow → compaction) reads this message.
+				output.stopReason = "error";
+				output.errorMessage = outputState.apiError;
+				output.usage = usageFromResult(result, model, outputState);
 			} else if (promptTooLong) {
 				const errorText = "Claude Agent SDK prompt is too long";
 				output.stopReason = "error";
@@ -948,6 +955,12 @@ function appendSdkText(
 	if (message.parent_tool_use_id) {
 		state.native?.child();
 		appendNestedAssistant(message, output, state);
+		return;
+	}
+	// The native runtime reports API failures, including context overflow, as synthetic assistant replies.
+	if (message.error) {
+		const text = message.message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
+		state.apiError = text || `Claude API error: ${message.error}`;
 		return;
 	}
 

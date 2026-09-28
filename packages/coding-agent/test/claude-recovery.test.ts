@@ -2,7 +2,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Message } from "@earendil-works/pi-ai";
+import { type AssistantMessage, isContextOverflow, type Message } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../src/core/session-manager.ts";
@@ -115,6 +115,34 @@ describe("Claude conversation recovery", () => {
 		},
 		60_000,
 	);
+
+	it("surfaces a real native context overflow as an overflow error Pi can compact", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-claude-overflow-"));
+		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+		const endpoint = await nativeEndpoint(() => ({
+			status: 400,
+			error: "prompt is too long: 1100000 tokens > 1000000 maximum",
+		}));
+		cleanups.push(endpoint.close);
+		const tool: AgentTool = {
+			name: "probe",
+			label: "Probe",
+			description: "Unused",
+			parameters: Type.Object({}),
+			async execute() {
+				throw new Error("Unexpected tool execution");
+			},
+		};
+		const manager = SessionManager.create(root, join(root, "sessions"));
+		const state = await nativeSession(manager, root, endpoint.url, tool);
+		cleanups.push(state.close);
+		await state.session.prompt("Too much context.");
+		const last = state.session.messages.at(-1);
+		if (last?.role !== "assistant") throw new Error("No assistant outcome");
+		expect(last.stopReason).toBe("error");
+		expect(isContextOverflow(last, nativeModel.contextWindow)).toBe(true);
+		expect(JSON.stringify(last.content)).not.toContain("too long");
+	}, 60_000);
 
 	it("records a call the native runtime rejects itself and keeps exact continuation", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-claude-unknown-tool-"));
