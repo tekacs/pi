@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { SDKAssistantMessage } from "@anthropic-ai/claude-agent-sdk";
 
-interface NativeCall {
+export interface NativeCall {
 	id: string;
 	responseId: string;
 	name: string;
@@ -51,6 +51,11 @@ export class ClaudeCalls {
 
 	complete(id: string, terminate: boolean): void {
 		this.outcomes.set(id, terminate);
+	}
+
+	/** A call the native runtime settled without Pi executing it, such as an unknown tool name. */
+	unexecuted(id: string): NativeCall | undefined {
+		return this.outcomes.has(id) ? undefined : this.observed.get(id);
 	}
 
 	terminates(ids: readonly string[]): boolean {

@@ -116,6 +116,65 @@ describe("Claude conversation recovery", () => {
 		60_000,
 	);
 
+	it("records a call the native runtime rejects itself and keeps exact continuation", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-claude-unknown-tool-"));
+		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+		const endpoint = await nativeEndpoint((body, index) =>
+			index === 1
+				? [
+						{
+							type: "tool_use",
+							id: "hallucinated-call",
+							name: "mcp__pi__mcp__pi__probe",
+							input: { action: "list" },
+						},
+					]
+				: JSON.stringify(body.messages).includes("Continue after restarting.")
+					? [{ type: "text", text: "Exact continuation." }]
+					: [
+							{ type: "thinking", thinking: "Recovered from the bad name.", signature: "exact-signature" },
+							{ type: "text", text: "Done after the rejected call." },
+						],
+		);
+		cleanups.push(endpoint.close);
+		let effects = 0;
+		const tool: AgentTool = {
+			name: "probe",
+			label: "Probe",
+			description: "Local effect",
+			parameters: Type.Object({}),
+			async execute() {
+				effects++;
+				return { content: [], details: {} };
+			},
+		};
+		const manager = SessionManager.create(root, join(root, "sessions"));
+		const state = await nativeSession(manager, root, endpoint.url, tool);
+		cleanups.push(state.close);
+		await state.session.prompt("Use the tool.");
+		settled(state.session);
+		const messages = manager.buildSessionContext().messages;
+		expect(messages).toContainEqual(
+			expect.objectContaining({
+				role: "assistant",
+				content: [expect.objectContaining({ type: "toolCall", id: "hallucinated-call", name: "mcp__pi__probe" })],
+			}),
+		);
+		expect(messages).toContainEqual(
+			expect.objectContaining({ role: "toolResult", toolCallId: "hallucinated-call", isError: true }),
+		);
+		state.close();
+		const cold = await nativeSession(SessionManager.open(manager.getSessionFile()!), root, endpoint.url, tool);
+		cleanups.push(cold.close);
+		await cold.session.prompt("Continue after restarting.");
+		settled(cold.session);
+		const input = JSON.stringify(endpoint.requests.at(-1)!.messages);
+		// The native signature survives only through exact continuation, not reconstruction.
+		expect(input).toContain("exact-signature");
+		expect(input).toContain("hallucinated-call");
+		expect(effects).toBe(0);
+	}, 60_000);
+
 	it.each(["missing-log", "corrupt-binding", "corrupt-log"] as const)(
 		"reconstructs %s before inference and binds fresh native state",
 		async (damage) => {
