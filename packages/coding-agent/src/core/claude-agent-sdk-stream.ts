@@ -397,8 +397,8 @@ async function readSdkTurn(
 			if (session.failure) throw session.failure;
 			if (next.done) throw new Error("Claude Agent SDK process ended before returning a result");
 			const message = next.value;
-			if (message.type === "system" && message.subtype === "mirror_error")
-				throw new Error("Native Claude transcript persistence failed");
+			// Native persistence loss reduces fidelity; the canonical conversation continues.
+			if (message.type === "system" && message.subtype === "mirror_error") session.turn.current?.native.degrade();
 			if (message.type === "result") {
 				if (message.subtype === "success" && message.num_turns === 0) continue;
 				session.turn.current?.calls.finish();
@@ -412,13 +412,17 @@ async function readSdkTurn(
 				Array.isArray(message.message.content) &&
 				message.message.content.some((block) => block.type === "tool_result")
 			) {
-				if (!message.session_id) throw new Error("Native tool result has no session identity");
+				const turn = session.turn.current;
+				for (const block of message.message.content)
+					if (block.type === "tool_result" && turn) recordNativeOutcome(turn, model, block);
 				outputState.cursor = message.uuid;
-				outputState.native?.result(
-					message.session_id,
-					message.uuid,
-					message.message.content.flatMap((block) => (block.type === "tool_result" ? [block.tool_use_id] : [])),
-				);
+				if (!message.session_id) outputState.native?.degrade();
+				else
+					outputState.native?.result(
+						message.session_id,
+						message.uuid,
+						message.message.content.flatMap((block) => (block.type === "tool_result" ? [block.tool_use_id] : [])),
+					);
 			}
 			if (message.type === "stream_event") {
 				appendSdkStreamEvent(message, output, stream, outputState);
@@ -432,6 +436,50 @@ async function readSdkTurn(
 		session.turn.current?.calls.close();
 		session.turn.current = undefined;
 	}
+}
+
+type NativeResult = { tool_use_id: string; content?: unknown; is_error?: boolean };
+
+/** Commit a call the native runtime settled itself, so canonical history matches what the model saw. */
+function recordNativeOutcome(turn: SdkTurn, model: Model<any>, block: NativeResult): void {
+	const call = turn.calls.unexecuted(block.tool_use_id);
+	if (!call) return;
+	turn.calls.complete(call.id, false);
+	const toolName = call.name.startsWith("mcp__pi__") ? call.name.slice("mcp__pi__".length) : call.name;
+	const args = (call.input && typeof call.input === "object" ? call.input : {}) as Record<string, never>;
+	void turn.commit({
+		role: "assistant",
+		content: [{ type: "toolCall", id: call.id, name: toolName, arguments: args }],
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		responseId: call.responseId,
+		usage: createEmptyUsage(),
+		stopReason: "toolUse",
+		timestamp: Date.now(),
+	});
+	turn.stream.push({ type: "tool_execution_start", toolCallId: call.id, toolName, args });
+	const content = nativeContent(block.content);
+	const isError = block.is_error === true;
+	void turn.commit({ role: "toolResult", toolCallId: call.id, toolName, content, isError, timestamp: Date.now() });
+	turn.stream.push({
+		type: "tool_execution_end",
+		toolCallId: call.id,
+		toolName,
+		result: { content, details: {} },
+		isError,
+	});
+}
+
+function nativeContent(content: unknown): ToolResultMessage["content"] {
+	if (typeof content === "string") return [{ type: "text", text: content }];
+	if (!Array.isArray(content)) return [];
+	return content.map((block): ToolResultMessage["content"][number] => {
+		if (block?.type === "text" && typeof block.text === "string") return { type: "text", text: block.text };
+		if (block?.type === "image" && block.source?.type === "base64")
+			return { type: "image", data: block.source.data, mimeType: block.source.media_type };
+		return { type: "text", text: JSON.stringify(block) };
+	});
 }
 
 function sdkConfig(model: Model<any>, context: TranscriptContext, options: ClaudeAgentSdkStreamOptions): SdkConfig {
