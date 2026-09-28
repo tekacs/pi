@@ -34,6 +34,8 @@ export class ClaudeHistory {
 	private tail = Promise.resolve();
 	private completion = new AbortController();
 	private failure?: Error;
+	/** Exact fidelity is lost for this invocation; the conversation itself continues. */
+	private degraded = false;
 	private children = false;
 	private count = 0;
 	private tools = 0;
@@ -66,7 +68,7 @@ export class ClaudeHistory {
 		}
 		// Catch immediately, even while an earlier native interval is still awaiting its mirror.
 		void receipt.catch((error: unknown) => this.fail(error));
-		this.track(() => receipt);
+		this.tail = this.tail.then(() => receipt).catch((error: unknown) => this.fail(error));
 		if (members?.length) {
 			for (const member of members)
 				this.members.set(member, { position: boundary.stamp.count, snapshot: structuredClone(member) });
@@ -99,12 +101,20 @@ export class ClaudeHistory {
 		this.options.fail?.(this.failure);
 	}
 
+	degrade(): void {
+		this.degraded = true;
+	}
+
+	/** Publication failures lose exact fidelity; they never fail the turn. */
 	private track(work: () => Promise<unknown>): void {
-		this.tail = this.tail
-			.then(async () => {
-				if (!this.failure) await work();
-			})
-			.catch((error: unknown) => this.fail(error));
+		this.tail = this.tail.then(async () => {
+			if (this.failure || this.degraded) return;
+			try {
+				await work();
+			} catch {
+				this.degraded = true;
+			}
+		});
 	}
 
 	private bindSegments(): void {
@@ -137,18 +147,20 @@ export class ClaudeHistory {
 		await this.flush();
 	}
 
-	async finish(message: AssistantMessage, sessionId: string, cursor: string): Promise<ClaudeCheckpoint> {
+	/** Returns undefined when exact continuation cannot be certified; the next turn reconstructs instead. */
+	async finish(message: AssistantMessage, sessionId: string, cursor: string): Promise<ClaudeCheckpoint | undefined> {
 		await this.settle();
-		if (this.children) throw new Error("Native child checkpoints are not implemented; exact continuation refused");
-		if (message.content.some((member) => !this.sources.has(member)))
-			throw new Error("Assistant output has no authoritative native frame; exact continuation refused");
+		if (this.degraded || this.children || message.content.some((member) => !this.sources.has(member)))
+			return undefined;
 		this.prefix.add(message);
 		const stamp = this.prefix.stamp(message);
 		for (const member of message.content)
 			this.members.set(member, { position: stamp.count, snapshot: structuredClone(member) });
-		const checkpoint = await this.bind({ message, stamp, tools: this.tools }, sessionId, cursor);
-		if (!checkpoint) throw new Error("Canonical and native Claude histories differ; exact continuation refused");
-		return checkpoint;
+		try {
+			return await this.bind({ message, stamp, tools: this.tools }, sessionId, cursor);
+		} catch {
+			return undefined;
+		}
 	}
 
 	private complete(position: number): boolean {
