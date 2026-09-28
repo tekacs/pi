@@ -350,8 +350,9 @@ describe("Claude Agent SDK stream", () => {
 			tools: [tool],
 		});
 
-		// Rendering remains available, but unsupported native children cannot acquire a parent-only checkpoint.
-		expect(result.errorMessage).toContain("Native child checkpoints are not implemented");
+		// Unsupported native children lose exact fidelity; they never fail the completed turn.
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
 		expect(result.content).toEqual([{ type: "text", text: "Second assistant turn." }]);
 		expect(events.filter((event) => event.type === "assistant_message_commit")).toMatchObject([
 			{
@@ -725,8 +726,9 @@ describe("Claude Agent SDK stream", () => {
 				}),
 			}),
 		]);
-		// This renderer fixture deliberately leaves its native call unexecuted: it must not claim continuation.
-		expect(result.errorMessage).toContain("histories differ");
+		// This renderer fixture leaves its native call unexecuted: exact continuation is skipped, not the turn.
+		expect(result.stopReason).toBe("stop");
+		expect(result.errorMessage).toBeUndefined();
 		expect(result.content).toEqual([
 			{ type: "thinking", thinking: "The value is ready.", thinkingSignature: "after-signature" },
 			{ type: "text", text: "Final answer." },
@@ -932,8 +934,10 @@ describe("Claude Agent SDK stream", () => {
 			{ messages: [...continued.messages, second.result, user("after cleanup")] },
 			options,
 		);
-		expect(released.result.errorMessage).toContain("No exact native checkpoint");
-		expect(sdk.query).toHaveBeenCalledTimes(2);
+		// Released native state reduces fidelity; canonical history still continues the conversation.
+		expect(released.result.stopReason).toBe("stop");
+		expect(sdk.query).toHaveBeenCalledTimes(3);
+		expect(sdk.query.mock.calls[2][0].options.resumeSessionAt).toEqual(expect.any(String));
 	});
 
 	it("restarts with resume when SDK configuration changes without Pi-context divergence", async () => {
@@ -1048,7 +1052,7 @@ describe("Claude Agent SDK stream", () => {
 		expect(prompts).toEqual(["first", "second"]);
 	});
 
-	it("refuses modified assistant history instead of replaying it as user text", async () => {
+	it("reconstructs modified assistant history as assistant records, never as user text", async () => {
 		sdk.query.mockImplementation(({ prompt }: QueryInput) =>
 			mockQuery(
 				(async function* () {
@@ -1071,8 +1075,14 @@ describe("Claude Agent SDK stream", () => {
 			},
 			{ cwd: process.cwd() },
 		);
-		expect(second.result.errorMessage).toContain("No exact native checkpoint");
-		expect(sdk.query).toHaveBeenCalledTimes(1);
+		expect(second.result.stopReason).toBe("stop");
+		expect(sdk.query).toHaveBeenCalledTimes(2);
+		const { resume, resumeSessionAt, sessionStore } = sdk.query.mock.calls[1][0].options;
+		const staged = await sessionStore.load({ projectKey: "fixture", sessionId: resume });
+		const altered = staged.find((entry: { uuid?: string }) => entry.uuid === resumeSessionAt);
+		expect(altered).toMatchObject({ type: "assistant", message: { content: [{ type: "text", text: "altered" }] } });
+		// Only the staged prefix is history; the mock appends its own new reply after it.
+		expect(JSON.stringify(staged.slice(0, staged.indexOf(altered) + 1))).not.toContain("original");
 	});
 
 	it("uses a fresh process for a rewritten user-only conversation without sending clear", async () => {
