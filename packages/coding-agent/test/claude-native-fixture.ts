@@ -15,7 +15,10 @@ export type NativeBlock =
 
 /** Real native protocol, deterministic loopback responses, no provider credentials. */
 export async function nativeEndpoint(
-	respond: (body: NativeRequest, index: number) => NativeBlock[] | { before?: NativeBlock[]; partial: NativeBlock },
+	respond: (
+		body: NativeRequest,
+		index: number,
+	) => NativeBlock[] | { before?: NativeBlock[]; partial: NativeBlock } | { status: number; error: string },
 ) {
 	const requests: NativeRequest[] = [];
 	const server = createServer(async (request, response) => {
@@ -34,6 +37,13 @@ export async function nativeEndpoint(
 		const body: NativeRequest = JSON.parse(raw);
 		requests.push(body);
 		const reply = respond(body, requests.length);
+		if ("status" in reply) {
+			response.writeHead(reply.status, { "content-type": "application/json" });
+			response.end(
+				JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: reply.error } }),
+			);
+			return;
+		}
 		const partial = !Array.isArray(reply);
 		const content = Array.isArray(reply) ? reply : [...(reply.before ?? []), reply.partial];
 		response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });

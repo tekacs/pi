@@ -39,6 +39,7 @@ function assistant(
 		id?: string;
 		uuid?: string;
 		supersedes?: string[];
+		error?: string;
 		usage?: {
 			input_tokens: number;
 			output_tokens: number;
@@ -58,6 +59,7 @@ function assistant(
 		parent_tool_use_id: parentToolUseId,
 		uuid: metadata.uuid,
 		supersedes: metadata.supersedes,
+		error: metadata.error,
 		message: {
 			id: metadata.id ?? "native-response",
 			content,
@@ -557,6 +559,27 @@ describe("Claude Agent SDK stream", () => {
 		expect(second.result.content).toEqual([{ type: "text", text: "recovered" }]);
 		expect(calls).toHaveLength(2);
 		expect(prompts).toEqual(["overfull history", "Pi compaction summary"]);
+	});
+
+	it("reports a synthetic native overflow reply as a context-overflow error, not assistant text", async () => {
+		sdk.query.mockImplementation(({ prompt }: QueryInput) =>
+			mockQuery(
+				(async function* () {
+					await nextInput(prompt);
+					yield assistant([{ type: "text", text: "Prompt is too long" }], null, {
+						id: "synthetic-error",
+						error: "invalid_request",
+					});
+					yield success("Prompt is too long");
+				})(),
+			),
+		);
+		const { result, events } = await collect({ messages: [user("large")], tools: [] }, { cwd: process.cwd() });
+		expect(result).toMatchObject({ stopReason: "error", errorMessage: "Prompt is too long", content: [] });
+		expect(isContextOverflow(result, fableModel().contextWindow)).toBe(true);
+		expect(events.some((event) => event.type === "text_delta" && event.delta.includes("Prompt is too long"))).toBe(
+			false,
+		);
 	});
 
 	it("streams partial text and replaces superseded assistant frames", async () => {
