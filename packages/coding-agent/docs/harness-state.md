@@ -61,6 +61,12 @@ Publication failures degrade exact fidelity instead of failing a completed turn;
 
 Evidence: **109 tests / 11 files** passed. A real native run with a hallucinated tool name completes, records the rejected call and its error result, and cold-resumes through exact continuation, preserving the native signature and executing nothing. Two mock tests still asserting the superseded fail-closed policy now assert reconstruction as structured assistant records. Type checking of changed code passed; unrelated stale AI catalog tests remain the known waived gate. Local installation, Node/Bun consumer smoke tests and installed launcher checks passed.
 
+## Verified native API errors
+
+The native runtime reports API failures as synthetic assistant replies; the adapter surfaces them as assistant errors instead of model output, so context overflow triggers Pi's automatic compaction and retry.
+
+Evidence: **48 tests / 6 files** passed. A real native run against an endpoint returning an Anthropic overflow error yields a Pi error classified as context overflow, with no error text rendered as assistant content; a mock synthetic reply is covered likewise. Type checking of changed code passed; unrelated stale AI catalog tests remain the known waived gate. Local installation, Node/Bun consumer smoke tests and installed launcher checks passed.
+
 ## Exact-fidelity limits
 
 - Native child checkpoint vectors are not implemented. Native child tools remain disabled; child resources cannot be staged as exact parent-only cuts. Canonical reconstruction remains available.
