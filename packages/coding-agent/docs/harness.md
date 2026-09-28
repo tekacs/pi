@@ -38,6 +38,10 @@ Cold native continuation stages an immutable opaque prefix under a fresh namespa
 
 Logs and immutable bindings live at `agentDir/harness/claude`. Memory-only resources belong to their Pi session and are released on cleanup. Copying canonical history between profiles remains sufficient for reconstruction; copying native resources as well preserves exact fidelity.
 
+## Native API errors
+
+The native runtime reports API failures, including context overflow, as synthetic assistant replies carrying an error classification. The adapter surfaces these as assistant errors with the native error text rather than model output, so Pi's ordinary handling applies: an overflow error triggers automatic compaction and retry, exactly as for other providers.
+
 ## Rendering and maintenance
 
 The UI finalizes stable committed snapshots, not cleared mutable partials. Terminal errors and aborts render even after a commit finalized the active display component; the bug-report hint never replaces the actual error.
