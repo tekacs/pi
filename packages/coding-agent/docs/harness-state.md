@@ -67,6 +67,12 @@ The native runtime reports API failures as synthetic assistant replies; the adap
 
 Evidence: **48 tests / 6 files** passed. A real native run against an endpoint returning an Anthropic overflow error yields a Pi error classified as context overflow, with no error text rendered as assistant content; a mock synthetic reply is covered likewise. Type checking of changed code passed; unrelated stale AI catalog tests remain the known waived gate. Local installation, Node/Bun consumer smoke tests and installed launcher checks passed.
 
+## Verified credential reload
+
+An authentication failure before any output or effect discards the native process and retries once in a fresh one, which rereads Claude Code's shared login. Pi never touches credentials. A repeated failure asks the user to sign in again in Claude Code.
+
+Evidence: **49 tests / 5 files** passed, including mock recovery and repeated-failure cases. Not yet reproduced against a real rotated login. Local installation and Node/Bun consumer and launcher checks passed.
+
 ## Exact-fidelity limits
 
 - Native child checkpoint vectors are not implemented. Native child tools remain disabled; child resources cannot be staged as exact parent-only cuts. Canonical reconstruction remains available.

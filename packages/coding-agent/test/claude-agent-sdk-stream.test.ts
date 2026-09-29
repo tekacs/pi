@@ -561,6 +561,50 @@ describe("Claude Agent SDK stream", () => {
 		expect(prompts).toEqual(["overfull history", "Pi compaction summary"]);
 	});
 
+	it.each([true, false])(
+		"reloads credentials in a fresh native process after an authentication failure (recovers=%s)",
+		async (recovers) => {
+			const closes: ReturnType<typeof vi.fn>[] = [];
+			sdk.query.mockImplementation(({ prompt }: QueryInput) => {
+				const attempt = sdk.query.mock.calls.length;
+				const close = vi.fn();
+				closes.push(close);
+				return mockQuery(
+					(async function* () {
+						await nextInput(prompt);
+						if (attempt === 1 || !recovers) {
+							yield assistant([{ type: "text", text: "OAuth token has expired." }], null, {
+								id: `auth-${attempt}`,
+								error: "authentication_failed",
+							});
+							yield success("OAuth token has expired.");
+						} else {
+							yield assistant([{ type: "text", text: "authenticated reply" }], null, { id: "after-reload" });
+							yield success("authenticated reply");
+						}
+					})(),
+					close,
+				);
+			});
+			const { result } = await collect(
+				{ messages: [user("hello")], tools: [] },
+				{ cwd: process.cwd(), sessionId: `claude-sdk-auth-${recovers}` },
+			);
+			expect(sdk.query).toHaveBeenCalledTimes(2);
+			expect(closes[0]).toHaveBeenCalled();
+			if (recovers)
+				expect(result).toMatchObject({
+					stopReason: "stop",
+					content: [{ type: "text", text: "authenticated reply" }],
+				});
+			else {
+				expect(result.stopReason).toBe("error");
+				expect(result.errorMessage).toContain("Sign in again in Claude Code");
+			}
+			cleanupSessionResources(`claude-sdk-auth-${recovers}`);
+		},
+	);
+
 	it("reports a synthetic native overflow reply as a context-overflow error, not assistant text", async () => {
 		sdk.query.mockImplementation(({ prompt }: QueryInput) =>
 			mockQuery(
