@@ -1927,9 +1927,7 @@ export class AgentSession {
 		// The run records the loadout in the transcript; restored tools that did not register by now
 		// are dropped, so a tool that never registers does not stay pending.
 		this._pendingToolNames.clear();
-		const update = this._preparePromptAndToolLoadout(
-			this._runSystemPromptOptions ?? this._baseSystemPromptOptions,
-		);
+		const update = this._preparePromptAndToolLoadout(this._runSystemPromptOptions ?? this._baseSystemPromptOptions);
 		const prefix: AgentMessage[] = update ? [update] : [];
 		options.preflightResult?.("started");
 		try {
