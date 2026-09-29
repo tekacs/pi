@@ -1784,9 +1784,7 @@ export class AgentSession {
 		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
 		this._failedResponse = undefined;
 		this._recordSelection();
-		const update = this._preparePromptAndToolLoadout(
-			this._runSystemPromptOptions ?? this._baseSystemPromptOptions,
-		);
+		const update = this._preparePromptAndToolLoadout(this._runSystemPromptOptions ?? this._baseSystemPromptOptions);
 		const prefix: AgentMessage[] = update ? [update] : [];
 		options.preflightResult?.("started");
 		this._isAgentRunActive = true;

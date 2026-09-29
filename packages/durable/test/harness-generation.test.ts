@@ -111,6 +111,33 @@ describe("generation", () => {
 		await harness.close(context);
 	});
 
+	it("ignores provider tool lifecycle events when collecting partial messages", async () => {
+		const base = chatSetup();
+		const final = fauxAssistantMessage("done");
+		const stream = (): ReturnType<Models["streamSimple"]> => {
+			const events = async function* () {
+				yield { type: "tool_execution_start", toolCallId: "nested", toolName: "echo", args: {} };
+				yield { type: "tool_execution_end", toolCallId: "nested", toolName: "echo", result: {}, isError: false };
+			};
+			return { [Symbol.asyncIterator]: events, result: async () => final } as unknown as ReturnType<
+				Models["streamSimple"]
+			>;
+		};
+		const { harness, root } = await openChat(new MemoryStorage(), {
+			...base,
+			models: withStream(base.models, stream),
+		});
+		try {
+			harness.resume();
+			expect((await (await root.submit({ type: "input", content: "hi" }, context)).wait(context)).status).toBe(
+				"done",
+			);
+			expect((await allEntries(root)).at(-1)?.model).toEqual([final]);
+		} finally {
+			await harness.close(context);
+		}
+	});
+
 	it("stores partials as deltas and a complete base once nothing is in flight", async () => {
 		const setup = chatSetup({ tokensPerSecond: 200, tokenSize: { min: 1, max: 1 } });
 		setup.faux.setResponses([fauxAssistantMessage("w".repeat(200))]);
