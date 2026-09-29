@@ -1,3 +1,4 @@
+import type { ThinkingLevelMap } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
 const standardCost = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
@@ -43,7 +44,7 @@ function model(
 	contextWindow: number,
 	maxTokens: number,
 	reasoning: boolean,
-	thinkingLevelMap?: ProviderModelConfig["thinkingLevelMap"],
+	thinkingLevelMap?: ThinkingLevelMap,
 	cost = standardCost,
 ): ProviderModelConfig {
 	return {
