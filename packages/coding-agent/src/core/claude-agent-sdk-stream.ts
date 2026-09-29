@@ -119,6 +119,8 @@ type SdkOutputState = {
 	native?: ClaudeHistory;
 	/** Text of a synthetic native API-error reply; it is an error, never model output. */
 	apiError?: string;
+	apiErrorKind?: string;
+	commits: number;
 	cursor?: string;
 	contextTokens?: number;
 	entryPrompt?: Usage["entryPrompt"];
@@ -165,7 +167,9 @@ export function streamClaudeAgentSdk(
 			assistants: new Map(),
 			requests: new Map(),
 			hasText: false,
+			commits: 0,
 			publish: (message, members, alreadyStreamed = true) => {
+				outputState.commits++;
 				const receipt = stream.commit(message, alreadyStreamed);
 				void receipt.catch((error: unknown) => invocation?.session.turn.current?.fail(error));
 				outputState.native?.record(message, members, receipt);
@@ -187,7 +191,23 @@ export function streamClaudeAgentSdk(
 
 			invocation = await startSdkInvocation(model, context, options, stream, commit);
 			outputState.native = invocation.native;
-			const result = await readSdkTurn(invocation.session, model, output, stream, outputState, options.signal);
+			let result = await readSdkTurn(invocation.session, model, output, stream, outputState, options.signal);
+			const authFailed = () =>
+				outputState.apiErrorKind === "authentication_failed" ||
+				(result.subtype !== "success" && /\b401\b|authenticat|oauth token/i.test(result.errors.join("\n")));
+			if (authFailed() && !options.signal?.aborted && outputState.commits === 0 && output.content.length === 0) {
+				// A long-lived process can hold credentials Claude Code has since rotated. A fresh one
+				// rereads the shared login (refreshing it if expired); Pi never writes credentials itself.
+				discardSdkInvocation(options.sessionId, invocation.session);
+				outputState.apiError = undefined;
+				outputState.apiErrorKind = undefined;
+				outputState.requests.clear();
+				invocation = await startSdkInvocation(model, context, options, stream, commit);
+				outputState.native = invocation.native;
+				result = await readSdkTurn(invocation.session, model, output, stream, outputState, options.signal);
+				if (authFailed() && outputState.apiError)
+					outputState.apiError = `${outputState.apiError}\nClaude authentication still fails after reloading credentials. Sign in again in Claude Code (run \`claude\`, then /login).`;
+			}
 
 			const promptTooLong = result.terminal_reason === "prompt_too_long";
 			if (options.signal?.aborted) {
@@ -961,6 +981,7 @@ function appendSdkText(
 	if (message.error) {
 		const text = message.message.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
 		state.apiError = text || `Claude API error: ${message.error}`;
+		state.apiErrorKind = message.error;
 		return;
 	}
 
