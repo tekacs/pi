@@ -42,6 +42,8 @@ Logs and immutable bindings live at `agentDir/harness/claude`. Memory-only resou
 
 The native runtime reports API failures, including context overflow, as synthetic assistant replies carrying an error classification. The adapter surfaces these as assistant errors with the native error text rather than model output, so Pi's ordinary handling applies: an overflow error triggers automatic compaction and retry, exactly as for other providers.
 
+Subscription credentials belong to Claude Code's shared login; Pi never reads or writes them. A long-lived native process can hold credentials that Claude Code has since rotated. When an invocation fails authentication before producing output or effects, the adapter discards that process and retries once in a fresh one, which rereads the shared login and refreshes it if expired. A repeated failure asks the user to sign in again in Claude Code.
+
 ## Rendering and maintenance
 
 The UI finalizes stable committed snapshots, not cleared mutable partials. Terminal errors and aborts render even after a commit finalized the active display component; the bug-report hint never replaces the actual error.
