@@ -31,6 +31,8 @@ describe("scoped request authentication", () => {
 		release();
 		expect((await pending)?.auth.apiKey).toBe("one");
 		expect((await a.getAuth("anthropic"))?.auth.apiKey).toBe("two");
+		expect((await registry.getNativeAuth("anthropic"))?.auth.apiKey).toBe("global");
+		expect((await a.getAuth("anthropic"))?.auth.apiKey).toBe("two");
 		expect((await b.getAuth("anthropic"))?.auth.apiKey).toBe("global");
 		expect(() => registry.registerAuthResolver("anthropic", async () => undefined)).toThrow("already bound");
 		dispose();
@@ -47,6 +49,7 @@ describe("scoped request authentication", () => {
 			throw new Error("selected account expired");
 		});
 		await expect(value.getAuth("anthropic")).rejects.toThrow("selected account expired");
+		expect((await new ModelRegistry(value).getNativeAuth("anthropic"))?.auth.apiKey).toBe("global");
 		expect((await value.getAuth("anthropic", { apiKey: "explicit" }))?.auth.apiKey).toBe("explicit");
 		dispose();
 		const controller = new AbortController();
