@@ -1114,6 +1114,17 @@ if (message.stopReason === 'error' || message.stopReason === 'aborted') {
 
 When using a provider collection, auth failures (OAuth refresh failed, unknown provider) surface as a stream error with `stopReason: "error"`. Direct API `streamSimple()` calls instead throw synchronously when their required auth is absent.
 
+### Structured failures and retries
+
+Failed assistant messages retain provider facts in `failure` (`status`, `code`,
+`type`, when known), independently of the display-oriented `errorMessage`.
+`isRetryableAssistantError()` uses terminal provider conditions before transient
+codes/statuses, with text fallback when structured evidence does not decide.
+Aborts never retry. Callers retain ownership of retry budgets and backoff.
+
+See [Structured provider failures](STRUCTURED-RETRY.md) for the fork patch's
+contract, evidence, and wholesale upstream-removal condition.
+
 ### Aborting Requests
 
 The abort signal allows you to cancel in-progress requests. Aborted requests have `stopReason === 'aborted'`:

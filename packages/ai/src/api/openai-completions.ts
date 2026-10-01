@@ -36,7 +36,7 @@ import type {
 	ToolResultMessage,
 } from "../types.ts";
 import { CACHE_CHECKPOINT } from "../types.ts";
-import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
+import { normalizeProviderError, ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
@@ -572,6 +572,11 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			for await (const chunk of openaiStream) {
 				await options?.onProviderStreamEvent?.(chunk, model);
 				if (!chunk || typeof chunk !== "object") continue;
+				const streamError = (chunk as { error?: unknown }).error;
+				if (streamError) {
+					const failure = normalizeProviderError(streamError);
+					throw new ProviderFailureError(failure.message, failure);
+				}
 
 				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
 				// and each chunk in a streamed completion carries the same id.
@@ -598,6 +603,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 					output.stopReason = finishReasonResult.stopReason;
 					if (finishReasonResult.errorMessage) {
 						output.errorMessage = finishReasonResult.errorMessage;
+						if (choice.finish_reason === "content_filter") output.failure = { type: "content_filter" };
 					}
 					hasFinishReason = true;
 				}
@@ -710,7 +716,10 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				output.stopReason = output.content.some((block) => block.type === "toolCall") ? "toolUse" : "stop";
 			}
 			if (output.stopReason === "error") {
-				throw new Error(output.errorMessage || "Provider returned an error stop reason");
+				throw new ProviderFailureError(
+					output.errorMessage || "Provider returned an error stop reason",
+					output.failure ?? {},
+				);
 			}
 			if ((compat.supportsFinishReason && !hasFinishReason) || output.stopReason === "pending") {
 				throw new Error("Stream ended without finish_reason");
@@ -730,7 +739,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				delete (block as { streamIndex?: number }).streamIndex;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = formatProviderError(normalizeProviderError(error));
+			setProviderError(output, error);
 			// Some providers via OpenRouter give additional information in this field.
 			// normalizeProviderError already stringifies the parsed body (error.error)
 			// into errorMessage, so only append the raw metadata when it is not already

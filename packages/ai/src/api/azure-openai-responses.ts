@@ -10,7 +10,7 @@ import type {
 	StreamOptions,
 	TranscriptContext,
 } from "../types.ts";
-import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
+import { ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
@@ -48,10 +48,6 @@ function resolveDeploymentName(model: Model<"azure-openai-responses">, options?:
 		getProviderEnvValue("AZURE_OPENAI_DEPLOYMENT_NAME_MAP", options?.env),
 	).get(model.id);
 	return mappedDeployment || model.id;
-}
-
-function formatAzureOpenAIError(error: unknown): string {
-	return formatProviderError(normalizeProviderError(error), "Azure OpenAI API error");
 }
 
 // Azure OpenAI Responses-specific options
@@ -143,7 +139,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 				throw new Error("Azure OpenAI Responses stream ended without a stop reason");
 			}
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error(output.errorMessage || "An unknown error occurred");
+				throw new ProviderFailureError(output.errorMessage || "An unknown error occurred", output.failure ?? {});
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -156,7 +152,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 				delete (block as { customInput?: unknown }).customInput;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = formatAzureOpenAIError(error);
+			setProviderError(output, error, "Azure OpenAI API error");
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

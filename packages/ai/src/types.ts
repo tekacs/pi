@@ -560,6 +560,16 @@ export interface UserMessage {
 	timestamp: number; // Unix timestamp in milliseconds
 }
 
+/** Provider-authored failure facts. Display text and retry policy are separate. */
+export interface ProviderFailure {
+	/** HTTP error status, never a successful stream handshake status. */
+	status?: number;
+	/** Provider error code (including transport codes such as ECONNRESET). */
+	code?: string;
+	/** Provider error type, when distinct from its code. */
+	type?: string;
+}
+
 export interface AssistantMessage {
 	role: "assistant";
 	content: (TextContent | ThinkingContent | ToolCall)[];
@@ -577,6 +587,8 @@ export interface AssistantMessage {
 	stopReason: StopReason;
 	deferred?: DeferredHandle;
 	errorMessage?: string;
+	/** Structured facts for this failed attempt; preserved by JSON persistence. */
+	failure?: ProviderFailure;
 	rawStopReason?: string;
 	/**
 	 * Provider indication of whether the model explicitly ended its turn.

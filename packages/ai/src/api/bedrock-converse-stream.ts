@@ -50,7 +50,7 @@ import type {
 	ToolResultMessage,
 } from "../types.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
-import { normalizeProviderError } from "../utils/error-body.ts";
+import { normalizeProviderError, ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
@@ -243,6 +243,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 		// Kept outside the try so the catch can still correlate a mid-stream failure:
 		// exceptions delivered as stream events carry no HTTP metadata of their own.
 		let responseRequestId: string | undefined;
+		let streamErrorCode: string | undefined;
 
 		try {
 			const supportsStrictMode = model.compat?.supportsStrictMode ?? false;
@@ -312,18 +313,24 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 					output.stopReason = stopReason;
 					if (errorMessage) {
 						output.errorMessage = errorMessage;
+						if (item.messageStop.stopReason) output.failure = { type: item.messageStop.stopReason };
 					}
 				} else if (item.metadata) {
 					handleMetadata(item.metadata, model, output);
 				} else if (item.internalServerException) {
+					streamErrorCode = "InternalServerException";
 					throw item.internalServerException;
 				} else if (item.modelStreamErrorException) {
+					streamErrorCode = "ModelStreamErrorException";
 					throw item.modelStreamErrorException;
 				} else if (item.validationException) {
+					streamErrorCode = "ValidationException";
 					throw item.validationException;
 				} else if (item.throttlingException) {
+					streamErrorCode = "ThrottlingException";
 					throw item.throttlingException;
 				} else if (item.serviceUnavailableException) {
+					streamErrorCode = "ServiceUnavailableException";
 					throw item.serviceUnavailableException;
 				}
 			}
@@ -336,7 +343,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 				throw new Error("Bedrock stream ended without a stop reason");
 			}
 			if (output.stopReason === "error" || output.stopReason === "aborted") {
-				throw new Error(output.errorMessage || "An unknown error occurred");
+				throw new ProviderFailureError(output.errorMessage || "An unknown error occurred", output.failure ?? {});
 			}
 
 			// A stream can settle without stopping every block, so finalize here too.
@@ -348,7 +355,11 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 				finalizeStreamingBlock(block as Block);
 			}
 			output.stopReason = options.signal?.aborted ? "aborted" : "error";
+			setProviderError(output, error);
 			output.errorMessage = formatBedrockError(error);
+			if (streamErrorCode && output.failure?.type !== streamErrorCode) {
+				output.failure = { ...output.failure, code: streamErrorCode };
+			}
 			if (output.stopReason === "error") {
 				appendBedrockFailureDiagnostic(output, error, responseRequestId);
 			}
@@ -430,9 +441,9 @@ function extractBedrockErrorCode(error: unknown): string | undefined {
 }
 
 /**
- * Structured metadata alongside `errorMessage`, which stays byte-identical because `isRetryableAssistantError`
- * matches against it. Unknown fields are omitted, never guessed: a modeled mid-stream exception reaches us as
- * a bare object literal, leaving only `fallbackRequestId`. `details` only, as the throw is not always `Error`.
+ * Supplementary status, exception code, and request ID diagnostics. Structured `failure`
+ * owns retry classification; diagnostics preserve correlation details when available.
+ * Unknown fields are omitted rather than inferred from a successful stream handshake.
  */
 function appendBedrockFailureDiagnostic(
 	output: AssistantMessage,
@@ -444,7 +455,7 @@ function appendBedrockFailureDiagnostic(
 
 	if (typeof metadata?.httpStatusCode === "number") details.status = metadata.httpStatusCode;
 
-	const errorCode = extractBedrockErrorCode(error);
+	const errorCode = output.failure?.code ?? extractBedrockErrorCode(error);
 	if (errorCode !== undefined) details.errorCode = errorCode;
 
 	const requestId = normalizeDiagnosticValue(metadata?.requestId) ?? fallbackRequestId;
