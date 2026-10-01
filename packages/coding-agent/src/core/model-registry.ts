@@ -26,7 +26,7 @@ import type {
 	ProviderHeaders,
 } from "@earendil-works/pi-ai";
 import type { HarnessStream } from "./harness.ts";
-import type { ModelRuntime } from "./model-runtime.ts";
+import type { ModelRuntime, RequestAuthResolver } from "./model-runtime.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
 import type { VirtualModelDefinition } from "./virtual-models.ts";
 
@@ -190,6 +190,11 @@ export class ModelRegistry {
 
 	getProviderDisplayName(provider: string): string {
 		return this.runtime.getProvider(provider)?.name ?? provider;
+	}
+
+	/** Bind per-runtime request auth; dispose on session_shutdown. Does not change login or model availability. */
+	registerAuthResolver(provider: string, resolver: RequestAuthResolver): () => void {
+		return this.runtime.registerAuthResolver(provider, resolver);
 	}
 
 	getProviderAuth(provider: string): Promise<AuthResult | undefined> {

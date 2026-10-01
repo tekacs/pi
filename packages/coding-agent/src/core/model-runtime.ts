@@ -134,6 +134,9 @@ export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
 	minOAuthValidityMs?: number;
 }
 
+/** Request-local auth source. Undefined delegates to normal auth; errors fail closed. */
+export type RequestAuthResolver = (options: ModelRuntimeAuthOverrides) => Promise<AuthResult | undefined>;
+
 export type CredentialSynchronizationOperation = "login" | "logout" | "setRuntimeApiKey" | "removeRuntimeApiKey";
 
 /** Credentials changed successfully, but the local model/auth snapshot could not be synchronized. */
@@ -176,6 +179,7 @@ function mergeHeaders(
 export class ModelRuntime implements Models {
 	private readonly models: MutableModels;
 	private readonly credentials: RuntimeCredentials;
+	private readonly authResolvers = new Map<string, RequestAuthResolver>();
 	private readonly defaultBuiltins: ReadonlyMap<string, Provider>;
 	private readonly builtins = new Map<string, Provider>();
 	private readonly nativeExtensionProviders = new Map<string, Provider>();
@@ -563,15 +567,34 @@ export class ModelRuntime implements Models {
 		return this.snapshot.configuredProviders.has(providerId);
 	}
 
+	/**
+	 * Bind request authentication without changing stored credentials or provider catalogs.
+	 * Call the returned disposer on extension shutdown. One owner per provider; replacing an
+	 * existing binding is an error. A request captures its resolver before awaiting it.
+	 */
+	registerAuthResolver(providerId: string, resolver: RequestAuthResolver): () => void {
+		if (!this.models.getProvider(providerId)) throw new Error(`Unknown provider: ${providerId}`);
+		if (this.authResolvers.has(providerId)) throw new Error(`Authentication already bound for ${providerId}`);
+		this.authResolvers.set(providerId, resolver);
+		return () => {
+			if (this.authResolvers.get(providerId) === resolver) this.authResolvers.delete(providerId);
+		};
+	}
+
 	getAuth(providerId: string, overrides?: ModelRuntimeAuthOverrides): Promise<AuthResult | undefined>;
 	getAuth(model: AnyModel, overrides?: ModelRuntimeAuthOverrides): Promise<AuthResult | undefined>;
 	async getAuth(
 		providerOrModel: string | AnyModel,
 		overrides: ModelRuntimeAuthOverrides = {},
 	): Promise<AuthResult | undefined> {
-		if (typeof providerOrModel === "string") return this.models.getAuth(providerOrModel, overrides);
-		const resolution = await this.models.getAuth(providerOrModel, overrides);
-		if (!resolution) return undefined;
+		const providerId = typeof providerOrModel === "string" ? providerOrModel : providerOrModel.provider;
+		const resolver = overrides.apiKey === undefined ? this.authResolvers.get(providerId) : undefined;
+		const signal = operationSignal(overrides.signal);
+		signal.throwIfAborted();
+		const selected = resolver ? await raceWithAbortSignal(resolver({ ...overrides, signal }), signal) : undefined;
+		signal.throwIfAborted();
+		const resolution = selected ?? (await this.models.getAuth(providerId, overrides));
+		if (!resolution || typeof providerOrModel === "string") return resolution;
 		const configuredHeaders = resolveConfiguredModelHeaders(
 			providerOrModel,
 			this.config.getProvider(providerOrModel.provider),
@@ -582,7 +605,7 @@ export class ModelRuntime implements Models {
 			...resolution,
 			auth: {
 				...resolution.auth,
-				headers: mergeHeaders(resolution.auth.headers, configuredHeaders),
+				headers: mergeHeaders(mergeHeaders(resolution.auth.headers, providerOrModel.headers), configuredHeaders),
 			},
 		};
 	}
