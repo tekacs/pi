@@ -520,6 +520,9 @@ function sdkConfig(model: Model<any>, context: TranscriptContext, options: Claud
 		env,
 		fingerprint: fingerprint({
 			apiKey: options.apiKey,
+			// A live SDK child retains auth. Recreate it when a request selects a different
+			// token/profile, rather than silently continuing under the previous account.
+			auth: [env.CLAUDE_CODE_OAUTH_TOKEN, env.CLAUDE_CONFIG_DIR, env.CLAUDE_SECURESTORAGE_CONFIG_DIR],
 			cacheTtl: env.CLAUDE_CODE_PROMPT_CACHE_TTL,
 			cwd: options.cwd,
 			nativeRoot: options.nativeRoot,
@@ -664,7 +667,21 @@ function createClaudeAgentSdkEnv(
 	if (retention === "long") env.CLAUDE_CODE_PROMPT_CACHE_TTL = "1h";
 	if (retention === "short") env.CLAUDE_CODE_PROMPT_CACHE_TTL = "5m";
 	if (options.apiKey === CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH) {
-		delete env.ANTHROPIC_API_KEY;
+		env.ANTHROPIC_API_KEY = undefined;
+		if (options.env?.CLAUDE_CODE_OAUTH_TOKEN) {
+			// Explicit subscription selection must not inherit another credential or vendor.
+			for (const name of [
+				"ANTHROPIC_AUTH_TOKEN",
+				"ANTHROPIC_BASE_URL",
+				"ANTHROPIC_UNIX_SOCKET",
+				"CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+				"CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+				"CLAUDE_CODE_USE_BEDROCK",
+				"CLAUDE_CODE_USE_VERTEX",
+				"CLAUDE_CODE_USE_FOUNDRY",
+			])
+				env[name] = undefined;
+		}
 	} else if (options.apiKey) {
 		env.ANTHROPIC_API_KEY = options.apiKey;
 	}
