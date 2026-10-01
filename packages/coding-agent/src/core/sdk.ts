@@ -420,7 +420,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		streamFn: async (model, context, options) => {
 			const harness = modelRuntime.getHarness(model.provider);
 			if (harness) {
-				const auth = await modelRuntime.getAuth(model, { apiKey: options?.apiKey, env: options?.env });
+				const auth = await modelRuntime.getAuth(model, {
+					apiKey: options?.apiKey,
+					env: options?.env,
+					signal: options?.signal,
+				});
 				if (!auth) {
 					throw new Error(`Provider is not configured: ${model.provider}`);
 				}
@@ -455,7 +459,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				});
 			}
 			if (isClaudeAgentSdkModel(model)) {
-				const auth = await modelRuntime.getAuth(model, { apiKey: options?.apiKey, env: options?.env });
+				const auth = await modelRuntime.getAuth(model, {
+					apiKey: options?.apiKey,
+					env: options?.env,
+					signal: options?.signal,
+				});
 				if (!auth) {
 					throw new Error(`Provider is not configured: ${model.provider}`);
 				}

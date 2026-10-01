@@ -976,6 +976,52 @@ describe("Claude Agent SDK stream", () => {
 		expect(close).toHaveBeenCalledTimes(1);
 	});
 
+	it.each(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"])(
+		"replaces the SDK child when %s changes without replaying prior user turns",
+		async (field) => {
+			const prompts: string[] = [];
+			const close = vi.fn();
+			sdk.query.mockImplementation(({ prompt }: QueryInput) =>
+				mockQuery(
+					(async function* () {
+						while (true) {
+							prompts.push(contentText(await nextInput(prompt)));
+							yield assistant([{ type: "text", text: "reply" }]);
+							yield success("reply");
+						}
+					})(),
+					close,
+				),
+			);
+			const options = {
+				cwd: process.cwd(),
+				sessionId: "claude-sdk-persistent",
+				apiKey: CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH,
+			};
+			const context: Context = { messages: [user("first")] };
+			const first = await collect(context, { ...options, env: { [field]: "account-a" } });
+			const second = await collect(
+				{ messages: [...context.messages, first.result, user("second")] },
+				{
+					...options,
+					env: { [field]: "account-b", ANTHROPIC_AUTH_TOKEN: "wrong-account", CLAUDE_CODE_USE_BEDROCK: "1" },
+				},
+			);
+			expect(first.result.stopReason).toBe("stop");
+			expect(second.result.stopReason).toBe("stop");
+			expect(sdk.query).toHaveBeenCalledTimes(2);
+			expect(close).toHaveBeenCalledTimes(1);
+			expect(prompts).toEqual(["first", "second"]);
+			const { env, resume } = sdk.query.mock.calls[1][0].options;
+			expect(resume).toEqual(expect.any(String));
+			expect(env[field]).toBe("account-b");
+			if (field === "CLAUDE_CODE_OAUTH_TOKEN") {
+				expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+				expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+			}
+		},
+	);
+
 	it("releases memory-only checkpoints on session cleanup, not on native process replacement", async () => {
 		sdk.query.mockImplementation(({ prompt }: QueryInput) =>
 			mockQuery(
