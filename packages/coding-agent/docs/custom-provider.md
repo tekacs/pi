@@ -151,7 +151,11 @@ its binding; independent sessions need independent runtimes.
 The resolver receives cancellation and minimum OAuth validity options. It returns an
 `AuthResult`, or `undefined` to delegate to normal provider authentication. Errors propagate:
 a failed selected account never falls back to the global login. Explicit request API keys
-bypass the resolver. A request captures the resolver before awaiting it; extensions must
+bypass the resolver. `ctx.modelRegistry.getNativeAuth(providerId)` resolves the underlying
+provider authentication without consulting the request resolver or changing its binding.
+Use it to identify the inherited login even while a branch override is active. It follows
+normal provider credential resolution, including coordinated OAuth renewal when needed;
+never log its result. A request captures the resolver before awaiting it; extensions must
 likewise capture their selected account before asynchronous work. Model/configured headers
 still compose with the resolved auth. Do not return refresh tokens or log auth results.
 

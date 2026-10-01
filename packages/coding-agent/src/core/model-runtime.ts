@@ -580,6 +580,11 @@ export class ModelRuntime implements Models {
 		};
 	}
 
+	/** Resolve underlying provider auth without consulting the request-local binding. */
+	getNativeAuth(providerId: string, overrides: ModelRuntimeAuthOverrides = {}): Promise<AuthResult | undefined> {
+		return this.models.getAuth(providerId, overrides);
+	}
+
 	getAuth(providerId: string, overrides?: ModelRuntimeAuthOverrides): Promise<AuthResult | undefined>;
 	getAuth(model: AnyModel, overrides?: ModelRuntimeAuthOverrides): Promise<AuthResult | undefined>;
 	async getAuth(
@@ -592,7 +597,7 @@ export class ModelRuntime implements Models {
 		signal.throwIfAborted();
 		const selected = resolver ? await raceWithAbortSignal(resolver({ ...overrides, signal }), signal) : undefined;
 		signal.throwIfAborted();
-		const resolution = selected ?? (await this.models.getAuth(providerId, overrides));
+		const resolution = selected ?? (await this.getNativeAuth(providerId, overrides));
 		if (!resolution || typeof providerOrModel === "string") return resolution;
 		const configuredHeaders = resolveConfiguredModelHeaders(
 			providerOrModel,
