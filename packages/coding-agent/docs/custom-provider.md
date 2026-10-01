@@ -140,6 +140,33 @@ OAuth callbacks are UI-neutral. They can open an authorization URL, show a devic
 
 Never write access tokens, refresh tokens, authorization headers, or complete provider responses to ordinary logs.
 
+## Select request authentication independently of login
+
+`ctx.modelRegistry.registerAuthResolver(providerId, resolver)` binds a request-auth source to
+this model runtime without changing the provider, catalog, login, or shared credential file.
+Register on `session_start` and call the returned disposer on `session_shutdown` (including
+reload). Only one resolver may own a provider. SDK consumers sharing one runtime also share
+its binding; independent sessions need independent runtimes.
+
+The resolver receives cancellation and minimum OAuth validity options. It returns an
+`AuthResult`, or `undefined` to delegate to normal provider authentication. Errors propagate:
+a failed selected account never falls back to the global login. Explicit request API keys
+bypass the resolver. A request captures the resolver before awaiting it; extensions must
+likewise capture their selected account before asynchronous work. Model/configured headers
+still compose with the resolved auth. Do not return refresh tokens or log auth results.
+
+This hook covers runtime model calls, including auxiliary calls and compaction, but does not
+change model availability checks or `/login`. Configure the underlying provider normally.
+Restore branch-local account references from `sessionManager.getBranch()`; keep credentials
+in the external owner, never in session entries. Account selection and model selection are
+independent.
+
+The Claude SDK subscription harness accepts a request-scoped `CLAUDE_CODE_OAUTH_TOKEN` in
+`AuthResult.env`. Explicit subscription tokens suppress ambient API credentials and
+third-party routing in the child environment. Token/profile changes invalidate child reuse;
+canonical conversation history continues in the replacement process. Pi does not renew
+externally supplied access tokens.
+
 ## Supply and refresh models
 
 Every model needs an ID, display name, input capabilities, and cost metadata. Chat and classifier models also need a context window; chat models need an output limit and reasoning support; image models declare their output modalities. Choose the API implementation at the provider level unless one model requires an override.
