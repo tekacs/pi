@@ -1,3 +1,6 @@
+import { normalizeProviderError } from "./error-body.ts";
+import { isTerminalFailure } from "./retry.ts";
+
 const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 
 interface ProviderRetryOptions {
@@ -21,8 +24,10 @@ function isProviderError(error: unknown): error is ProviderError {
 	);
 }
 
-/** Mirrors the pinned OpenAI/Anthropic SDK retry policy; review when either SDK is upgraded. */
+/** SDK retry policy, except that known terminal provider conditions always win. */
 function isRetryableProviderError(error: ProviderError): boolean {
+	const failure = normalizeProviderError(error);
+	if (isTerminalFailure(failure, `${failure.message}\n${failure.body ?? ""}`)) return false;
 	const shouldRetry = error.headers?.get("x-should-retry");
 	if (shouldRetry === "true") return true;
 	if (shouldRetry === "false") return false;

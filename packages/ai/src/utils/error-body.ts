@@ -1,3 +1,5 @@
+import type { AssistantMessage, ProviderFailure } from "../types.ts";
+
 // Shared normalization for provider HTTP error objects.
 //
 // Endpoints behind a proxy / gateway may return a non-2xx response whose body
@@ -15,7 +17,7 @@
 
 export const MAX_PROVIDER_ERROR_BODY_CHARS = 4000;
 
-export interface NormalizedProviderError {
+export interface NormalizedProviderError extends ProviderFailure {
 	/** HTTP status code, when one could be extracted from the SDK error object. */
 	status?: number;
 	/** Raw HTTP body reason, already trimmed and truncated to the cap. */
@@ -33,11 +35,90 @@ type SdkErrorShape = Error & {
 	error?: unknown;
 	$metadata?: { httpStatusCode?: unknown };
 	$response?: { statusCode?: unknown; body?: unknown };
+	code?: unknown;
+	type?: unknown;
 };
+
+/** Preserve raw-fetch and stream failure facts until the adapter settles its message. */
+export class ProviderFailureError extends Error implements ProviderFailure {
+	readonly status?: number;
+	readonly code?: string;
+	readonly type?: string;
+
+	constructor(message: string, failure: ProviderFailure) {
+		super(message);
+		this.name = "ProviderFailureError";
+		this.status = failure.status;
+		this.code = failure.code;
+		this.type = failure.type;
+	}
+}
+
+/** Set the display and machine-readable failure together, without persisting raw SDK objects. */
+export function setProviderError(
+	output: Pick<AssistantMessage, "errorMessage" | "failure">,
+	error: unknown,
+	prefix?: string,
+): asserts output is Pick<AssistantMessage, "errorMessage" | "failure"> & { errorMessage: string } {
+	const normalized = normalizeProviderError(error);
+	output.errorMessage = formatProviderError(normalized, prefix);
+	const { status, code, type } = normalized;
+	if (status === undefined && code === undefined && type === undefined) {
+		delete output.failure;
+		return;
+	}
+	output.failure = {
+		...(status === undefined ? {} : { status }),
+		...(code === undefined ? {} : { code }),
+		...(type === undefined ? {} : { type }),
+	};
+}
+
+function errorFields(value: unknown): { code?: string; type?: string } {
+	if (typeof value === "string") {
+		try {
+			value = JSON.parse(value);
+		} catch {
+			return {};
+		}
+	}
+	if (typeof value !== "object" || value === null) return {};
+	const record = value as Record<string, unknown>;
+	return {
+		...(typeof record.code === "string" && record.code ? { code: record.code } : {}),
+		...(typeof record.type === "string" && record.type && record.type !== "error"
+			? { type: record.type }
+			: typeof record.status === "string" && record.status
+				? { type: record.status }
+				: {}),
+	};
+}
+
+function bodyFields(value: unknown): { code?: string; type?: string } {
+	if (typeof value === "string") {
+		try {
+			value = JSON.parse(value);
+		} catch {
+			return {};
+		}
+	}
+	// SDKs differ in whether error is the body, its error member, or a nested envelope.
+	let fields = errorFields(value);
+	for (let depth = 0; depth < 3 && typeof value === "object" && value !== null && "error" in value; depth++) {
+		value = value.error;
+		fields = { ...fields, ...errorFields(value) };
+	}
+	return fields;
+}
 
 export function normalizeProviderError(error: unknown): NormalizedProviderError {
 	if (!(error instanceof Error)) {
-		return { message: safeJsonStringify(error), messageCarriesBody: false };
+		return {
+			message: safeJsonStringify(error),
+			messageCarriesBody: false,
+			...(typeof error === "object" && error !== null ? { status: extractStatus(error as SdkErrorShape) } : {}),
+			...bodyFields(error),
+		};
 	}
 
 	const sdkError = error as SdkErrorShape;
@@ -50,20 +131,25 @@ export function normalizeProviderError(error: unknown): NormalizedProviderError 
 		body,
 		message: error.message,
 		messageCarriesBody,
+		...(/Exception$/.test(error.name) ? { type: error.name } : {}),
+		...bodyFields(error.message),
+		...bodyFields(sdkError.$response?.body),
+		...bodyFields(sdkError.body),
+		...bodyFields(sdkError.error),
+		...errorFields(sdkError),
 	} satisfies NormalizedProviderError;
 }
 
 /**
- * Probe the HTTP status, first numeric hit wins, in SDK-field order:
+ * Probe the HTTP error status (400–599), first valid hit wins, in SDK-field order:
  * `statusCode` (Mistral) → `status` (`openai`, `@google/genai`) →
  * `$metadata.httpStatusCode` (Bedrock) → `$response.statusCode` (Bedrock).
  */
 function extractStatus(error: SdkErrorShape): number | undefined {
-	if (typeof error.statusCode === "number") return error.statusCode;
-	if (typeof error.status === "number") return error.status;
-	if (typeof error.$metadata?.httpStatusCode === "number") return error.$metadata.httpStatusCode;
-	if (typeof error.$response?.statusCode === "number") return error.$response.statusCode;
-	return undefined;
+	return [error.statusCode, error.status, error.$metadata?.httpStatusCode, error.$response?.statusCode].find(
+		(status): status is number =>
+			typeof status === "number" && Number.isInteger(status) && status >= 400 && status <= 599,
+	);
 }
 
 /**

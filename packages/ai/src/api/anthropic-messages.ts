@@ -39,6 +39,7 @@ import type {
 } from "../types.ts";
 import { CACHE_CHECKPOINT } from "../types.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
+import { normalizeProviderError, ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { parseJsonWithRepair, parseStreamingJson, parseToolCallArguments } from "../utils/json-parse.ts";
@@ -545,7 +546,7 @@ async function* iterateAnthropicEvents(
 
 	for await (const sse of iterateSseMessages(response.body, signal)) {
 		if (sse.event === "error") {
-			throw new Error(sse.data);
+			throw new ProviderFailureError(sse.data, normalizeProviderError(sse.data));
 		}
 
 		if (!ANTHROPIC_MESSAGE_EVENTS.has(sse.event ?? "")) {
@@ -858,6 +859,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						output.stopReason = stopReasonResult.stopReason;
 						if (stopReasonResult.errorMessage) {
 							output.errorMessage = stopReasonResult.errorMessage;
+							if (event.delta.stop_reason === "refusal") {
+								output.failure = { type: event.delta.stop_reason };
+							}
 						}
 					}
 					// Only update usage fields if present (not null).
@@ -903,7 +907,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				throw new Error("Anthropic stream ended without a stop reason");
 			}
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error(output.errorMessage || "An unknown error occurred");
+				throw new ProviderFailureError(output.errorMessage || "An unknown error occurred", output.failure ?? {});
 			}
 			if (inputTransformations && inputTransformations.length > 0) {
 				appendAssistantMessageDiagnostic(output, {
@@ -928,7 +932,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				delete (block as { partialJson?: string }).partialJson;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+			setProviderError(output, error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

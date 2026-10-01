@@ -14,6 +14,7 @@ import type {
 	TranscriptContext,
 } from "../types.ts";
 import { combineAbortSignals } from "../utils/abort-signals.ts";
+import { normalizeProviderError, ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
@@ -161,7 +162,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 				throw new Error("Mistral stream ended without a finish reason");
 			}
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error(output.errorMessage || "An unknown error occurred");
+				throw new ProviderFailureError(output.errorMessage || "An unknown error occurred", output.failure ?? {});
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
@@ -172,6 +173,7 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 				delete (block as { partialArgs?: string }).partialArgs;
 			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+			setProviderError(output, error);
 			output.errorMessage = formatMistralError(error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
@@ -518,6 +520,10 @@ function parseMistralEvent(raw: string): MistralCompletionEvent | typeof MISTRAL
 	if (data === "[DONE]") return MISTRAL_STREAM_DONE;
 
 	const parsed: unknown = JSON.parse(data);
+	if (isMistralRecord(parsed) && parsed.error) {
+		const failure = normalizeProviderError(parsed.error);
+		throw new ProviderFailureError(failure.message, failure);
+	}
 	if (!isMistralRecord(parsed) || !Array.isArray(parsed.choices)) {
 		throw new Error("Invalid Mistral streaming event");
 	}

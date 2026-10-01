@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "../types.ts";
+import type { AssistantMessage, ProviderFailure } from "../types.ts";
 
 function buildProviderErrorPattern(patterns: readonly string[]): RegExp {
 	return new RegExp(patterns.join("|"), "i");
@@ -12,7 +12,7 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 
 	// OpenCode Go subscription-limit text asks users to enable available-balance
 	// usage after rolling/weekly/monthly limits are reached.
-	"Monthly usage limit reached",
+	"usage limit (?:reached|exceeded)",
 	"available balance",
 
 	// Generic quota/budget/billing exhaustion. `insufficient_quota` is OpenAI's
@@ -25,6 +25,85 @@ const NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN = buildProviderErrorPattern([
 	// Sign in with ChatGPT: the subscription's shared usage limit, which resets
 	// after hours rather than seconds.
 	"subscription_sharing_usage_limit_exceeded",
+	"usage_limit_reached",
+	"usage_not_included",
+	"ChatGPT usage limit",
+	"invalid_api_key",
+	"authentication_error",
+	"permission_denied",
+	"context_length_exceeded",
+	"max_output_tokens",
+	"content_policy_violation",
+	"provider_queue_timeout",
+	"unable to start processing your request within the 900-second timeout limit",
+]);
+
+const TERMINAL_CODES = new Set([
+	"invalid_api_key",
+	"authentication_error",
+	"permission_denied",
+	"permission_error",
+	"invalid_request_error",
+	"invalid_argument",
+	"model_not_found",
+	"unsupported_model",
+	"insufficient_quota",
+	"usage_limit_reached",
+	"usage_not_included",
+	"gousagelimiterror",
+	"freeusagelimiterror",
+	"subscription_sharing_usage_limit_exceeded",
+	"context_length_exceeded",
+	"model_context_window_exceeded",
+	"max_output_tokens",
+	"content_policy_violation",
+	"content_filter",
+	"safety",
+	"refusal",
+	"sensitive",
+	"guardrail_intervened",
+	"content_filtered",
+	"recitation",
+	"blocklist",
+	"prohibited_content",
+	"spii",
+	"malformed_function_call",
+	"unauthenticated",
+	"not_found",
+	"provider_queue_timeout",
+	"queue_timeout",
+	"accessdeniedexception",
+	"validationexception",
+	"resourcenotfoundexception",
+	"unrecognizedclientexception",
+	"servicequotaexceededexception",
+]);
+
+const TRANSIENT_CODES = new Set([
+	"rate_limit_exceeded",
+	"rate_limit_error",
+	"overloaded_error",
+	"server_error",
+	"internal_error",
+	"temporarily_unavailable",
+	"service_unavailable",
+	"resource_exhausted",
+	"unavailable",
+	"internal",
+	"deadline_exceeded",
+	"subscription_sharing_usage_unavailable",
+	"subscription_sharing_user_unavailable",
+	"throttlingexception",
+	"serviceunavailableexception",
+	"internalserverexception",
+	"modeltimeoutexception",
+	"modelnotreadyexception",
+	"modelstreamerrorexception",
+	"econnreset",
+	"econnrefused",
+	"etimedout",
+	"enotfound",
+	"eai_again",
 ]);
 
 const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
@@ -244,7 +323,7 @@ export async function retryAssistantCall(
 		} catch (error) {
 			await callbacks?.onRetryFinished?.(false, attempt, lastRetry.errorMessage);
 			if (error instanceof RetrySleepAbortError) {
-				const { errorMessage: _errorMessage, ...rest } = response;
+				const { errorMessage: _errorMessage, failure: _failure, ...rest } = response;
 				return { ...rest, stopReason: "aborted" };
 			}
 			throw error;
@@ -263,8 +342,28 @@ export async function retryAssistantCall(
  * before restarting the assistant turn.
  */
 export function isRetryableAssistantError(message: AssistantMessage): boolean {
-	if (message.stopReason !== "error" || !message.errorMessage) return false;
-	const errorMessage = message.errorMessage;
-	if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) return false;
+	return message.stopReason === "error" && isTransientFailure(message.failure, message.errorMessage);
+}
+
+/** Shared classification for request and turn retries; budgets remain with callers. */
+export function isTransientFailure(failure: ProviderFailure | undefined, errorMessage = ""): boolean {
+	if (isTerminalFailure(failure, errorMessage)) return false;
+	const codes = [failure?.code, failure?.type].map((code) =>
+		typeof code === "string" ? code.toLowerCase() : undefined,
+	);
+	const status = failure?.status;
+	if (codes.some((code) => code !== undefined && TRANSIENT_CODES.has(code))) return true;
+	if (status !== undefined && ([408, 409, 429].includes(status) || (status >= 500 && status <= 599))) return true;
 	return RETRYABLE_PROVIDER_ERROR_PATTERN.test(errorMessage);
+}
+
+/** Terminal provider conditions outrank transport retry hints and transient statuses. */
+export function isTerminalFailure(failure: ProviderFailure | undefined, errorMessage = ""): boolean {
+	if (
+		[failure?.code, failure?.type].some((code) => typeof code === "string" && TERMINAL_CODES.has(code.toLowerCase()))
+	)
+		return true;
+	if (NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN.test(errorMessage)) return true;
+	const status = failure?.status;
+	return status !== undefined && status >= 400 && status < 500 && ![408, 409, 429].includes(status);
 }
