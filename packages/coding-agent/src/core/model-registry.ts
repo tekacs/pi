@@ -197,6 +197,11 @@ export class ModelRegistry {
 		return this.runtime.registerAuthResolver(provider, resolver);
 	}
 
+	/** Resolve the inherited login independently of a branch-local auth binding. */
+	getNativeAuth(provider: string, options?: AuthOperationOptions): Promise<AuthResult | undefined> {
+		return this.runtime.getNativeAuth(provider, options);
+	}
+
 	getProviderAuth(provider: string): Promise<AuthResult | undefined> {
 		return this.runtime.getAuth(provider);
 	}
