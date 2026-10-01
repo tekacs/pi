@@ -17,6 +17,7 @@ import type {
 	JsonValue,
 	Model,
 	ProviderEnv,
+	ProviderFailure,
 	SimpleStreamOptions,
 	StreamFunction,
 	StreamOptions,
@@ -25,6 +26,7 @@ import type {
 	TranscriptContext,
 } from "../types.ts";
 import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
+import { ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord, providerHeadersToRecord } from "../utils/headers.ts";
 import { getIdentityHeaders } from "../utils/identity.ts";
@@ -84,6 +86,7 @@ export type PiMessagesEvent =
 			reason: Extract<PiMessagesStopReason, "aborted" | "error">;
 			usage: PiMessagesUsage;
 			errorMessage?: string;
+			failure?: ProviderFailure;
 			responseId?: string;
 			responseModel?: string;
 			providerThinkingLevel?: string;
@@ -94,19 +97,18 @@ type PiMessagesErrorBody = {
 	error?: {
 		message?: unknown;
 		code?: unknown;
+		type?: unknown;
 		details?: unknown;
 		[key: string]: unknown;
 	};
 };
 
-export class PiMessagesResponseError extends Error {
-	code?: string;
+export class PiMessagesResponseError extends ProviderFailureError {
 	readonly diagnosticDetails: JsonObject;
 
-	constructor(message: string, code: string | undefined, diagnosticDetails: JsonObject) {
-		super(message);
+	constructor(message: string, failure: ProviderFailure, diagnosticDetails: JsonObject) {
+		super(message, failure);
 		this.name = "PiMessagesResponseError";
-		this.code = code;
 		this.diagnosticDetails = diagnosticDetails;
 	}
 }
@@ -146,17 +148,22 @@ function createPiMessagesResponseError(
 ): PiMessagesResponseError {
 	const errorBody = parsePiMessagesErrorBody(body);
 	const code = typeof errorBody?.error?.code === "string" ? errorBody.error.code : undefined;
-	return new PiMessagesResponseError(formatPiMessagesResponseError(response, body, errorBody), code, {
-		version: 1,
-		provider: model.provider,
-		model: model.id,
-		url: url.toString(),
-		status: response.status,
-		statusText: response.statusText,
-		...(errorBody?.error === undefined ? {} : { error: errorBody.error as JsonValue }),
-		...(errorBody ? {} : { body: truncateDiagnosticString(body) }),
-		timestampMs: Date.now(),
-	});
+	const type = typeof errorBody?.error?.type === "string" ? errorBody.error.type : undefined;
+	return new PiMessagesResponseError(
+		formatPiMessagesResponseError(response, body, errorBody),
+		{ status: response.status, code, type },
+		{
+			version: 1,
+			provider: model.provider,
+			model: model.id,
+			url: url.toString(),
+			status: response.status,
+			statusText: response.statusText,
+			...(errorBody?.error === undefined ? {} : { error: errorBody.error as JsonValue }),
+			...(errorBody ? {} : { body: truncateDiagnosticString(body) }),
+			timestampMs: Date.now(),
+		},
+	);
 }
 
 function createEmptyUsage(): PiMessagesUsage {
@@ -224,6 +231,7 @@ function createEventConverter(model: Model<"pi-messages">) {
 					stopReason: event.reason,
 					usage: event.usage,
 					errorMessage: event.errorMessage,
+					failure: event.failure,
 					responseId: event.responseId,
 				});
 				if (event.responseModel !== undefined) {
@@ -348,10 +356,10 @@ function createErrorEvent(model: Model<"pi-messages">, error: unknown, aborted: 
 		model: model.id,
 		usage: createEmptyUsage(),
 		stopReason: reason,
-		errorMessage: error instanceof Error ? error.message : String(error),
 		timestamp: Date.now(),
 	};
 
+	setProviderError(assistantMessage, error);
 	if (!aborted && error instanceof PiMessagesResponseError) {
 		appendAssistantMessageDiagnostic(
 			assistantMessage,

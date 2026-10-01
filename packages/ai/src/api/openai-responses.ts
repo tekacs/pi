@@ -15,7 +15,7 @@ import type {
 	TranscriptContext,
 	Usage,
 } from "../types.ts";
-import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
+import { ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
@@ -226,25 +226,20 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				throw new Error("OpenAI Responses stream ended without a stop reason");
 			}
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error(output.errorMessage || "An unknown error occurred");
+				throw new ProviderFailureError(output.errorMessage || "An unknown error occurred", output.failure ?? {});
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			const errorMessage = formatProviderError(
-				normalizeProviderError(error),
-				`${model.provider === "openai" ? "OpenAI" : model.provider} API error`,
-			);
+			setProviderError(output, error, `${model.provider === "openai" ? "OpenAI" : model.provider} API error`);
 			// Sign in with ChatGPT shares the subscription's usage limit with other apps.
 			// On ChatGPT Business plans, the workspace admin also sets a per-user limit.
-			if (errorMessage.includes("subscription_sharing_usage_limit_exceeded")) {
-				output.errorMessage = `${errorMessage}\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`;
-			} else if (errorMessage.includes("subscription_sharing_workplace_individual_usage_limit_exceeded")) {
-				output.errorMessage = `${errorMessage}\n${CHATGPT_WORKSPACE_LIMIT_HINT}`;
-			} else {
-				output.errorMessage = errorMessage;
+			if (output.errorMessage?.includes("subscription_sharing_usage_limit_exceeded")) {
+				output.errorMessage += `\nCheck your ChatGPT usage: ${CHATGPT_USAGE_URL}`;
+			} else if (output.errorMessage?.includes("subscription_sharing_workplace_individual_usage_limit_exceeded")) {
+				output.errorMessage += `\n${CHATGPT_WORKSPACE_LIMIT_HINT}`;
 			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
