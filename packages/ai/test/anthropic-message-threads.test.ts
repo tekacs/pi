@@ -111,7 +111,7 @@ function errorResponse(
 	errorCode?: string,
 	headers?: Record<string, string>,
 ): Response {
-	const type = status === 404 ? "not_found_error" : status === 429 ? "rate_limit_error" : "invalid_request_error";
+	const type = status === 404 ? "not_found_error" : status === 429 ? "rate_limit_error" : status >= 500 ? "overloaded_error" : "invalid_request_error";
 	return Response.json(
 		{ type: "error", error: { type, message, ...(errorCode ? { details: { error_code: errorCode } } : {}) } },
 		{ status, headers },
@@ -153,7 +153,7 @@ function harness() {
 		if (body.thread) threadFingerprints.set(id, expected);
 		return reply(request, { id });
 	};
-	const options: AnthropicOptions = { apiKey: "test-key", fetch, sessionId, maxRetries: 0 };
+	const options: AnthropicOptions = { apiKey: "test-key", fetch, sessionId, maxRetries: 0, cacheRetention: "short" };
 	return { requests, queue, fetch, sessionId, options };
 }
 

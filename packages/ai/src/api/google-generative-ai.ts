@@ -19,7 +19,7 @@ import type {
 	ToolCall,
 	TranscriptContext,
 } from "../types.ts";
-import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
+import { ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
@@ -280,14 +280,14 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 				const errorMessage = output.rawStopReason
 					? `Provider stopped with: ${output.rawStopReason}`
 					: "An unknown error occurred";
-				throw new Error(errorMessage);
+				throw new ProviderFailureError(errorMessage, output.rawStopReason ? { type: output.rawStopReason } : {});
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = formatProviderError(normalizeProviderError(error));
+			setProviderError(output, error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}

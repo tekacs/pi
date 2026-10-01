@@ -2,7 +2,7 @@ import { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../models.ts";
 import type { Api, AssistantMessage, Model, SimpleStreamOptions, StreamFunction, TranscriptContext } from "../types.ts";
-import { formatProviderError, normalizeProviderError } from "../utils/error-body.ts";
+import { ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { getIdentityHeaders } from "../utils/identity.ts";
@@ -22,10 +22,6 @@ import { buildBaseOptions, resolveSamplingParams } from "./simple-options.ts";
 const AZURE_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode", "azure"]);
 // OpenAI Responses rejects max_output_tokens below 16: https://github.com/earendil-works/pi/issues/6265
 const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = 16;
-
-function formatAzureOpenAIError(error: unknown): string {
-	return formatProviderError(normalizeProviderError(error), "Azure OpenAI API error");
-}
 
 // Azure OpenAI Responses-specific options
 export interface AzureOpenAIResponsesOptions extends AzureEndpointOptions {
@@ -112,14 +108,14 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 				throw new Error("Azure OpenAI Responses stream ended without a stop reason");
 			}
 			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error(output.errorMessage || "An unknown error occurred");
+				throw new ProviderFailureError(output.errorMessage || "An unknown error occurred", output.failure ?? {});
 			}
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = formatAzureOpenAIError(error);
+			setProviderError(output, error, "Azure OpenAI API error");
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
