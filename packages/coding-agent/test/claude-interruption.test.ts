@@ -215,8 +215,17 @@ describe("interrupted native Claude continuation", () => {
 		const manager = SessionManager.create(root, join(root, "sessions"));
 		const state = await host(manager, root, endpoint.url, tool);
 		interrupt = () => state.agent.abort();
+		const active = new Set<string>();
+		const lifecycle: string[] = [];
+		state.session.subscribe((event) => {
+			if (event.type === "tool_execution_start") active.add(event.toolCallId);
+			if (event.type === "tool_execution_end") active.delete(event.toolCallId);
+			if (event.type === "tool_execution_start" || event.type === "tool_execution_end") lifecycle.push(event.type);
+		});
 		await state.session.prompt("Execute effect.");
 		expect(effects).toBe(1);
+		expect(lifecycle).toEqual(["tool_execution_start", "tool_execution_end"]);
+		expect(active.size).toBe(0);
 		await state.session.prompt("Continue after interruption.");
 		settled(state.session);
 		expect(JSON.stringify(endpoint.requests.at(-1)!.messages)).toContain("outcome unknown");

@@ -8,6 +8,8 @@ import {
 /** Harness-only commit receipts. The shared provider EventStream is unchanged. */
 export class HarnessOutput extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	private closed = false;
+	private tools = new Set<string>();
+	private termination?: { event: AssistantMessageEvent } | { result?: AssistantMessage };
 	private pending = new Set<(error?: unknown) => void>();
 	private signal?: AbortSignal;
 	private abort = () => this.close(new Error("Harness invocation aborted"));
@@ -40,13 +42,29 @@ export class HarnessOutput extends EventStream<AssistantMessageEvent, AssistantM
 	}
 
 	override push(event: AssistantMessageEvent): void {
-		if (event.type === "done" || event.type === "error") this.close();
+		if (event.type === "done" || event.type === "error") {
+			this.close();
+			this.termination ??= { event };
+			this.flush();
+			return;
+		}
+		if (event.type === "tool_execution_start") this.tools.add(event.toolCallId);
+		if (event.type === "tool_execution_end") this.tools.delete(event.toolCallId);
 		super.push(event);
+		this.flush();
 	}
 
 	override end(result?: AssistantMessage): void {
 		this.close();
-		super.end(result);
+		this.termination ??= { result };
+		this.flush();
+	}
+
+	/** A provider can finish before cancelled tools finish unwinding. Drain their lifecycle first. */
+	private flush(): void {
+		if (this.tools.size || !this.termination) return;
+		if ("event" in this.termination) super.push(this.termination.event);
+		else super.end(this.termination.result);
 	}
 
 	override async *[Symbol.asyncIterator](): AsyncGenerator<AssistantMessageEvent> {

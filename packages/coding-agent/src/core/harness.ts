@@ -198,6 +198,9 @@ export async function runAgentTool(
 		isError = true;
 	}
 
+	// Execution settlement is independent of transcript durability. In particular,
+	// cancellation closes commit receipts but must still retire the live tool.
+	options.stream.push({ type: "tool_execution_end", toolCallId: callId, toolName: tool.name, result, isError });
 	await commit({
 		role: "toolResult",
 		toolCallId: callId,
@@ -209,7 +212,6 @@ export async function runAgentTool(
 		isError,
 		timestamp: Date.now(),
 	});
-	options.stream.push({ type: "tool_execution_end", toolCallId: callId, toolName: tool.name, result, isError });
 	return { result, isError };
 }
 
