@@ -218,6 +218,9 @@ Handlers are awaited in stream order, so slow handlers delay stream consumption.
 
 Tool calls from one assistant message can run in parallel.
 Do not assume a sibling call or result exists when another tool event runs.
+`tool_execution_end` reports that execution and its hooks have settled, not that the result is durable.
+Harness tools emit it even when cancellation or a failed transcript write prevents result persistence.
+A harness terminal response waits for started tools to settle; cancellation does not declare a still-running tool finished.
 Use `ctx.signal` for nested work owned by an active turn; commands and idle session events often have no operation signal.
 
 A `user_bash` handler that returns `undefined` passes the command to the next handler and then to local execution if no handler handles it. Returning `operations` or `result` stops propagation. A handler failure blocks the command rather than falling through to local execution.
