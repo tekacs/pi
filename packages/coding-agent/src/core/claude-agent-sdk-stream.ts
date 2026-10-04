@@ -41,6 +41,12 @@ import { HarnessOutput } from "./harness-output.ts";
 
 /** Disable the bundled binary's duplicate MCP result ceiling in practice. */
 const SDK_TOOL_RESULT_TOKENS = Number.MAX_SAFE_INTEGER;
+/**
+ * Per-tool `anthropic/maxResultSizeChars` hint. The binary clamps it to its
+ * 500k-char persistence ceiling; without it, MCP results above ~50k chars are
+ * persisted to disk and replaced by a preview.
+ */
+const SDK_TOOL_RESULT_CHARS = 500_000;
 
 type ToolLookup = ReadonlyMap<string, AgentTool>;
 
@@ -696,6 +702,7 @@ function createSdkTools(
 		name: mcpName(toolDefinition.name),
 		description: toolDefinition.description,
 		inputSchema: zodShapeFromTypeBox(toolDefinition.parameters),
+		_meta: { "anthropic/maxResultSizeChars": SDK_TOOL_RESULT_CHARS },
 		handler: async (_args, extra) => {
 			const turn = getTurn();
 			const agentTool = turn?.toolLookup.get(toolDefinition.name);
