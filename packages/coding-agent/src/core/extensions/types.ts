@@ -1829,7 +1829,7 @@ export interface ExtensionAPI {
 	/** Run a turn through a generic transient provider boundary without appending it; context transforms supply the operational tail. */
 	triggerTurn(): void;
 
-	/** Send a custom message to the session. */
+	/** Send a custom message to the session. A turn requested during compaction starts once compaction ends. */
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },

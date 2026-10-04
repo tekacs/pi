@@ -444,7 +444,7 @@ Registration-time atomic context-projection capability. It has the same value as
 
 ### pi.triggerTurn()
 
-Run an agent turn without appending a prompt message. Pi sends a generic transient provider input to establish a fresh request boundary, but does not commit or emit that input; the extension's `context` handler supplies the actual operational tail. This is for extensions whose independently durable state changed. Call it only while the agent is idle; Pi reports an extension error if a turn is already running.
+Run an agent turn without appending a prompt message. Pi sends a generic transient provider input to establish a fresh request boundary, but does not commit or emit that input; the extension's `context` handler supplies the actual operational tail. This is for extensions whose independently durable state changed. Call it only while the agent is idle; Pi reports an extension error if a turn is already running. During compaction or branch summarization, Pi defers the turn until the context rewrite ends, as it does for `pi.sendMessage(..., { triggerTurn: true })`.
 
 ```typescript
 pi.on("context", (event) => ({
