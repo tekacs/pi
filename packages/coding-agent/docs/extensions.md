@@ -787,6 +787,10 @@ pi.on("message_end", async (event, ctx) => {
 
 #### tool_execution_start / tool_execution_update / tool_execution_end
 
+`tool_execution_end` reports that execution and its hooks have settled, not that the result is durable.
+Harness tools emit it even when cancellation or a failed transcript write prevents result persistence.
+A harness terminal response waits for started tools to settle; cancellation does not declare a still-running tool finished.
+
 Fired for tool execution lifecycle updates.
 
 In parallel tool mode:
