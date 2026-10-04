@@ -1841,7 +1841,7 @@ export interface ExtensionAPI {
 	/** Run normal startup preparation against existing or extension-projected context, without adding provider input. */
 	triggerTurn(): void;
 
-	/** Send a custom message to the session. */
+	/** Send a custom message to the session. A turn requested during compaction starts once compaction ends. */
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },

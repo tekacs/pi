@@ -410,6 +410,11 @@ export class AgentSession {
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
 	private _pendingCustomMessages: CustomMessage[] = [];
+	/**
+	 * Turn an extension requested while compaction or branch summarization rewrote the context; empty for a
+	 * context-only turn. The next run absorbs it, or it starts once manual compaction or tree navigation ends.
+	 */
+	private _compactionTurn: CustomMessage[] | undefined;
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -1430,6 +1435,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this._compactionTurn = undefined;
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1921,6 +1927,9 @@ export class AgentSession {
 		this._flushPendingCustomMessages();
 		onStarted?.();
 
+		// A turn deferred during compaction joins this run without adding a synthetic prompt.
+		messages.push(...(this._compactionTurn ?? []));
+		this._compactionTurn = undefined;
 		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
 		this._failedResponse = undefined;
 		this._recordSelection();
@@ -2384,6 +2393,7 @@ export class AgentSession {
 	 * - Streaming: queues message, processed when loop pulls from queue
 	 * - Streaming + triggerTurn false: appended to state/session once the current turn ends
 	 * - Not streaming + triggerTurn: appends to state/session, starts new turn
+	 *   (deferred until compaction or branch summarization ends)
 	 * - Not streaming + no trigger: appends to state/session, no turn
 	 *
 	 * @param message Custom message with customType, content, display, details
@@ -2393,6 +2403,10 @@ export class AgentSession {
 	/** Run a context-only turn. Extensions use this when durable state changed but no payload belongs in transcript. */
 	async triggerTurn(): Promise<void> {
 		if (this.isStreaming) throw new Error("Cannot trigger a context-only turn while the agent is already running");
+		if (this.isCompacting) {
+			this._compactionTurn ??= [];
+			return;
+		}
 		await this._startRun({ messageType: "context" });
 	}
 
@@ -2418,6 +2432,11 @@ export class AgentSession {
 				this.agent.steer(appMessage);
 			}
 		} else if (options?.triggerTurn) {
+			// Starting a turn now would race the summarizer rewriting this context.
+			if (this.isCompacting) {
+				this._compactionTurn = [...(this._compactionTurn ?? []), appMessage];
+				return;
+			}
 			if (this._isEmittingAgentSettled) {
 				this._deferredSettledActions.push(async () => await this.sendCustomMessage(message, options));
 				return;
@@ -2542,6 +2561,9 @@ export class AgentSession {
 			this._agentRunAbortRequested = true;
 		}
 		this.abortRetry();
+		// Abort cancels the deferred turn; its messages stay as context for the next prompt.
+		this._pendingNextTurnMessages.push(...(this._compactionTurn ?? []));
+		this._compactionTurn = undefined;
 		this.abortCompaction();
 		this.abortBranchSummary();
 		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
@@ -2853,7 +2875,24 @@ export class AgentSession {
 
 	private _clearManualCompactionState(): void {
 		this._compactionAbortController = undefined;
+		this._startCompactionTurn();
 		this._resolveIdleWaitIfIdle();
+	}
+
+	/**
+	 * Start the turn deferred during manual compaction or tree navigation. It starts before `compaction_end`,
+	 * so prompts queued by listeners steer into it. Automatic compaction runs inside a run or before a
+	 * prompt's run, which absorbs the deferred turn instead.
+	 */
+	private _startCompactionTurn(): void {
+		if (!this._compactionTurn || !this.isIdle) return;
+		this._startRun({ messageType: "context" }).catch((err) => {
+			this._extensionRunner.emitError({
+				extensionPath: "<runtime>",
+				event: "send_message",
+				error: err instanceof Error ? err.message : String(err),
+			});
+		});
 	}
 
 	private _applyContextRepair(
@@ -4398,6 +4437,7 @@ export class AgentSession {
 			return { editorText, cancelled: false, summaryEntry };
 		} finally {
 			this._branchSummaryAbortController = undefined;
+			this._startCompactionTurn();
 			this._resolveIdleWaitIfIdle();
 		}
 	}
