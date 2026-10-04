@@ -272,6 +272,103 @@ describe("AgentSession compaction characterization", () => {
 		expect(harness.session.getLastAssistantText()).toBe("queued response");
 	});
 
+	it.each(["message", "context"])("prepares a deferred %s turn after manual compaction", async (kind) => {
+		let release = () => {};
+		let markStarted = () => {};
+		const started = new Promise<void>((resolve) => {
+			markStarted = resolve;
+		});
+		const triggers: string[] = [];
+		const harness = await createHarness({
+			settings: { compaction: { keepRecentTokens: 1 } },
+			extensionFactories: [
+				(pi) => {
+					pi.on("before_agent_start", (event) => {
+						triggers.push(event.messageType);
+						event.systemPromptOptions.sections.extension_rules = "Prepared after compaction.";
+					});
+					pi.on("session_before_compact", async (event) => {
+						markStarted();
+						await new Promise<void>((resolve) => {
+							release = resolve;
+						});
+						return {
+							compaction: {
+								summary: "manual compacted",
+								firstKeptEntryId: event.preparation.firstKeptEntryId,
+								tokensBefore: event.preparation.tokensBefore,
+								details: {},
+							},
+						};
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		seedCompactableSession(harness);
+		harness.setResponses([
+			(context) => {
+				expect(getCurrentSystemPrompt(context.messages)).toContain("Prepared after compaction.");
+				expect(JSON.stringify(context.messages)).not.toContain("durable context changed");
+				return fauxAssistantMessage("inbox response");
+			},
+		]);
+
+		let queuedPrompt: Promise<void> | undefined;
+		harness.session.subscribe((event) => {
+			if (event.type === "compaction_end") {
+				expect(harness.session.isStreaming).toBe(true);
+				queuedPrompt = harness.session.prompt("queued after compaction", { streamingBehavior: "steer" });
+			}
+		});
+
+		const compactPromise = harness.session.compact();
+		await started;
+		await harness.session.sendCustomMessage(
+			{ customType: "inbox", content: "inbox message", display: true },
+			{ triggerTurn: kind === "message", deliverAs: "steer" },
+		);
+		if (kind === "context") await harness.session.triggerTurn();
+		expect(harness.session.isStreaming).toBe(false);
+		expect(harness.getPendingResponseCount()).toBe(1);
+
+		release();
+		await compactPromise;
+		await queuedPrompt;
+		await harness.session.waitForIdle();
+
+		const entryTypes = harness.sessionManager.getEntries().map((entry) => entry.type);
+		if (kind === "message") {
+			expect(entryTypes.indexOf("compaction")).toBeLessThan(entryTypes.indexOf("custom_message"));
+		}
+		expect(triggers).toEqual(["context"]);
+		expect(harness.session.messages.filter((message) => message.role === "custom")).toHaveLength(1);
+		expect(getUserTexts(harness)).toContain("queued after compaction");
+		expect(harness.getPendingResponseCount()).toBe(0);
+	});
+
+	it("keeps an extension message deferred by compaction as context when the session is aborted", async () => {
+		const { harness, compactionStarted } = await createAbortableCompactionHarness();
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("next response")]);
+
+		const compactExpectation = expect(harness.session.compact()).rejects.toThrow("Compaction cancelled");
+		await compactionStarted;
+		await harness.session.sendCustomMessage(
+			{ customType: "inbox", content: "inbox message", display: true },
+			{ triggerTurn: true, deliverAs: "steer" },
+		);
+		await harness.session.abort();
+		await compactExpectation;
+
+		expect(harness.session.isIdle).toBe(true);
+		expect(harness.getPendingResponseCount()).toBe(1);
+
+		await harness.session.prompt("next prompt");
+		expect(harness.session.messages.some((message) => message.role === "custom")).toBe(true);
+		expect(harness.session.getLastAssistantText()).toBe("next response");
+	});
+
 	it("throws when compacting without a model", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
