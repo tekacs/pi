@@ -1,4 +1,4 @@
-import type { ToolResultMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { HarnessOutput } from "../src/core/harness-output.ts";
 
@@ -12,6 +12,63 @@ const message: ToolResultMessage = {
 };
 
 describe("harness commit receipts", () => {
+	it.each(["done", "error", "end"] as const)("drains concurrent tools before %s, even after abort", async (mode) => {
+		const controller = new AbortController();
+		const stream = new HarnessOutput(controller.signal);
+		const output: AssistantMessage = {
+			role: "assistant",
+			content: [],
+			api: "anthropic-messages",
+			provider: "test",
+			model: "test",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "aborted",
+			timestamp: 1,
+		};
+		const events: string[] = [];
+		let finished = false;
+		const consumer = (async () => {
+			for await (const event of stream) events.push(event.type);
+			finished = true;
+		})();
+		for (const id of ["one", "two"])
+			stream.push({ type: "tool_execution_start", toolCallId: id, toolName: "probe", args: {} });
+		controller.abort();
+		if (mode === "done") stream.push({ type: "done", reason: "stop", message: output });
+		if (mode === "error") stream.push({ type: "error", reason: "aborted", error: output });
+		stream.end(output);
+		await expect(stream.commit(message)).rejects.toThrow("closed");
+		expect(finished).toBe(false);
+		const end = (id: string) =>
+			stream.push({
+				type: "tool_execution_end",
+				toolCallId: id,
+				toolName: "probe",
+				result: { content: [], details: {} },
+				isError: true,
+			});
+		end("one");
+		await Promise.resolve();
+		expect(finished).toBe(false);
+		end("two");
+		await consumer;
+		expect(events).toEqual([
+			"tool_execution_start",
+			"tool_execution_start",
+			"tool_execution_end",
+			"tool_execution_end",
+			...(mode === "end" ? [] : [mode]),
+		]);
+		expect(await stream.result()).toBe(output);
+	});
+
 	it("waits for explicit acknowledgement, not queue delivery", async () => {
 		const stream = new HarnessOutput();
 		let acknowledged = false;

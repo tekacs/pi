@@ -68,6 +68,7 @@ async function host(probe: AgentTool, run: (options: AgentToolRunOptions) => Pro
 			stream,
 			context: { messages: session.agent.state.messages, tools: [probe] },
 			callId: "native-1",
+			signal: session.agent.signal,
 		}).then(
 			() => stream.push({ type: "done", reason: "stop", message: output }),
 			(error: unknown) => {
@@ -129,8 +130,13 @@ describe("canonical harness execution", () => {
 			await runAgentTool(probe, {}, options);
 			delivered = true;
 		});
+		const lifecycle: string[] = [];
+		state.session.subscribe((event) => {
+			if (event.type === "tool_execution_start" || event.type === "tool_execution_end") lifecycle.push(event.type);
+		});
 		if (boundary === "call") fail();
 		await expect(state.session.prompt("run")).rejects.toThrow("reopen before continuing");
+		expect(lifecycle).toEqual(boundary === "call" ? [] : ["tool_execution_start", "tool_execution_end"]);
 		expect(effects).toBe(boundary === "call" ? 0 : 1);
 		expect(delivered).toBe(false);
 		expect(state.session.messages.some((message) => message.role === "toolResult")).toBe(false);
@@ -140,6 +146,30 @@ describe("canonical harness execution", () => {
 		expect(() => state.manager.appendMessage({ role: "user", content: "retry", timestamp: 2 })).toThrow(
 			"reopen before continuing",
 		);
+	});
+
+	it("retires a cancelled tool without accepting an undurable result", async () => {
+		const probe = tool(async () => {
+			state.session.agent.abort();
+			return result;
+		});
+		let rejected = false;
+		const state = await host(probe, async (options) => {
+			await expect(runAgentTool(probe, {}, options)).rejects.toThrow("Harness output is closed");
+			rejected = true;
+		});
+		const active = new Set<string>();
+		const lifecycle: string[] = [];
+		state.session.subscribe((event) => {
+			if (event.type === "tool_execution_start") active.add(event.toolCallId);
+			if (event.type === "tool_execution_end") active.delete(event.toolCallId);
+			if (event.type === "tool_execution_start" || event.type === "tool_execution_end") lifecycle.push(event.type);
+		});
+		await state.session.prompt("run");
+		expect(rejected).toBe(true);
+		expect(active.size).toBe(0);
+		expect(lifecycle).toEqual(["tool_execution_start", "tool_execution_end"]);
+		expect(state.reload().some((message) => message.role === "toolResult")).toBe(false);
 	});
 
 	it("rejects concurrent duplicate claims before a second effect", async () => {
