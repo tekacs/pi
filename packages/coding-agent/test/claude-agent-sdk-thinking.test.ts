@@ -63,26 +63,25 @@ describe("Claude Agent SDK thinking", () => {
 
 		expect(sdkSystemPrompt(systemPrompt, false)).toEqual({ type: "custom", prompt: systemPrompt, snapshot: false });
 		expect(sdkSystemPrompt(systemPrompt, true)).toEqual({
-			type: "preset",
-			preset: "claude_code",
+			type: "custom",
+			prompt: `${systemPrompt}\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.`,
 			snapshot: false,
-			append: `${systemPrompt}\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.`,
 		});
 	});
 
 	it("omits only pi's documentation block from subscription prompts", () => {
 		const systemPrompt = [
-			"Generic tool list and usage guidelines",
-			"Pi documentation (read only when the user asks about pi itself):\n- Triggering documentation details",
-			"<project_context>\nAGENTS.md instructions\n</project_context>\n\n<available_skills>skills</available_skills>",
+			"<rules>\nGeneric tool list and usage guidelines\n</rules>",
+			"<docs>\nPi documentation (read only when the user asks about pi itself):\n- Triggering documentation details\n</docs>",
+			"<addendum>\nAppended instructions\n</addendum>",
+			"<project_context>\nAGENTS.md instructions\n</project_context>",
 		].join("\n\n");
 
 		expect(sdkSystemPrompt(systemPrompt, true)).toEqual({
-			type: "preset",
-			preset: "claude_code",
+			type: "custom",
+			prompt:
+				"<rules>\nGeneric tool list and usage guidelines\n</rules>\n\n<addendum>\nAppended instructions\n</addendum>\n\n<project_context>\nAGENTS.md instructions\n</project_context>\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.",
 			snapshot: false,
-			append:
-				"Generic tool list and usage guidelines\n\n<project_context>\nAGENTS.md instructions\n</project_context>\n\n<available_skills>skills</available_skills>\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.",
 		});
 	});
 

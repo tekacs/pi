@@ -608,19 +608,22 @@ class SdkInput implements AsyncIterable<SDKUserMessage>, AsyncIterator<SDKUserMe
 export function sdkSystemPrompt(systemPrompt: string, usesSubscriptionAuth: boolean) {
 	if (!usesSubscriptionAuth) return { type: "custom" as const, prompt: systemPrompt, snapshot: false };
 
-	const projectContext = systemPrompt.indexOf("\n<project_context>");
-	const piDocs = systemPrompt.indexOf("\nPi documentation (");
-	const subscriptionPrompt =
-		piDocs >= 0 && projectContext > piDocs
-			? `${systemPrompt.slice(0, piDocs)}${systemPrompt.slice(projectContext)}`
-			: systemPrompt;
-
+	// Subscription requests that carry pi's documentation block are billed as extra usage;
+	// the rest of pi's prompt passes as-is, without the Claude Code preset.
 	return {
-		type: "preset" as const,
-		preset: "claude_code" as const,
+		type: "custom" as const,
+		prompt: `${withoutPiDocs(systemPrompt)}\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.`,
 		snapshot: false,
-		append: `${subscriptionPrompt}\n\nYou are running inside pi. Use the exposed mcp__pi__* tools for workspace actions.`,
 	};
+}
+
+function withoutPiDocs(systemPrompt: string): string {
+	const start = systemPrompt.indexOf("<docs>\nPi documentation (");
+	const end = start < 0 ? -1 : systemPrompt.indexOf("</docs>", start);
+	if (end < 0) return systemPrompt;
+	const before = systemPrompt.slice(0, start).trimEnd();
+	const after = systemPrompt.slice(end + "</docs>".length).trimStart();
+	return before && after ? `${before}\n\n${after}` : before || after;
 }
 
 export function findBundledClaude(
