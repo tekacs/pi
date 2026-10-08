@@ -402,7 +402,8 @@ export const OpenAIResponsesCompatSchema = Type.Object(
 		),
 		supportsExplicitPromptCacheMode: Type.Optional(
 			Type.Boolean({
-				description: "Whether the model accepts GPT-5.6+ prompt_cache_options and content-block prompt_cache_breakpoint controls. Older OpenAI models reject them.",
+				description:
+					"Whether the model accepts GPT-5.6+ prompt_cache_options and content-block prompt_cache_breakpoint controls. Older OpenAI models reject them.",
 				default: false,
 			}),
 		),
