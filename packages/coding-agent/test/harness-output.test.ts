@@ -30,7 +30,7 @@ describe("harness commit receipts", () => {
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			},
 			stopReason: "aborted",
-			timestamp: 1,
+			timestamp: Date.now(),
 		};
 		const events: string[] = [];
 		let finished = false;
@@ -67,6 +67,7 @@ describe("harness commit receipts", () => {
 			...(mode === "end" ? [] : [mode]),
 		]);
 		expect(await stream.result()).toBe(output);
+		expect(output.durationMs).toBeGreaterThanOrEqual(0);
 	});
 
 	it("waits for explicit acknowledgement, not queue delivery", async () => {
