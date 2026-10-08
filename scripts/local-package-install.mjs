@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseDocument } from "yaml";
@@ -8,8 +8,10 @@ import { execNpmSync } from "./npm-command.mjs";
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
 
 function createFileSpecifier(fromDirectory, path) {
-	const relativePath = relative(fromDirectory, path);
-	return isAbsolute(relativePath) ? pathToFileURL(path).href : `file:./${relativePath.replaceAll("\\", "/")}`;
+	// Package managers resolve cwd symlinks before resolving relative file dependencies.
+	const target = realpathSync(path);
+	const relativePath = relative(realpathSync(fromDirectory), target);
+	return isAbsolute(relativePath) ? pathToFileURL(target).href : `file:./${relativePath.replaceAll("\\", "/")}`;
 }
 
 function detectIndentation(contents) {
@@ -70,6 +72,7 @@ function lockfilePackageName(path) {
 }
 
 function verifyLocalResolutions(directory, artifactSet, directPackageName) {
+	directory = realpathSync(directory);
 	const lockPath = join(directory, "package-lock.json");
 	const lock = JSON.parse(readFileSync(lockPath, "utf8"));
 	if (!lock.packages || typeof lock.packages !== "object" || Array.isArray(lock.packages)) {
@@ -85,7 +88,7 @@ function verifyLocalResolutions(directory, artifactSet, directPackageName) {
 			throw new Error(`${name} did not resolve from a local artifact: ${String(installed.resolved)}`);
 		}
 		const resolvedPath = new URL(installed.resolved, pathToFileURL(`${directory}/`));
-		if (resolvedPath.protocol !== "file:" || resolvedPath.pathname !== pathToFileURL(artifact.tarballPath).pathname) {
+		if (resolvedPath.protocol !== "file:" || resolvedPath.pathname !== pathToFileURL(realpathSync(artifact.tarballPath)).pathname) {
 			throw new Error(`${name} resolved from the wrong local artifact: ${installed.resolved}`);
 		}
 		resolvedNames.add(name);
