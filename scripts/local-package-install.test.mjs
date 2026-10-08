@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import test from "node:test";
@@ -127,7 +127,7 @@ test("wires multiple direct packages without registry fallbacks", (t) => {
 	);
 });
 
-test("installs a package as the only direct dependency", (t) => {
+test("installs a package as the only direct dependency through a symlinked consumer directory", (t) => {
 	const { artifactSet, root } = createArtifactSet(t);
 	const unsupportedDirectory = join(root, "unsupported-consumer");
 	assert.throws(
@@ -136,6 +136,9 @@ test("installs a package as the only direct dependency", (t) => {
 	);
 	assert.equal(existsSync(unsupportedDirectory), false);
 	const consumerDirectory = join(root, "isolated-consumer");
+	const physicalDirectory = join(root, "nested", "physical-consumer");
+	mkdirSync(physicalDirectory, { recursive: true });
+	symlinkSync(physicalDirectory, consumerDirectory, "junction");
 	installConsumer({ artifactSet, directory: consumerDirectory, packageNames: ["@pi-package-test/target"] });
 	const manifest = JSON.parse(readFileSync(join(consumerDirectory, "package.json"), "utf8"));
 	assert.deepEqual(Object.keys(manifest.dependencies), ["@pi-package-test/target"]);
