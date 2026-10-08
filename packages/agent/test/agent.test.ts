@@ -373,7 +373,7 @@ describe("Agent", () => {
 							? last.content
 							: last.content.find((part) => part.type === "text")?.text;
 				}
-				const stream = new MockAssistantStream();
+				const stream = createAssistantMessageEventStream();
 				queueMicrotask(() => {
 					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("noticed") });
 				});
@@ -389,6 +389,7 @@ describe("Agent", () => {
 
 		expect(contextRoles).toEqual(["user"]);
 		expect(transientText).toBe("context changed");
+		expect(agent.state.errorMessage).toBeUndefined();
 		expect(agent.state.messages.map((message) => message.role)).toEqual(["assistant"]);
 		expect(agentEndRoles).toEqual(["assistant"]);
 		expect(events).toEqual(["agent_start", "turn_start", "message_start", "message_end", "turn_end", "agent_end"]);
@@ -400,7 +401,7 @@ describe("Agent", () => {
 			streamFn: (_model, context) => {
 				expect(context.messages.map((message) => message.role)).toEqual(["system", "user"]);
 				expect(getCurrentSystemMessage(context.messages)?.toolsAdded?.map((tool) => tool.name)).toEqual(["echo"]);
-				const stream = new MockAssistantStream();
+				const stream = createAssistantMessageEventStream();
 				queueMicrotask(() => stream.push({ type: "done", reason: "stop", message: createAssistantMessage("ok") }));
 				return stream;
 			},
@@ -417,6 +418,7 @@ describe("Agent", () => {
 		);
 		expect(agent.state.messages.map((message) => message.role)).toEqual(["system", "assistant"]);
 		expect(agent.state.systemPrompt).toBe("durable instructions");
+		expect(agent.state.errorMessage).toBeUndefined();
 		expect(events.flatMap((event) => (event.type === "message_end" ? [event.message.role] : []))).toEqual([
 			"system",
 			"assistant",

@@ -1,12 +1,8 @@
-import {
-	type AssistantMessage,
-	type AssistantMessageEvent,
-	EventStream,
-	type ToolResultMessage,
-} from "@earendil-works/pi-ai";
+import type { AssistantMessage, AssistantMessageEvent, ToolResultMessage } from "@earendil-works/pi-ai";
+import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 
-/** Harness-only commit receipts. The shared provider EventStream is unchanged. */
-export class HarnessOutput extends EventStream<AssistantMessageEvent, AssistantMessage> {
+/** Assistant response timing with harness-only commit receipts and tool-drain settlement. */
+export class HarnessOutput extends AssistantMessageEventStream {
 	private closed = false;
 	private tools = new Set<string>();
 	private termination?: { event: AssistantMessageEvent } | { result?: AssistantMessage };
@@ -15,14 +11,7 @@ export class HarnessOutput extends EventStream<AssistantMessageEvent, AssistantM
 	private abort = () => this.close(new Error("Harness invocation aborted"));
 
 	constructor(signal?: AbortSignal) {
-		super(
-			(event) => event.type === "done" || event.type === "error",
-			(event) => {
-				if (event.type === "done") return event.message;
-				if (event.type === "error") return event.error;
-				throw new Error("Unexpected harness terminal event");
-			},
-		);
+		super();
 		this.signal = signal;
 		if (signal?.aborted) this.abort();
 		else signal?.addEventListener("abort", this.abort, { once: true });
