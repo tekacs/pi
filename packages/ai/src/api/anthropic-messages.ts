@@ -862,13 +862,16 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					});
 				}
 
+				const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
+				const cacheKey = cacheRetention === "none" ? undefined : (options?.cacheKey ?? options?.sessionId);
+
 				const created = createClient(
 					model,
 					apiKey,
 					options?.headers,
 					options?.fetch,
 					copilotDynamicHeaders,
-					cacheSessionId,
+					cacheKey,
 					federation,
 					options?.identity,
 				);

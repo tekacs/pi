@@ -54,6 +54,7 @@ export interface CreateAgentSessionServicesOptions {
 export interface CreateAgentSessionFromServicesOptions {
 	services: AgentSessionServices;
 	sessionManager: SessionManager;
+	cacheKey?: CreateAgentSessionOptions["cacheKey"];
 	sessionStartEvent?: SessionStartEvent;
 	model?: Model<any>;
 	thinkingLevel?: ThinkingLevel;
@@ -233,6 +234,7 @@ export async function createAgentSessionFromServices(
 		settingsManager: options.services.settingsManager,
 		resourceLoader: options.services.resourceLoader,
 		sessionManager: options.sessionManager,
+		cacheKey: options.cacheKey,
 		model: options.model,
 		thinkingLevel: options.thinkingLevel,
 		scopedModels: options.scopedModels,

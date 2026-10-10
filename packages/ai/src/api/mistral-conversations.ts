@@ -357,8 +357,9 @@ function buildMistralHeaders(model: Model<"mistral-conversations">, apiKey: stri
 
 	const hasExplicitAffinity =
 		hasMistralHeaderOverride(model.headers, "x-affinity") || hasMistralHeaderOverride(options?.headers, "x-affinity");
-	if (shouldUsePromptCaching(options) && !hasExplicitAffinity) {
-		headers.set("x-affinity", options.sessionId);
+	const cacheKey = promptCacheKey(options);
+	if (cacheKey && !hasExplicitAffinity) {
+		headers.set("x-affinity", cacheKey);
 	}
 
 	return headers;
@@ -540,13 +541,14 @@ function buildChatPayload(
 	if (options?.toolChoice) payload.toolChoice = mapToolChoice(options.toolChoice);
 	if (options?.promptMode) payload.promptMode = options.promptMode;
 	if (options?.reasoningEffort) payload.reasoningEffort = options.reasoningEffort;
-	if (shouldUsePromptCaching(options)) payload.promptCacheKey = options.sessionId;
+	const cacheKey = promptCacheKey(options);
+	if (cacheKey) payload.promptCacheKey = cacheKey;
 
 	return payload;
 }
 
-function shouldUsePromptCaching(options?: MistralOptions): options is MistralOptions & { sessionId: string } {
-	return options?.cacheRetention !== "none" && !!options?.sessionId;
+function promptCacheKey(options?: MistralOptions): string | undefined {
+	return options?.cacheRetention === "none" ? undefined : (options?.cacheKey ?? options?.sessionId);
 }
 
 function getMistralCachedPromptTokens(usage: unknown, promptTokens: number): number {

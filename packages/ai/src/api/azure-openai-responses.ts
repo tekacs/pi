@@ -202,7 +202,9 @@ function buildParams(
 		input: messages,
 		stream: true,
 		prompt_cache_key:
-			model.compat?.promptCacheKeyMode === "disabled" ? undefined : clampOpenAIPromptCacheKey(options?.sessionId),
+			options?.cacheRetention === "none" || model.compat?.promptCacheKeyMode === "disabled"
+				? undefined
+				: clampOpenAIPromptCacheKey(options?.cacheKey ?? options?.sessionId),
 		store: false,
 	};
 

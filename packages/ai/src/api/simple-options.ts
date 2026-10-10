@@ -54,6 +54,7 @@ export function buildBaseOptions(
 ): StreamOptions {
 	const samplingParams = resolveSamplingParams(model, options?.reasoning ?? "off", options?.samplingParams);
 	return {
+		purpose: options?.purpose,
 		temperature: options?.temperature,
 		samplingParams,
 		maxTokens: clampMaxTokensToContext(model, context, options?.maxTokens ?? model.maxTokens),
@@ -65,6 +66,7 @@ export function buildBaseOptions(
 		cacheRetention: options?.cacheRetention,
 		sessionId: options?.sessionId,
 		disableContinuation: options?.disableContinuation,
+		cacheKey: options?.cacheKey,
 		headers: options?.headers,
 		identity: options?.identity,
 		onPayload: options?.onPayload,
