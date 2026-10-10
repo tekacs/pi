@@ -32,7 +32,13 @@ import {
 	runToolCall,
 	type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
-import { contentText, getCurrentSystemMessage, normalizeContext, retryDelayMs } from "@earendil-works/pi-ai";
+import {
+	contentText,
+	getCurrentSystemMessage,
+	normalizeContext,
+	retryDelayMs,
+	type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
 	AuthResult,
@@ -121,7 +127,7 @@ import {
 } from "./extensions/index.ts";
 import { type BeforeAgentStartTrigger, emitSessionShutdownEvent } from "./extensions/runner.ts";
 import { createToolNameMatcher, isMcpToolName } from "./mcp-servers.ts";
-import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
+import { type BashExecutionMessage, type CustomMessage, cloneMessages, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
 import type { ModelRuntime } from "./model-runtime.ts";
 import { NestedToolCallRunner } from "./nested-tool-calls.ts";
@@ -261,6 +267,8 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
 }
 
 export interface AgentSessionConfig {
+	/** Prompt-cache affinity override; independent from session resource ownership. */
+	cacheKey?: string;
 	agent: Agent;
 	sessionManager: SessionManager;
 	settingsManager: SettingsManager;
@@ -516,7 +524,10 @@ export class AgentSession {
 	/** Prompt options after before_agent_start mutations for the active run. */
 	private _runSystemPromptOptions?: NormalizedBuildSystemPromptOptions;
 
+	private readonly _cacheKey?: string;
+
 	constructor(config: AgentSessionConfig) {
+		this._cacheKey = config.cacheKey;
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
@@ -1693,6 +1704,11 @@ export class AgentSession {
 	/** Current session ID */
 	get sessionId(): string {
 		return this.sessionManager.getSessionId();
+	}
+
+	/** Effective prompt-cache affinity. Sharing it never shares session resources. */
+	get cacheKey(): string {
+		return this._cacheKey ?? this.sessionId;
 	}
 
 	/** Current session display name, if set */
@@ -3722,6 +3738,7 @@ export class AgentSession {
 			},
 			{
 				getModel: () => this.model,
+				getCacheKey: () => this.cacheKey,
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
@@ -3739,6 +3756,7 @@ export class AgentSession {
 				},
 				getContextUsage: () => this.getContextUsage(),
 				reportEffectiveContext: (usage) => this._reportEffectiveContext(usage),
+				materializeContext: (candidate, options) => this.materializeContext(candidate, options),
 				countContextTokens: (messages, options) => this.countContextTokens(messages, options),
 				reportContextRepair: (progress) => this._emit({ type: "context_repair_progress", ...progress }),
 				compact: (options) => {
@@ -4649,13 +4667,31 @@ export class AgentSession {
 		};
 	}
 
+	/** Materialize detached provider input without appending history or making a provider request. */
+	async materializeContext(
+		candidate: AgentMessage[] | ContextTokenCandidate,
+		options: ContextTokenCountOptions = {},
+	): Promise<TranscriptContext> {
+		const signal = options.signal ?? this.agent.signal;
+		signal?.throwIfAborted();
+		const source = Array.isArray(candidate)
+			? candidate
+			: buildSessionContext(candidate.entries, candidate.leafId).messages;
+		const messages = cloneMessages(source);
+		const prompt = { ...(this._runSystemPromptOptions ?? this._baseSystemPromptOptions) };
+		const update = this._promptUpdate(prompt, messages);
+		const pending = declareToolChanges({ messages, tools: this.agent.state.tools }, update ? [update] : []);
+		const prepared = [...messages, ...pending];
+		const transformed = this.agent.transformContext ? await this.agent.transformContext(prepared, signal) : prepared;
+		const context = normalizeContext({ messages: await this.agent.convertToLlm(transformed) });
+		signal?.throwIfAborted();
+		return { ...context, messages: cloneMessages(context.messages) };
+	}
+
 	async countContextTokens(
 		candidate: AgentMessage[] | ContextTokenCandidate,
 		options: ContextTokenCountOptions = {},
 	): Promise<ContextTokenCount> {
-		const messages = Array.isArray(candidate)
-			? candidate
-			: buildSessionContext(candidate.entries, candidate.leafId).messages;
 		const model = this.model;
 		if (!model) {
 			return {
@@ -4668,15 +4704,11 @@ export class AgentSession {
 
 		try {
 			const signal = options.signal ?? this.agent.signal;
-			const update = this._promptUpdate(this._runSystemPromptOptions ?? this._baseSystemPromptOptions, messages);
-			const pending = declareToolChanges({ messages, tools: this.agent.state.tools }, update ? [update] : []);
-			const prepared = [...messages, ...pending];
-			const transformed = this.agent.transformContext
-				? await this.agent.transformContext(prepared, signal)
-				: prepared;
-			const context = normalizeContext({ messages: await this.agent.convertToLlm(transformed) });
+			const context = await this.materializeContext(candidate, { signal });
+			this._modelRuntime.assertPurpose(model, "measurement");
 			const apiKey = await this.agent.getApiKey?.(model.provider);
 			const events = await this.agent.streamFunction(model, context, {
+				purpose: "measurement",
 				apiKey,
 				signal,
 				maxTokens: 1,

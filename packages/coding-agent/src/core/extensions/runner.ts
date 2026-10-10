@@ -15,6 +15,7 @@ import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
 import type { CacheWarmingAction } from "../cache-warmer.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
+import { cloneMessages } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
 import type { SessionManager } from "../session-manager.ts";
@@ -377,6 +378,7 @@ export class ExtensionRunner {
 	private sessionManager: SessionManager;
 	private modelRegistry: ModelRegistry;
 	private errorListeners: Set<ExtensionErrorListener> = new Set();
+	private getCacheKey: (() => string) | undefined;
 	private getModel: () => Model<any> | undefined = () => undefined;
 	private getScopedModels: () => readonly ScopedModel[] = () => [];
 	private isIdleFn: () => boolean = () => true;
@@ -387,6 +389,7 @@ export class ExtensionRunner {
 	private hasPendingMessagesFn: () => boolean = () => false;
 	private getContextUsageFn: () => ContextUsage | undefined = () => undefined;
 	private reportEffectiveContextFn: (usage: EffectiveContextUsage) => void = () => {};
+	private materializeContextFn: ExtensionContext["materializeContext"];
 	private countContextTokensFn: (
 		candidate: AgentMessage[] | ContextTokenCandidate,
 		options?: ContextTokenCountOptions,
@@ -469,6 +472,7 @@ export class ExtensionRunner {
 		this.runtime.createContext = () => this.createContext();
 
 		// Context actions (required)
+		this.getCacheKey = contextActions.getCacheKey;
 		this.getModel = contextActions.getModel;
 		this.getScopedModels = contextActions.getScopedModels;
 		this.isIdleFn = contextActions.isIdle;
@@ -479,6 +483,7 @@ export class ExtensionRunner {
 		this.shutdownHandler = contextActions.shutdown;
 		this.getContextUsageFn = contextActions.getContextUsage;
 		this.reportEffectiveContextFn = contextActions.reportEffectiveContext;
+		this.materializeContextFn = contextActions.materializeContext;
 		this.countContextTokensFn = contextActions.countContextTokens;
 		this.reportContextRepairFn = contextActions.reportContextRepair;
 		this.compactFn = contextActions.compact;
@@ -969,6 +974,10 @@ export class ExtensionRunner {
 				runner.assertActive();
 				return runner.sessionManager;
 			},
+			get cacheKey() {
+				runner.assertActive();
+				return runner.getCacheKey?.();
+			},
 			get modelRegistry() {
 				runner.assertActive();
 				return runner.modelRegistry;
@@ -1020,6 +1029,12 @@ export class ExtensionRunner {
 			reportEffectiveContext: (usage) => {
 				runner.assertActive();
 				runner.reportEffectiveContextFn(usage);
+			},
+			materializeContext: async (candidate, options) => {
+				runner.assertActive();
+				if (!runner.materializeContextFn)
+					throw new Error("Context materialization is unavailable before session startup");
+				return runner.materializeContextFn(candidate, options);
 			},
 			countContextTokens: (candidate, options) => {
 				runner.assertActive();
@@ -1383,7 +1398,7 @@ export class ExtensionRunner {
 	 */
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
 		const ctx = this.createContext();
-		let currentMessages = structuredClone(messages);
+		let currentMessages = cloneMessages(messages);
 
 		for (const { ext, handlers } of snapshotEventHandlers(this.extensions, "context")) {
 			for (const handler of handlers) {

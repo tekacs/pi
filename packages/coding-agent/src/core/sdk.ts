@@ -104,6 +104,9 @@ export interface CreateAgentSessionOptions {
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
 
+	/** Prompt-cache affinity override. Defaults to the session ID; does not share transport resources. */
+	cacheKey?: string;
+
 	/** Session manager. Default: SessionManager.create(cwd) */
 	sessionManager?: SessionManager;
 
@@ -338,6 +341,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		});
 	};
 
+	const cacheKey = options.cacheKey;
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 	const cacheWarmer = new CacheWarmer(
 		modelRuntime,
@@ -426,6 +430,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
+			modelRuntime.assertPurpose(model, options?.purpose);
+			// Auxiliary summary requests retain their own affinity. Native harnesses receive
+			// the same optional hint, without replacing their session or transport identity.
+			options = {
+				...options,
+				cacheKey:
+					options?.cacheKey ?? (options?.sessionId === sessionManager.getSessionId() ? cacheKey : undefined),
+			};
 			const harness = modelRuntime.getHarness(model.provider);
 			if (harness) {
 				const auth = await modelRuntime.getAuth(model, {
@@ -539,6 +551,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		resourceLoader,
 		customTools: options.customTools,
 		modelRuntime,
+		cacheKey,
 		cacheWarmer,
 		initialActiveToolNames,
 		usesDefaultTools: (options.tools === undefined || toolModifiers !== undefined) && !options.noTools,

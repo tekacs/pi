@@ -69,7 +69,7 @@ import {
 import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
-import { sdkProviders } from "./claude-agent-sdk-models.ts";
+import { CLAUDE_AGENT_SDK_API, sdkProviders } from "./claude-agent-sdk-models.ts";
 import type { HarnessStream } from "./harness.ts";
 import { ModelConfig } from "./model-config.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
@@ -545,6 +545,15 @@ export class ModelRuntime implements Models {
 		return this.harnesses.get(providerId);
 	}
 
+	/** Reject unsafe measurement before native authentication or dispatch, including routed requests. */
+	assertPurpose(model: Model<Api>, purpose: StreamOptions["purpose"]): void {
+		if (purpose !== "measurement") return;
+		// No native harness currently exposes a separate, effect-free measurement capability.
+		if (this.harnesses.has(model.provider) || model.api === CLAUDE_AGENT_SDK_API) {
+			throw new ModelsError("provider", `Context measurement is unsupported for native provider: ${model.provider}`);
+		}
+	}
+
 	/** @internal Compatibility fallback for ModelRegistry when provider auth is unconfigured. */
 	getCompatibilityRequestConfig(model: Model<Api>): CompatibilityRequestConfig {
 		return resolveCompatibilityRequestConfig(
@@ -742,6 +751,7 @@ export class ModelRuntime implements Models {
 		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
 			assertChatModel(model);
+			this.assertPurpose(model, options?.purpose);
 			const prepared = await this.prepareRequest(
 				model,
 				options as (StreamOptions & ModelsRequestTransforms) | undefined,
@@ -781,6 +791,7 @@ export class ModelRuntime implements Models {
 		}
 		return lazyStream(model, async () => {
 			assertChatModel(model);
+			this.assertPurpose(model, options?.purpose);
 			const prepared = await this.prepareRequest(model, options);
 			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
 		});

@@ -408,6 +408,8 @@ export interface ExtensionContext {
 	cwd: string;
 	/** Session manager (read-only) */
 	sessionManager: ReadonlySessionManager;
+	/** Effective prompt-cache affinity, when supplied by the runtime. Not session identity or authority. */
+	readonly cacheKey?: string;
 	/** Model registry for API key resolution */
 	modelRegistry: ModelRegistry;
 	/** Current model (may be undefined) */
@@ -445,6 +447,11 @@ export interface ExtensionContext {
 		candidate: AgentMessage[] | ContextTokenCandidate,
 		options?: ContextTokenCountOptions,
 	): Promise<ContextTokenCount>;
+	/** Materialize detached provider input through projection and context transforms, without calling a provider. */
+	materializeContext?(
+		candidate: AgentMessage[] | ContextTokenCandidate,
+		options?: ContextTokenCountOptions,
+	): Promise<TranscriptContext>;
 	/** Update the inspectable compaction/repair stage shown by Pi. */
 	reportContextRepair?(progress: ContextRepairProgress): void;
 	/** Trigger compaction without awaiting completion. */
@@ -2334,6 +2341,7 @@ export interface ExtensionActions {
  * Required by all modes.
  */
 export interface ExtensionContextActions {
+	getCacheKey?: () => string;
 	getModel: () => Model<any> | undefined;
 	getScopedModels: () => readonly ScopedModel[];
 	isIdle: () => boolean;
@@ -2344,6 +2352,7 @@ export interface ExtensionContextActions {
 	shutdown: () => void;
 	getContextUsage: () => ContextUsage | undefined;
 	reportEffectiveContext: (usage: EffectiveContextUsage) => void;
+	materializeContext?: ExtensionContext["materializeContext"];
 	countContextTokens: (
 		candidate: AgentMessage[] | ContextTokenCandidate,
 		options?: ContextTokenCountOptions,
