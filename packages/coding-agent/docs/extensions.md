@@ -407,9 +407,19 @@ const count = await ctx.countContextTokens({ entries, leafId }, { signal });
 if (count.ok) ctx.reportEffectiveContext?.({ tokens: count.tokens, source: "repair-preflight" });
 ```
 
+### ctx.cacheKey
+
+The effective prompt-cache affinity key, when the runtime supplies it. Pass it as the SDK `cacheKey` option when creating a separate session that inherits a compatible prefix. The new session retains its own transport identity, connection state, tools and cleanup. Retention policy and provider support still apply; sharing the hint does not guarantee a cache hit. Like other context getters, access through a disposed or replaced runtime is rejected.
+
+### ctx.materializeContext()
+
+Returns a detached provider-facing transcript for an explicit message array or `{ entries, leafId }` candidate. It applies the same projection, pending prompt/tool declarations, context transforms, message conversion and normalization that `countContextTokens()` uses, but makes no provider request and appends no history. Context transforms still execute. Pass `{ signal }` to cancel. Provider payload hooks and transport/cache state are not part of this snapshot; historical tool declarations do not grant execution authority. See [SDK context materialization](sdk.md#materializing-context).
+
 ### ctx.countContextTokens()
 
-Measures an explicit candidate transcript or hypothetical session branch with the active model/provider. Branch candidates are first materialized through Pi's normal compaction and context-projection pipeline. Pi then applies the normal context transforms, message conversion, system prompt, tools, authentication, payload hooks, and cache/session-affinity options before making a non-persisted provider preflight request capped at one output token. A successful result contains exact provider-reported input/cache token buckets. Neither the candidate nor the probe is appended to session history, but the probe is a real request and may consume provider quota or warm prompt caches. Pass a caller-owned `AbortSignal` to bound or cancel the provider request.
+Measures an explicit candidate transcript or hypothetical session branch with the active model/provider. Branch candidates are first materialized through Pi's normal compaction and context-projection pipeline. Pi then applies context transforms, message conversion, prompt/tool declarations, authentication, payload hooks, and cache/session-affinity options before sending a detached request with `purpose: "measurement"`. Pi requests one output token, but adapters may raise or ignore that ceiling. A successful result contains the probe's provider-reported input/cache token buckets, not a certificate for a later prepared request. Neither the candidate nor the probe is appended to session history; Pi does not execute returned tool calls or start or replace ordinary cache-warming jobs. The request can still consume quota and populate provider-side prompt caches. Pass a caller-owned `AbortSignal` to cancel it.
+
+Registered agent harnesses and the built-in Claude Agent SDK have no safe measurement capability. Pi returns `ok: false`, `overflow: false`, with an unsupported message before native authentication or harness execution, including when virtual routing selects a native provider. Context transforms, routers and request hooks are still extension code, not sandboxed by measurement. See [SDK measurement limits](sdk.md#measuring-context).
 
 ```typescript
 const count = await ctx.countContextTokens(candidateMessages, { signal });

@@ -366,7 +366,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				compat.supportsOpenAIGrammarTools,
 			);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
-			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
+			const cacheKey = cacheRetention === "none" ? undefined : (options?.cacheKey ?? options?.sessionId);
 			const client = createClient(
 				model,
 				normalizedContext,
@@ -374,7 +374,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				options?.headers,
 				options?.identity,
 				options?.fetch,
-				cacheSessionId,
+				cacheKey,
 				compat,
 			);
 			let params = buildParams(
@@ -839,7 +839,7 @@ function buildParams(
 		prompt_cache_key:
 			(model.baseUrl.includes("api.openai.com") && cacheRetention !== "none") ||
 			(cacheRetention === "long" && compat.supportsLongCacheRetention)
-				? clampOpenAIPromptCacheKey(options?.sessionId)
+				? clampOpenAIPromptCacheKey(options?.cacheKey ?? options?.sessionId)
 				: undefined,
 		prompt_cache_retention: cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
 	};

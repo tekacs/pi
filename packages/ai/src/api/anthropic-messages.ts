@@ -626,7 +626,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				}
 
 				const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
-				const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
+				const cacheKey = cacheRetention === "none" ? undefined : (options?.cacheKey ?? options?.sessionId);
 
 				const created = createClient(
 					model,
@@ -634,7 +634,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					options?.headers,
 					options?.fetch,
 					copilotDynamicHeaders,
-					cacheSessionId,
+					cacheKey,
 					federation,
 					options?.identity,
 				);

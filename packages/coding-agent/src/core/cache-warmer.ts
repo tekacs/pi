@@ -203,6 +203,8 @@ export class CacheWarmer {
 
 	/** Keep the prompt cache entry written by `request` warm while `isCurrent` holds. */
 	start(request: CacheWarmRequest, isCurrent: () => boolean): void {
+		// A detached measurement must neither schedule warming nor disturb the ordinary request's job.
+		if (request.options.purpose === "measurement") return;
 		this.clearRun();
 		const mode = this.getMode();
 		if (mode === "off") {

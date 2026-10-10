@@ -245,7 +245,7 @@ export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts"
 export { type AgentToolRunOptions, runAgentTool } from "./core/harness.ts";
 export { HarnessOutput } from "./core/harness-output.ts";
 export type { RegisteredMcpServer } from "./core/mcp-servers.ts";
-export { convertToLlm } from "./core/messages.ts";
+export { cloneMessages, convertToLlm } from "./core/messages.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export {
 	type ModelScopeDiagnostic,

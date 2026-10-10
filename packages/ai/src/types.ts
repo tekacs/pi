@@ -219,6 +219,13 @@ export interface ProviderRequestOptions<TModel = Model<Api>> {
 
 export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	/**
+	 * Measurement requests observe prompt usage without executing tools, persisting an
+	 * assistant turn, or scheduling ordinary cache warming. Defaults to "inference".
+	 * Effectful native harnesses must reject measurement unless they explicitly support it.
+	 * This does not guarantee a provider's output ceiling or sandbox request hooks.
+	 */
+	purpose?: "inference" | "measurement";
+	/**
 	 * Optional callback invoked after an HTTP response is received and before
 	 * its body stream is consumed.
 	 */
@@ -250,11 +257,16 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 */
 	cacheRetention?: CacheRetention;
 	/**
-	 * Optional session identifier for providers that support session-based caching.
-	 * Providers can use this to enable prompt caching, request routing, or other
-	 * session-aware features. Ignored by providers that don't support it.
+	 * Session identity for transport resources and session-aware provider features.
+	 * Also supplies default prompt-cache affinity when cacheKey is absent.
 	 */
 	sessionId?: string;
+	/**
+	 * Prompt-cache affinity, independent of session identity and transport cleanup.
+	 * Defaults to sessionId. Sharing a key only requests compatible prefix reuse;
+	 * it neither shares connections nor grants tools/auth. Unsupported adapters ignore it.
+	 */
+	cacheKey?: string;
 	/**
 	 * WebSocket connect timeout in milliseconds for providers that support
 	 * WebSocket transports. This covers the connection/open handshake only;

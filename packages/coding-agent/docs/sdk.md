@@ -59,6 +59,20 @@ See the checked [sessions example](../examples/sdk/11-sessions.ts) for creating,
 
 After a runtime replacement, subscriptions belong to the old `AgentSession` and must be rebound. See the [session runtime example](../examples/sdk/13-session-runtime.ts).
 
+## Materializing context
+
+`session.materializeContext(candidate, { signal })` returns a detached, normalized `TranscriptContext` (`{ messages }`) for an explicit candidate. The candidate is either an `AgentMessage[]` or `{ entries, leafId }`, where Pi applies its session projection first. Pi then declares pending prompt/tool changes, runs the active context transforms, converts custom messages, and normalizes the transcript. `ctx.materializeContext()` exposes the same operation to extensions. `countContextTokens()` uses this same materialization before its provider preflight. Materialization preserves Pi's in-memory cache-checkpoint hints. Use `cloneMessages(messages)` when copying a materialized transcript: it detaches message data and retains those hints, which ordinary `structuredClone()` and JSON serialization discard. Hints remain absent from JSON and do not guarantee cache hits.
+
+Materialization does not append session entries or call a provider. Extension context transforms do run. The result is input to provider serialization, not a captured HTTP payload: provider payload hooks, routing, authentication, transport state and cache hits are not included or promised. Historical tool declarations are data, not executable tools or permission to call them. A consumer that seeds another session must choose that session's tools and instructions explicitly and preserve complete tool-call/result groups when selecting a prefix.
+
+## Measuring context
+
+`session.countContextTokens(candidate, { signal })` sends a detached request with `purpose: "measurement"` and reads its provider-reported prompt usage. Pi does not run an agent turn, execute returned tool calls, persist the response, or start or replace ordinary cache-warming jobs. Tool declarations remain in the measured input. Providers can still charge for the request and populate their own prompt caches.
+
+Pi rejects measurement for registered agent harnesses and the built-in Claude Agent SDK before resolving native request authentication or entering their execution loop. The same rejection applies when a virtual model routes a measurement to a native provider. There is currently no native safe-measurement capability. Counting returns `ok: false`, `overflow: false`, with an unsupported message; it does not silently run native inference with tools removed.
+
+Context transforms, virtual routing and provider request hooks still run; this is not a sandbox for extension code. Pi requests `maxTokens: 1`, but adapters may raise or ignore that ceiling (including the Codex adapter). A successful count measures that probe's input, not a certificate that a later prepared request, route, reasoning configuration or transport will fit. Final prepared-input equivalence and provider-specific output limits are separate guarantees.
+
 ## Prompting
 
 `prompt()` handles extension commands and expands file-based prompt templates before ordinary user messages enter the agent. For an accepted agent run, it resolves after the run finishes, including automatic retries.
@@ -99,9 +113,10 @@ Without overrides, the factory creates a `ModelRuntime`, file-backed `SettingsMa
 
 Each boundary can be supplied explicitly:
 
-- `modelRuntime`, `model`, `thinkingLevel`, and `scopedModels` control model access and selection.
+- `modelRuntime`, `model`, `thinkingLevel`, and `scopedModels` control model access and selection. Extensions can pass `ctx.modelRegistry.runtime` to a child factory to reuse their session's provider registrations and request-time auth bindings. This borrows the runtime, not the conversation: the child has its own `SessionManager`, tools and disposal. Disposing it does not unregister the shared providers or auth bindings.
 - `settingsManager` supplies merged settings or an in-memory configuration.
 - `sessionManager` supplies persistent or in-memory conversation history.
+- `cacheKey` selects prompt-cache affinity independently of session identity. It defaults to the session ID. A child can use `cacheKey: parent.cacheKey` (or `ctx.cacheKey` in an extension) to request reuse of a compatible prefix while retaining its own transcript, connection state and cleanup. The key grants no tool or credential authority, and providers may ignore it. Cache retention still controls whether adapters send cache hints; reuse is not guaranteed.
 - `resourceLoader` supplies extensions, skills, prompt templates, themes, and context files.
 - `tools`, `noTools`, `excludeTools`, and `customTools` control the active tool set.
 - `systemPromptOverride` replaces the default prompt. Set `toolInstructions: true` alongside it to append the selected tools' prompt snippets and deduplicated prompt guidelines without restoring the default coding-assistant prompt; it defaults to `false`, preserving exact replacement semantics.
