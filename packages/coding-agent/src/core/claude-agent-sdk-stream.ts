@@ -202,8 +202,8 @@ export function streamClaudeAgentSdk(
 				outputState.apiErrorKind === "authentication_failed" ||
 				(result.subtype !== "success" && /\b401\b|authenticat|oauth token/i.test(result.errors.join("\n")));
 			if (authFailed() && !options.signal?.aborted && outputState.commits === 0 && output.content.length === 0) {
-				// A long-lived process can hold credentials Claude Code has since rotated. A fresh one
-				// rereads the shared login (refreshing it if expired); Pi never writes credentials itself.
+				// A long-lived process can hold credentials Claude Code has since rotated. The pinned
+				// secure-storage profile lets its replacement reread and refresh the original login.
 				discardSdkInvocation(options.sessionId, invocation.session);
 				outputState.apiError = undefined;
 				outputState.apiErrorKind = undefined;
@@ -666,6 +666,10 @@ function createClaudeAgentSdkEnv(
 		DISABLE_AUTO_COMPACT: "1",
 		DISABLE_COMPACT: "1",
 	};
+	// SDK resume stages an access-token-only copy in a temporary CLAUDE_CONFIG_DIR.
+	// Keep credentials, refresh locks, and writeback in the original profile. Empty
+	// string deliberately selects Claude Code's default (unhashed) Keychain item.
+	env.CLAUDE_SECURESTORAGE_CONFIG_DIR ??= env.CLAUDE_CONFIG_DIR ?? "";
 	// Pi's tools reach the binary as SDK MCP tools, so their results otherwise
 	// cross a second, context-blind persistence threshold after Pi has already
 	// sized them deliberately. Keep Pi's own result handling authoritative.
