@@ -137,6 +137,18 @@ export function createCustomMessage(
 	};
 }
 
+/** Detach transcript data while retaining Pi's non-serializable cache-checkpoint hints. */
+export function cloneMessages<T extends AgentMessage>(messages: readonly T[]): T[] {
+	const cloned = structuredClone([...messages]);
+	for (let index = 0; index < messages.length; index++) {
+		const message = messages[index];
+		if (CACHE_CHECKPOINT in message && message[CACHE_CHECKPOINT]) {
+			Object.assign(cloned[index], { [CACHE_CHECKPOINT]: true });
+		}
+	}
+	return cloned;
+}
+
 /**
  * Transform AgentMessages (including custom types) to LLM-compatible Messages.
  *
