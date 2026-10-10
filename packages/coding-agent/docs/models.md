@@ -24,6 +24,20 @@ When several credential sources are configured, Pi uses a runtime `--api-key` fi
 
 Keep `auth.json` and any credential commands private. Project settings and extensions can execute inside the Pi process after you trust a project. Review [Security](security.md) before loading configuration from an untrusted directory.
 
+### Claude SDK subscription credentials
+
+`claude-agent-sdk-subscription` uses the existing Claude Code login. Pi pins
+`CLAUDE_SECURESTORAGE_CONFIG_DIR` before starting the SDK: an explicit value wins,
+otherwise it uses `CLAUDE_CONFIG_DIR`, or the empty-string default-profile marker.
+The SDK can then stage resumed transcripts in a temporary configuration directory
+without moving authentication into its access-token-only credential copy.
+
+Claude Code reads and renews the login in the original Keychain item or
+`.credentials.json`. Its cross-process refresh lock, re-read under that lock, and
+credential writeback coordinate concurrent sessions. Pi does not perform a second
+OAuth exchange or copy refresh tokens. Explicit `CLAUDE_CODE_OAUTH_TOKEN` values
+remain externally managed; their supplier must renew them.
+
 ## Select a model
 
 Run `/model` to search available models. The picker shows models whose providers have usable authentication. Press `Ctrl+S` on a model to save it as the default for new sessions.
