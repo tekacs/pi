@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
 	createSdkMcpServer,
 	type EffortLevel,
+	type ModelUsage,
 	type Query,
 	query,
 	type SDKMessage,
@@ -30,7 +31,7 @@ import {
 } from "@earendil-works/pi-ai";
 import { z } from "zod/v4";
 import { getPackageDir } from "../config.ts";
-import { CLAUDE_AGENT_SDK_API, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH } from "./claude-agent-sdk-models.ts";
+import { CLAUDE_AGENT_SDK_API, CLAUDE_AGENT_SDK_SUBSCRIPTION_AUTH, pricedAs } from "./claude-agent-sdk-models.ts";
 import { ClaudeCalls, mcpName } from "./claude-calls.ts";
 import { type ClaudeCheckpoint, ClaudePrefix } from "./claude-checkpoints.ts";
 import { ClaudeHistory } from "./claude-history.ts";
@@ -82,6 +83,8 @@ type SdkSession = {
 	store: ClaudeStore;
 	checkpoint?: ClaudeCheckpoint;
 	failure?: Error;
+	/** Per-model spend as of this process's last result; the SDK reports it cumulatively, never per turn. */
+	spent: Record<string, ModelUsage>;
 };
 
 type SdkInvocation = {
@@ -130,6 +133,8 @@ type SdkOutputState = {
 	cursor?: string;
 	contextTokens?: number;
 	entryPrompt?: Usage["entryPrompt"];
+	/** Model Claude Code actually served for this loop; an alias such as "opus" resolves to it. */
+	servedModel?: string;
 	hasText: boolean;
 };
 
@@ -222,21 +227,21 @@ export function streamClaudeAgentSdk(
 				// Pi's error classification (e.g. context overflow → compaction) reads this message.
 				output.stopReason = "error";
 				output.errorMessage = outputState.apiError;
-				output.usage = usageFromResult(result, model, outputState);
+				output.usage = usageFromResult(result, model, outputState, invocation.session);
 			} else if (promptTooLong) {
 				const errorText = "Claude Agent SDK prompt is too long";
 				output.stopReason = "error";
 				output.errorMessage = errorText;
-				output.usage = usageFromResult(result, model, outputState);
+				output.usage = usageFromResult(result, model, outputState, invocation.session);
 				if (!outputState.hasText) appendTextBlock(output, stream, errorText);
 			} else if (result.subtype === "success") {
 				if (!outputState.hasText && result.result) appendTextBlock(output, stream, result.result);
-				output.usage = usageFromResult(result, model, outputState);
+				output.usage = usageFromResult(result, model, outputState, invocation.session);
 			} else {
 				const errorText = result.errors.join("\n") || "Claude Agent SDK query failed";
 				output.stopReason = "error";
 				output.errorMessage = errorText;
-				output.usage = usageFromResult(result, model, outputState);
+				output.usage = usageFromResult(result, model, outputState, invocation.session);
 				if (!outputState.hasText && errorText) appendTextBlock(output, stream, errorText);
 			}
 
@@ -407,6 +412,7 @@ function createSdkSession(
 		turn,
 		config: config.fingerprint,
 		store,
+		spent: {},
 	};
 }
 
@@ -1304,7 +1310,8 @@ function recordUsage(
 	request.reasoning = raw.output_tokens_details?.thinking_tokens;
 	request.totalTokens = request.input + request.output + request.cacheRead + request.cacheWrite;
 	request.contextTokens = requestContext(raw);
-	calculateCost(model, request);
+	if (message.message.model) state.servedModel = message.message.model;
+	calculateCost(pricedAs(model, state.servedModel), request);
 
 	state.requests.set(message.message.id, request);
 	// The first request of the loop is the only one that met the cache as the
@@ -1357,7 +1364,12 @@ function requestContext(raw: Extract<SDKMessage, { type: "assistant" }>["message
 	);
 }
 
-function usageFromResult(result: SDKResultMessage, model: Model<any>, state: SdkOutputState): Usage {
+function usageFromResult(
+	result: SDKResultMessage,
+	model: Model<any>,
+	state: SdkOutputState,
+	session: SdkSession,
+): Usage {
 	const usage = createEmptyUsage();
 	// result.usage aggregates the main conversation loop; modelUsage[0] can be an
 	// internal helper model (e.g. Haiku) and badly under-reports the turn.
@@ -1371,20 +1383,38 @@ function usageFromResult(result: SDKResultMessage, model: Model<any>, state: Sdk
 	usage.totalTokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 	usage.contextTokens = state.contextTokens;
 	usage.entryPrompt = state.entryPrompt;
-	calculateCost(model, usage);
-	// total_cost_usd is what was actually billed, including helper models this
-	// model's pricing cannot see. Scale the buckets onto it so the breakdown and
-	// the total describe the same dollars.
+	calculateCost(pricedAs(model, state.servedModel), usage);
+	// The SDK's spend covers helper and subagent models this loop's tokens cannot
+	// see. Scale the buckets onto it so the breakdown and the total describe the
+	// same dollars. Without a reported spend, the token price stands.
+	const spend = turnSpend(session, result);
+	if (spend <= 0) return usage;
 	const computed = usage.cost.total;
 	if (computed > 0) {
-		const multiplier = result.total_cost_usd / computed;
+		const multiplier = spend / computed;
 		usage.cost.input *= multiplier;
 		usage.cost.output *= multiplier;
 		usage.cost.cacheRead *= multiplier;
 		usage.cost.cacheWrite *= multiplier;
 	}
-	usage.cost.total = result.total_cost_usd;
+	usage.cost.total = spend;
 	return usage;
+}
+
+/**
+ * Each result carries the process's running per-model spend (`total_cost_usd` is its sum), so a turn costs the
+ * excess over the previous result. A model whose spend went backwards means the SDK restarted its count (/clear,
+ * or a zeroed crash result), so the whole report belongs to this turn.
+ */
+function turnSpend(session: SdkSession, result: SDKResultMessage): number {
+	const current = result.modelUsage ?? {};
+	const restarted = Object.entries(session.spent).some(([id, usage]) => (current[id]?.costUSD ?? 0) < usage.costUSD);
+	const baseline = restarted ? {} : session.spent;
+	session.spent = current;
+	return Object.entries(current).reduce(
+		(spend, [id, usage]) => spend + usage.costUSD - (baseline[id]?.costUSD ?? 0),
+		0,
+	);
 }
 
 function createEmptyUsage(): Usage {
