@@ -1895,6 +1895,9 @@ export interface ExtensionAPI {
 	/** Get available slash commands in the current session. */
 	getCommands(): SlashCommandInfo[];
 
+	/** Execute a registered extension slash command, including during streaming. Awaits its handler; rejects unknown commands and handler errors, never sends model input. Call from an external callback or command, not an awaited lifecycle handler. */
+	executeCommand(text: string): Promise<void>;
+
 	// =========================================================================
 	// Model and Thinking Level
 	// =========================================================================
@@ -2279,6 +2282,8 @@ export type SetLabelHandler = (entryId: string, label: string | undefined) => vo
  * Contains flag values (defaults set during registration, CLI values set after).
  */
 export interface ExtensionRuntimeState {
+	/** Bound by the runner; command execution never falls through to a prompt. */
+	executeCommand: ExtensionAPI["executeCommand"];
 	flagValues: Map<string, boolean | string>;
 	/** Legacy provider-config registrations queued during extension loading, processed when runner binds. */
 	pendingProviderRegistrations: Array<{ name: string; config: ProviderConfig; extensionPath: string }>;

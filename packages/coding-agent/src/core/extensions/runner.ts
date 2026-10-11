@@ -466,6 +466,7 @@ export class ExtensionRunner {
 		this.runtime.setActiveTools = actions.setActiveTools;
 		this.runtime.refreshTools = actions.refreshTools;
 		this.runtime.getCommands = actions.getCommands;
+		this.runtime.executeCommand = (text) => this.executeCommand(text);
 		this.runtime.setModel = actions.setModel;
 		this.runtime.getThinkingLevel = actions.getThinkingLevel;
 		this.runtime.setThinkingLevel = actions.setThinkingLevel;
@@ -930,6 +931,15 @@ export class ExtensionRunner {
 
 	getCommand(name: string): ResolvedCommand | undefined {
 		return this.resolveRegisteredCommands().find((command) => command.invocationName === name);
+	}
+
+	async executeCommand(text: string): Promise<void> {
+		this.assertActive();
+		const match = /^\/([^\s]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+		if (!match) throw new Error("Expected a slash command");
+		const command = this.getCommand(match[1]);
+		if (!command) throw new Error(`Unknown extension command: /${match[1]}`);
+		await command.handler(match[2] ?? "", this.createCommandContext());
 	}
 
 	/**
