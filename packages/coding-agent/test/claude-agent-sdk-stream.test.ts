@@ -96,6 +96,13 @@ function success(result: string, sessionId = "sdk-session"): SDKResultMessage {
 	} as unknown as SDKResultMessage;
 }
 
+/** A result whose spend, like the SDK's, is the process's running total per model. */
+function spent(totals: Record<string, number>): SDKResultMessage {
+	const modelUsage = Object.fromEntries(Object.entries(totals).map(([id, costUSD]) => [id, { costUSD }]));
+	const total = Object.values(totals).reduce((sum, cost) => sum + cost, 0);
+	return { ...success("reply"), total_cost_usd: total, modelUsage } as SDKResultMessage;
+}
+
 function promptTooLong(sessionId = "sdk-session"): SDKResultMessage {
 	return {
 		type: "result",
@@ -974,6 +981,48 @@ describe("Claude Agent SDK stream", () => {
 		expect(prompts).toEqual(["first", "second"]);
 		cleanupSessionResources("claude-sdk-persistent");
 		expect(close).toHaveBeenCalledTimes(1);
+	});
+
+	it("charges each turn its own spend, not the SDK process's running total", async () => {
+		const processes = [
+			[
+				{ "claude-opus-5-5": 1, "claude-haiku-4-5": 0.01 },
+				{ "claude-opus-5-5": 1.5, "claude-haiku-4-5": 0.01 },
+				{ "claude-opus-5-5": 2.25, "claude-haiku-4-5": 0.04 },
+			],
+			// A replacement process counts from zero again.
+			[{ "claude-opus-5-5": 0.4 }],
+		];
+		let started = 0;
+		sdk.query.mockImplementation(({ prompt }: QueryInput) => {
+			const turns = processes[started++];
+			return mockQuery(
+				(async function* () {
+					for (const totals of turns) {
+						await nextInput(prompt);
+						yield assistant([{ type: "text", text: "reply" }]);
+						yield spent(totals);
+					}
+				})(),
+			);
+		});
+		const options = { cwd: process.cwd(), sessionId: "claude-sdk-persistent" };
+		const costs: number[] = [];
+		const messages: Message[] = [];
+		for (const text of ["first", "second", "third"]) {
+			messages.push(user(text));
+			const { result } = await collect({ messages: [...messages] }, options);
+			messages.push(result);
+			costs.push(result.usage.cost.total);
+		}
+		cleanupSessionResources("claude-sdk-persistent");
+		const { result: fresh } = await collect({ messages: [user("fresh")] }, options);
+		costs.push(fresh.usage.cost.total);
+
+		expect(sdk.query).toHaveBeenCalledTimes(2);
+		expect(costs.map((cost) => Number(cost.toFixed(6)))).toEqual([1.01, 0.5, 0.78, 0.4]);
+		const { input, output, cacheRead, cacheWrite } = fresh.usage.cost;
+		expect(input + output + cacheRead + cacheWrite).toBeCloseTo(0.4);
 	});
 
 	it.each(["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "CLAUDE_SECURESTORAGE_CONFIG_DIR"])(
