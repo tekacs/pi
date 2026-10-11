@@ -45,6 +45,25 @@ export const CLAUDE_AGENT_SDK_MODELS = [
 	model("claude-3-5-haiku-20241022", "Claude Haiku 3.5", 200000, 8192, false),
 ];
 
+/**
+ * Claude Code resolves aliases such as "opus" to a concrete model, so price what was served rather than what was
+ * asked for. A served ID outside the table keeps the requested model's prices.
+ */
+export function pricedAs<TModel extends Pick<Model<any>, "cost">>(model: TModel, servedId: string | undefined): TModel {
+	if (!servedId) return model;
+	const served = CLAUDE_AGENT_SDK_MODELS.find(
+		(entry) => entry.id.startsWith("claude-") && canonicalId(entry.id) === canonicalId(servedId),
+	);
+	return served ? { ...model, cost: served.cost } : model;
+}
+
+function canonicalId(id: string): string {
+	return id
+		.toLowerCase()
+		.replace(/\[.*\]$/, "")
+		.replace(/-\d{8}$/, "");
+}
+
 export function createClaudeAgentSdkProviderModels(provider: string): Model<Api>[] {
 	return CLAUDE_AGENT_SDK_MODELS.map((entry) => ({ ...entry, provider }));
 }
