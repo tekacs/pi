@@ -485,6 +485,12 @@ pi.on("context", (event) => ({
 pi.triggerTurn();
 ```
 
+### pi.executeCommand(text)
+
+`await pi.executeCommand("/hello world")` resolves a registered extension command and awaits its handler with a fresh command context. It works during streaming without aborting or queueing model input. Unknown commands and handler errors reject; execution never falls through to a prompt. Duplicate command names use the same qualified invocation names shown in autocomplete.
+
+This executes extension commands, not interactive built-ins, skills, or prompt templates. A handler may itself request model work or wait for idle. Call from an external callback or another command, not an awaited lifecycle handler that the target command could wait on. Completion means the handler returned, not that any work it launched has finished. Session replacement invalidates the caller's captured context as usual.
+
 ### pi.navigateTree(targetId, options?)
 
 Navigate the live session to an earlier tree entry from an external callback, while preserving Pi's session hooks, model context, and interactive UI state.
