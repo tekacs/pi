@@ -2,7 +2,10 @@ import { type Static, type TProperties, type TSchemaOptions, Type } from "typebo
 import { ModelCostSchema } from "./model-schema.ts";
 
 function sessionAffinityFormat(options?: TSchemaOptions) {
-	return Type.Union([Type.Literal("openai"), Type.Literal("openai-nosession"), Type.Literal("openrouter")], options);
+	return Type.Union(
+		[Type.Literal("openai"), Type.Literal("openai-nosession"), Type.Literal("openrouter"), Type.Literal("meta")],
+		options,
+	);
 }
 
 export const SessionAffinityFormatSchema = sessionAffinityFormat({
@@ -334,7 +337,7 @@ export const OpenAICompletionsCompatSchema = Type.Object(
 		}),
 		sessionAffinityFormat: optionalSessionAffinityFormat({
 			description:
-				"Session-affinity header format. openai sends session_id, x-client-request-id, and x-session-affinity; openai-nosession sends x-client-request-id and x-session-affinity; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
+				"Session-affinity header format. openai sends session_id, x-client-request-id, and x-session-affinity; openai-nosession sends x-client-request-id and x-session-affinity; openrouter sends x-session-id; meta sends x-meta-ai-gateway-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
 		}),
 		supportsLongCacheRetention: optionalCompatBoolean({
 			description:
@@ -367,7 +370,7 @@ export const OpenAIResponsesCompatSchema = Type.Object(
 		}),
 		sessionAffinityFormat: optionalSessionAffinityFormat({
 			description:
-				"Session-affinity header format. openai sends session_id and x-client-request-id; openai-nosession sends x-client-request-id; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
+				"Session-affinity header format. openai sends session_id and x-client-request-id; openai-nosession sends x-client-request-id; openrouter sends x-session-id; meta sends x-meta-ai-gateway-session-id, which Meta's gateway uses to route a session back to the replica holding its prompt cache. Does not affect prompt_cache_key. Default: auto-detected (meta for the Meta provider).",
 		}),
 		supportsLongCacheRetention: optionalCompatBoolean({
 			description:
