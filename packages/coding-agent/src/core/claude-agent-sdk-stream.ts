@@ -61,6 +61,12 @@ export interface ClaudeAgentSdkStreamOptions extends SimpleStreamOptions {
 	executable?: string;
 	beforeToolCall?: Agent["beforeToolCall"];
 	afterToolCall?: Agent["afterToolCall"];
+	/**
+	 * True while Pi holds steering for the next turn boundary. Claude runs every tool batch of a
+	 * request inside one Pi turn, so the request ends after the current batch and Pi's loop
+	 * delivers the steering before the next request.
+	 */
+	steeringPending?: () => boolean;
 }
 
 type SdkTurn = {
@@ -390,9 +396,11 @@ function createSdkSession(
 								async (input) => {
 									if (input.hook_event_name !== "PostToolBatch") return {};
 									const ids = input.tool_calls.map((call) => call.tool_use_id);
-									return turn.current?.calls.terminates(ids)
-										? { continue: false, stopReason: "Pi tool batch requested termination" }
-										: {};
+									if (turn.current?.calls.terminates(ids))
+										return { continue: false, stopReason: "Pi tool batch requested termination" };
+									if (turn.current?.options.steeringPending?.())
+										return { continue: false, stopReason: "Pi steering waits for this batch boundary" };
+									return {};
 								},
 							],
 						},

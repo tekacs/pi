@@ -468,6 +468,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 							afterToolCall: agent.afterToolCall,
 						});
 					},
+					steeringPending: () => agent.hasSteeringMessages(),
 				});
 			}
 			if (isClaudeAgentSdkModel(model)) {
@@ -492,6 +493,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					},
 					beforeToolCall: agent.beforeToolCall,
 					afterToolCall: agent.afterToolCall,
+					steeringPending: () => agent.hasSteeringMessages(),
 				});
 			}
 			const requestOptions = buildRequestOptions(options);

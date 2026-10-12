@@ -437,6 +437,91 @@ describe("AgentSession queue characterization", () => {
 		expect(harness.session.pendingMessageCount).toBe(0);
 	});
 
+	it.each(["steer", "followUp"] as const)("restores only interactive/RPC input from the %s queue", async (mode) => {
+		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = await createWaitingHarness();
+		harnesses.push(harness);
+		harness.session.setSteeringMode("all");
+		harness.session.setFollowUpMode("all");
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+			...(mode === "followUp" ? [fauxAssistantMessage("original turn complete")] : []),
+			(context) => {
+				const texts = context.messages.filter((message) => message.role === "user").map(getMessageText);
+				expect(texts).toContain("shared text");
+				expect(texts).toContain("custom delivery");
+				expect(texts).toContain("direct extension");
+				expect(texts).not.toContain("RPC input");
+				return fauxAssistantMessage("delivered");
+			},
+		]);
+		await waitForToolStart;
+		try {
+			await harness.session[mode]("shared text");
+			await harness.session.prompt("RPC input", { streamingBehavior: mode, source: "rpc" });
+			await harness.session.sendUserMessage("shared text", { deliverAs: mode });
+			await harness.session[mode]("direct extension", undefined, { source: "extension" });
+			await harness.session.sendCustomMessage(
+				{ customType: "queue-test", content: "custom delivery", display: true },
+				{ triggerTurn: true, deliverAs: mode },
+			);
+			const expected = {
+				steering: mode === "steer" ? ["shared text", "RPC input"] : [],
+				followUp: mode === "followUp" ? ["shared text", "RPC input"] : [],
+			};
+			expect(harness.session.pendingMessageCount).toBe(4);
+			expect(harness.eventsOfType("queue_update").at(-1)).toMatchObject({
+				steering: mode === "steer" ? ["shared text", "RPC input", "shared text", "direct extension"] : [],
+				followUp: mode === "followUp" ? ["shared text", "RPC input", "shared text", "direct extension"] : [],
+			});
+			expect(harness.session.clearQueue()).toEqual(expected);
+			expect(harness.session.clearQueue()).toEqual({ steering: [], followUp: [] });
+			expect(harness.session.pendingMessageCount).toBe(2);
+			expect(harness.eventsOfType("queue_update").at(-1)).toMatchObject({
+				steering: mode === "steer" ? ["shared text", "direct extension"] : [],
+				followUp: mode === "followUp" ? ["shared text", "direct extension"] : [],
+			});
+			expect(harness.session.agent.hasQueuedMessages()).toBe(true);
+		} finally {
+			releaseToolExecution();
+		}
+		await promptPromise;
+		expect(getUserTexts(harness)).toEqual(["start", "shared text", "direct extension"]);
+		expect(getAssistantTexts(harness)).toContain("delivered");
+		expect(harness.session.messages.filter((message) => message.role === "custom")).toHaveLength(1);
+		expect(harness.session.pendingMessageCount).toBe(0);
+		expect(harness.session.agent.hasQueuedMessages()).toBe(false);
+	});
+
+	it("does not consume matching editor text when an extension message starts", async () => {
+		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = await createWaitingHarness();
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+		let restored: ReturnType<Harness["session"]["clearQueue"]> | undefined;
+		harness.session.subscribe((event) => {
+			if (
+				event.type === "message_start" &&
+				event.message.role === "user" &&
+				getMessageText(event.message) === "same"
+			) {
+				restored = harness.session.clearQueue();
+			}
+		});
+		await waitForToolStart;
+		try {
+			await harness.session.sendUserMessage("same", { deliverAs: "steer" });
+			await harness.session.followUp("same");
+		} finally {
+			releaseToolExecution();
+		}
+		await promptPromise;
+		expect(restored).toEqual({ steering: [], followUp: ["same"] });
+		expect(getUserTexts(harness)).toEqual(["start", "same"]);
+		expect(harness.session.pendingMessageCount).toBe(0);
+	});
+
 	it("throws when queueing an extension command with steer", async () => {
 		const harness = await createHarness({
 			extensionFactories: [
