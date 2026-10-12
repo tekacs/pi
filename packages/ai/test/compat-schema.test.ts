@@ -15,7 +15,7 @@ describe("compatibility schemas", () => {
 	it("preserves property types in the provider superset", () => {
 		expectTypeOf<ProviderCompat["supportsStore"]>().toEqualTypeOf<boolean | undefined>();
 		expectTypeOf<ProviderCompat["sessionAffinityFormat"]>().toEqualTypeOf<
-			"openai" | "openai-nosession" | "openrouter" | undefined
+			"openai" | "openai-nosession" | "openrouter" | "meta" | undefined
 		>();
 	});
 

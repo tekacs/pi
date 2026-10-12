@@ -434,6 +434,37 @@ describe("openai-responses provider defaults", () => {
 		expect(capturedPayload?.prompt_cache_key).toBe("session-opencode");
 	});
 
+	it("routes Meta sessions through the gateway session header", async () => {
+		const model = getModel("meta", "muse-wonder-1.0");
+		let gatewaySessionId: string | null = null;
+		let clientRequestId: string | null = null;
+		let capturedPayload: CapturedResponsesPayload | undefined;
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+			gatewaySessionId = getHeader(init?.headers, "x-meta-ai-gateway-session-id");
+			clientRequestId = getHeader(init?.headers, "x-client-request-id");
+			return new Response("data: [DONE]\n\n", { status: 200, headers: { "content-type": "text/event-stream" } });
+		});
+
+		const stream = streamOpenAIResponses(
+			model,
+			normalizeContext({ systemPrompt: "sys", messages: [{ role: "user", content: "hi", timestamp: Date.now() }] }),
+			{
+				apiKey: "sk-test-key",
+				sessionId: "session-meta",
+				onPayload: (payload) => {
+					capturedPayload = payload as CapturedResponsesPayload;
+				},
+			},
+		);
+		for await (const event of stream) {
+			if (event.type === "done" || event.type === "error") break;
+		}
+
+		expect(gatewaySessionId).toBe("session-meta");
+		expect(clientRequestId).toBeNull();
+		expect(capturedPayload?.prompt_cache_key).toBe("session-meta");
+	});
+
 	it("can omit OpenAI session_id header while preserving other affinity data", async () => {
 		const proxyModel: Model<"openai-responses"> = {
 			...getModel("openai", "gpt-5.4"),

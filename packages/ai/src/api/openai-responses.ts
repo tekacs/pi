@@ -68,7 +68,9 @@ function getClientApiKey(provider: string, apiKey: string | undefined, headers: 
 }
 
 function detectSessionAffinityFormat(model: Pick<Model<"openai-responses">, "provider" | "baseUrl">) {
-	return model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai") ? "openrouter" : "openai";
+	if (model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai")) return "openrouter";
+	if (model.provider === "meta" || model.baseUrl.includes("api.meta.ai")) return "meta";
+	return "openai";
 }
 
 /**
@@ -286,6 +288,8 @@ function createClient(
 	if (sessionId) {
 		if (compat.sessionAffinityFormat === "openrouter") {
 			headers["x-session-id"] = sessionId;
+		} else if (compat.sessionAffinityFormat === "meta") {
+			headers["x-meta-ai-gateway-session-id"] = sessionId;
 		} else {
 			if (compat.sessionAffinityFormat === "openai") {
 				headers.session_id = sessionId;

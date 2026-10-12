@@ -806,6 +806,8 @@ function createClient(
 	if (sessionId && compat.sendSessionAffinityHeaders) {
 		if (compat.sessionAffinityFormat === "openrouter") {
 			headers["x-session-id"] = sessionId;
+		} else if (compat.sessionAffinityFormat === "meta") {
+			headers["x-meta-ai-gateway-session-id"] = sessionId;
 		} else {
 			if (compat.sessionAffinityFormat === "openai") {
 				headers.session_id = sessionId;
