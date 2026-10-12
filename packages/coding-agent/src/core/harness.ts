@@ -49,6 +49,12 @@ export interface HarnessStreamOptions extends SimpleStreamOptions {
 	session: ReadonlySessionManager;
 	/** Bound executor carrying Pi's argument, hook, cancellation, update, and event semantics. */
 	runTool: HarnessToolRunner;
+	/**
+	 * True while Pi holds steering for the next turn boundary. A harness that runs several tool
+	 * batches inside one request ends the request after the current batch while this holds, so
+	 * Pi's loop delivers the steering before the next model call.
+	 */
+	steeringPending: () => boolean;
 }
 
 export type HarnessStream = (

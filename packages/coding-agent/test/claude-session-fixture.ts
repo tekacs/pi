@@ -42,6 +42,7 @@ export async function nativeSession(
 				agentContext: { messages: agent.state.messages, tools: agent.state.tools },
 				beforeToolCall: agent.beforeToolCall,
 				afterToolCall: agent.afterToolCall,
+				steeringPending: () => agent.hasSteeringMessages(),
 				env: nativeEnv(config, url),
 			}),
 	});

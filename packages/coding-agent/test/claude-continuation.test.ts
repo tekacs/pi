@@ -5,6 +5,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { AgentSession } from "../src/core/agent-session.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { toolEndpoint } from "./claude-native-fixture.ts";
 import { nativeSession, settled } from "./claude-session-fixture.ts";
@@ -131,6 +132,51 @@ describe("Pi sessions backed by native Claude checkpoints", () => {
 		expect(rebuilt).not.toContain("fixture-signature");
 		expect(rebuilt).not.toContain("opaque-thinking-payload");
 		expect(effects).toBe(4);
+	}, 60_000);
+
+	it("delivers steering queued during a native tool batch at that batch boundary", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-claude-steering-"));
+		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+		const endpoint = await toolEndpoint();
+		cleanups.push(endpoint.close);
+		let state: Awaited<ReturnType<typeof host>> | undefined;
+		let restored: ReturnType<AgentSession["clearQueue"]> | undefined;
+		const tool: AgentTool = {
+			name: "probe",
+			label: "Probe",
+			description: "Local effect",
+			parameters: Type.Object({}),
+			async execute(id) {
+				if (id.endsWith("-0")) {
+					const session = state!.session;
+					await session.steer("Typed steering");
+					await session.sendCustomMessage(
+						{ customType: "inbox", content: "Inbox steering", display: true },
+						{ triggerTurn: true, deliverAs: "steer" },
+					);
+					// Restoring typed input to the editor must not discard another producer's message.
+					restored = session.clearQueue();
+				}
+				return { content: [{ type: "text", text: `Completed ${id}.` }], details: {} };
+			},
+		};
+		const manager = SessionManager.create(root, join(root, "sessions"));
+		state = await host(manager, root, endpoint.url, tool);
+		await state.session.prompt("Run batch");
+		settled(state.session);
+		expect(restored).toEqual({ steering: ["Typed steering"], followUp: [] });
+		// The steering reaches the request that follows the batch, not one after the model's final answer.
+		expect(endpoint.requests).toHaveLength(2);
+		const followup = JSON.stringify(endpoint.requests[1].messages);
+		expect(followup).toContain("Completed call-1-1.");
+		expect(followup).toContain("Inbox steering");
+		expect(followup).not.toContain("Typed steering");
+		const order = manager
+			.buildSessionContext()
+			.messages.map((message) => (message.role === "custom" ? message.customType : message.role));
+		// The batch-boundary stop record follows the last result; the steering precedes the final answer.
+		expect(order.slice(-4)).toEqual(["toolResult", "assistant", "inbox", "assistant"]);
+		expect(order.filter((role) => role === "toolResult")).toHaveLength(2);
 	}, 60_000);
 
 	it.each(["tool", "blocked", "after", "mixed"] as const)(

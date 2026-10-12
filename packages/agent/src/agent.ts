@@ -202,6 +202,10 @@ class PendingMessageQueue {
 	clear(): void {
 		this.messages = [];
 	}
+
+	discard(selected: (message: AgentMessage) => boolean): void {
+		this.messages = this.messages.filter((message) => !selected(message));
+	}
 }
 
 /** Durable instructions emitted before a transient provider input. */
@@ -355,6 +359,23 @@ export class Agent {
 	clearAllQueues(): void {
 		this.clearSteeringQueue();
 		this.clearFollowUpQueue();
+	}
+
+	/**
+	 * Remove only the selected queued messages. Callers that restore their own input
+	 * use this so messages queued by other producers keep their delivery.
+	 */
+	discardQueued(selected: (message: AgentMessage) => boolean): void {
+		this.steeringQueue.discard(selected);
+		this.followUpQueue.discard(selected);
+	}
+
+	/**
+	 * True while steering waits for the next turn boundary. Providers that run several
+	 * tool batches inside one request end that request at a batch boundary when this holds.
+	 */
+	hasSteeringMessages(): boolean {
+		return this.steeringQueue.hasItems();
 	}
 
 	/** Returns true when either queue still contains pending messages. */
