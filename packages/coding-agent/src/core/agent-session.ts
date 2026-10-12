@@ -442,12 +442,8 @@ export class AgentSession {
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
 
-	/** Tracks pending steering messages for UI display. Removed when delivered. */
-	private _steeringMessages: string[] = [];
-	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
-	private _followUpMessages: string[] = [];
-	/** Queued user messages whose images are normalized when they are delivered. */
-	private _queuedMessagesWithImages = new WeakSet<AgentMessage>();
+	/** Pending user input and its producer, keyed by the actual queued message, not matching text. */
+	private _queuedInput = new Map<AgentMessage, { text: string; mode: "steer" | "followUp"; source: InputSource }>();
 	/** Messages queued to be included with the next user prompt as context ("asides"). */
 	private _pendingNextTurnMessages: CustomMessage[] = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
@@ -1115,8 +1111,8 @@ export class AgentSession {
 	private _emitQueueUpdate(): void {
 		this._emit({
 			type: "queue_update",
-			steering: [...this._steeringMessages],
-			followUp: [...this._followUpMessages],
+			steering: this.getSteeringMessages(),
+			followUp: this.getFollowUpMessages(),
 		});
 	}
 
@@ -1191,25 +1187,10 @@ export class AgentSession {
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
 			this._overflowRecoveryAttempted = false;
-			const messageText = contentText(event.message.content, "");
-			// Check steering queue first
-			const steeringIndex = this._steeringMessages.indexOf(messageText);
-			if (steeringIndex !== -1) {
-				this._steeringMessages.splice(steeringIndex, 1);
-				this._emitQueueUpdate();
-			} else {
-				// Check follow-up queue
-				const followUpIndex = this._followUpMessages.indexOf(messageText);
-				if (followUpIndex !== -1) {
-					this._followUpMessages.splice(followUpIndex, 1);
-					this._emitQueueUpdate();
-				}
-			}
-			// Normalize queued images at delivery, before events and persistence see the message,
-			// so they get the same resize as idle prompts with the current model's limits (#11738).
-			if (this._queuedMessagesWithImages.has(event.message)) {
-				this._queuedMessagesWithImages.delete(event.message);
+			if (this._queuedInput.delete(event.message)) {
+				// Normalize before events and persistence, using the model active at delivery (#11738).
 				await this._normalizeQueuedMessageImages(event.message);
+				this._emitQueueUpdate();
 			}
 		}
 
@@ -2267,11 +2248,7 @@ export class AgentSession {
 					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
 				);
 			}
-			if (options.streamingBehavior === "followUp") {
-				await this._queueFollowUp(expandedText, currentImages);
-			} else {
-				await this._queueSteer(expandedText, currentImages);
-			}
+			this._enqueueInput(expandedText, currentImages, options.streamingBehavior, options.source ?? "interactive");
 			preflightResult?.("queued");
 			return undefined;
 		}
@@ -2380,11 +2357,7 @@ export class AgentSession {
 		let expandedText = this._expandSkillCommand(processedInput.text);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
-		if (behavior === "steer") {
-			await this._queueSteer(expandedText, processedInput.images);
-		} else {
-			await this._queueFollowUp(expandedText, processedInput.images);
-		}
+		this._enqueueInput(expandedText, processedInput.images, behavior, source);
 		return "queued";
 	}
 
@@ -2421,42 +2394,13 @@ export class AgentSession {
 		return this._queueUserInput(text, images, "followUp", options?.source ?? "interactive");
 	}
 
-	/**
-	 * Internal: Queue a steering message (already expanded, no extension command check).
-	 */
-	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
-		this._steeringMessages.push(text);
-		this._emitQueueUpdate();
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images) {
-			content.push(...images);
-		}
-		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
-		if (images?.length) this._queuedMessagesWithImages.add(message);
-		this.agent.steer(message);
-	}
-
-	/**
-	 * Internal: Queue a follow-up message (already expanded, no extension command check).
-	 */
-	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
-		this._followUpMessages.push(text);
-		this._emitQueueUpdate();
-		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
-		if (images) {
-			content.push(...images);
-		}
-		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
-		if (images?.length) this._queuedMessagesWithImages.add(message);
-		this.agent.followUp(message);
-	}
-
 	/** Replace a queued user message's images in place with normalized ones, appending hints to its text. */
 	private async _normalizeQueuedMessageImages(message: UserMessage): Promise<void> {
 		if (typeof message.content === "string") return;
 		const [first, ...rest] = message.content;
 		if (first?.type !== "text") return;
 		const images = rest.filter((block): block is ImageContent => block.type === "image");
+		if (images.length === 0) return;
 		const normalized = await this._normalizePromptImages(images);
 		const text = normalized.hints.length > 0 ? `${first.text}\n\n${normalized.hints.join("\n")}` : first.text;
 		message.content = [
@@ -2464,6 +2408,20 @@ export class AgentSession {
 			...rest.filter((block) => block.type !== "image"),
 			...normalized.images,
 		];
+	}
+
+	/** Queue expanded input; only its original interactive/RPC producer may reclaim it. */
+	private _enqueueInput(
+		text: string,
+		images: ImageContent[] | undefined,
+		mode: "steer" | "followUp",
+		source: InputSource,
+	): void {
+		const content: (TextContent | ImageContent)[] = [{ type: "text", text }, ...(images ?? [])];
+		const message: AgentMessage = { role: "user", content, timestamp: Date.now() };
+		this._queuedInput.set(message, { text, mode, source });
+		this.agent[mode](message);
+		this._emitQueueUpdate();
 	}
 
 	/**
@@ -2615,33 +2573,38 @@ export class AgentSession {
 	}
 
 	/**
-	 * Clear all queued messages and return them.
-	 * Useful for restoring to editor when user aborts.
+	 * Clear queued typed input and return it for restoring to the editor.
+	 * Messages queued by extensions (for example inbox deliveries) are not editor
+	 * text, so they stay queued for delivery.
 	 * @returns Object with steering and followUp arrays
 	 */
 	clearQueue(): { steering: string[]; followUp: string[] } {
-		const steering = [...this._steeringMessages];
-		const followUp = [...this._followUpMessages];
-		this._steeringMessages = [];
-		this._followUpMessages = [];
-		this.agent.clearAllQueues();
+		const steering: string[] = [];
+		const followUp: string[] = [];
+		this.agent.discardQueued((message) => {
+			const input = this._queuedInput.get(message);
+			if (!input || input.source === "extension") return false;
+			(input.mode === "steer" ? steering : followUp).push(input.text);
+			this._queuedInput.delete(message);
+			return true;
+		});
 		this._emitQueueUpdate();
 		return { steering, followUp };
 	}
 
-	/** Number of pending messages (includes both steering and follow-up) */
+	/** Number of pending user messages (steering and follow-up, including extension input). */
 	get pendingMessageCount(): number {
-		return this._steeringMessages.length + this._followUpMessages.length;
+		return this._queuedInput.size;
 	}
 
 	/** Get pending steering messages (read-only) */
 	getSteeringMessages(): readonly string[] {
-		return this._steeringMessages;
+		return [...this._queuedInput.values()].filter((input) => input.mode === "steer").map((input) => input.text);
 	}
 
 	/** Get pending follow-up messages (read-only) */
 	getFollowUpMessages(): readonly string[] {
-		return this._followUpMessages;
+		return [...this._queuedInput.values()].filter((input) => input.mode === "followUp").map((input) => input.text);
 	}
 
 	get resourceLoader(): ResourceLoader {
