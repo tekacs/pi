@@ -13,8 +13,8 @@ import {
 import { ModelCostSchema } from "./model-schema.ts";
 import { openObject, stringLiteral, stringRecord } from "./schema-builders.ts";
 
-function sessionAffinityFormat(options?: Annotations<"openai" | "openai-nosession" | "openrouter">) {
-	return union([stringLiteral("openai"), stringLiteral("openai-nosession"), stringLiteral("openrouter")], options);
+function sessionAffinityFormat(options?: Annotations<"openai" | "openai-nosession" | "openrouter" | "meta">) {
+	return union([stringLiteral("openai"), stringLiteral("openai-nosession"), stringLiteral("openrouter"), stringLiteral("meta")], options);
 }
 
 export const SessionAffinityFormatSchema = sessionAffinityFormat({
@@ -185,7 +185,7 @@ function optionalCompatBoolean(options?: Annotations<boolean>) {
 	return opt(bool(options));
 }
 
-function optionalSessionAffinityFormat(options?: Annotations<"openai" | "openai-nosession" | "openrouter">) {
+function optionalSessionAffinityFormat(options?: Annotations<"openai" | "openai-nosession" | "openrouter" | "meta">) {
 	return opt(sessionAffinityFormat(options));
 }
 
@@ -347,7 +347,7 @@ const OpenAICompletionsCompatProperties = {
 	}),
 	sessionAffinityFormat: optionalSessionAffinityFormat({
 		description:
-			"Session-affinity header format. openai sends session_id, x-client-request-id, and x-session-affinity; openai-nosession sends x-client-request-id and x-session-affinity; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
+			"Session-affinity header format. openai sends session_id, x-client-request-id, and x-session-affinity; openai-nosession sends x-client-request-id and x-session-affinity; openrouter sends x-session-id; meta sends x-meta-ai-gateway-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
 	}),
 	promptCacheKeyMode: optionalPromptCacheKeyMode({
 		description:
@@ -383,7 +383,7 @@ const OpenAIResponsesCompatProperties = {
 	}),
 	sessionAffinityFormat: optionalSessionAffinityFormat({
 		description:
-			"Session-affinity header format. openai sends session-id and x-client-request-id; openai-nosession sends x-client-request-id; openrouter sends x-session-id. Does not affect prompt_cache_key. Default: auto-detected.",
+			"Session-affinity header format. openai sends session-id and x-client-request-id; openai-nosession sends x-client-request-id; openrouter sends x-session-id; meta sends x-meta-ai-gateway-session-id, which Meta's gateway uses to route a session back to the replica holding its prompt cache. Does not affect prompt_cache_key. Default: auto-detected (meta for the Meta provider).",
 	}),
 	promptCacheKeyMode: optionalPromptCacheKeyMode({
 		description:
