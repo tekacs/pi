@@ -1,7 +1,7 @@
 import {
 	type GenerateContentConfig,
 	type GenerateContentParameters,
-	GoogleGenAI,
+	type GoogleGenAI,
 	type HttpOptions,
 	ResourceScope,
 	type ThinkingConfig,
@@ -34,6 +34,7 @@ import type { GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel } from "./goog
 import {
 	convertMessages,
 	convertTools,
+	createGoogleGenAI,
 	getDisabledGoogleThinkingConfig,
 	isThinkingPart,
 	mapStopReason,
@@ -364,7 +365,7 @@ function createClient(
 	identity?: ClientIdentity,
 ): GoogleGenAI {
 	const googleAuthOptions = buildGoogleAuthOptions(env);
-	return new GoogleGenAI({
+	return createGoogleGenAI({
 		vertexai: true,
 		project,
 		location,
@@ -380,7 +381,7 @@ function createClientWithApiKey(
 	optionsHeaders?: ProviderHeaders,
 	identity?: ClientIdentity,
 ): GoogleGenAI {
-	return new GoogleGenAI({
+	return createGoogleGenAI({
 		vertexai: true,
 		apiKey,
 		apiVersion: API_VERSION,

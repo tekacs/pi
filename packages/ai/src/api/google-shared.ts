@@ -6,6 +6,8 @@ import {
 	type Content,
 	FinishReason,
 	FunctionCallingConfigMode,
+	GoogleGenAI,
+	type GoogleGenAIOptions,
 	ThinkingLevel as GoogleSdkThinkingLevel,
 	type Part,
 	type ThinkingConfig,
@@ -44,6 +46,26 @@ const GOOGLE_SDK_THINKING_LEVEL_MAP: Record<GoogleApiThinkingLevel, GoogleSdkThi
 	HIGH: GoogleSdkThinkingLevel.HIGH,
 };
 
+const noop = () => {};
+
+/**
+ * Construct `GoogleGenAI` without letting its synchronous constructor write
+ * env-precedence diagnostics to stdout/stderr (`console.debug` / `console.warn`)
+ * when ambient `GOOGLE_API_KEY` or `GEMINI_API_KEY` variables are present.
+ */
+export function createGoogleGenAI(options: GoogleGenAIOptions): GoogleGenAI {
+	const originalDebug = console.debug;
+	const originalWarn = console.warn;
+	console.debug = noop;
+	console.warn = noop;
+	try {
+		return new GoogleGenAI(options);
+	} finally {
+		console.debug = originalDebug;
+		console.warn = originalWarn;
+	}
+}
+
 /** Resolve a supported pi level or model-specific Google mapping to a standard Google level. */
 export function resolveGoogleThinkingLevel<T extends GoogleApiType>(
 	model: Model<T>,
@@ -71,12 +93,14 @@ export function resolveGoogleThinkingLevel<T extends GoogleApiType>(
  */
 export function usesGoogleThinkingLevel<T extends GoogleApiType>(model: Model<T>): boolean {
 	const id = model.id.toLowerCase();
+	const geminiMajorVersion = getGeminiMajorVersion(id);
 	return (
 		// Match Gemini 3 Pro/Flash IDs with or without a minor version, such as
 		// gemini-3-flash-preview, gemini-3.1-pro-preview, and gemini-3.8-flash.
 		/gemini-3(?:\.\d+)?-(?:pro|flash)/.test(id) ||
 		// Match Gemini 4 and later, such as gemini-4-argon (#10890).
 		/gemini-(?:[4-9]|[1-9]\d)/.test(id) ||
+		(geminiMajorVersion !== undefined && geminiMajorVersion >= 3) ||
 		id === "gemini-flash-latest" ||
 		id === "gemini-flash-lite-latest" ||
 		// Match both hosted Gemma 4 naming forms: gemma-4-* and gemma4-*.
