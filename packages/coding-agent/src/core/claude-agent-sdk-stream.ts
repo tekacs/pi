@@ -339,6 +339,8 @@ async function startSdkInvocation(
 			cursor = seed.at(-1)?.uuid;
 			continuation = seed.length ? store.stage(seed) : { sessionStore: store };
 		}
+		// Staging may resume before trailing records the native loader discards.
+		if ("resumeSessionAt" in continuation) cursor = continuation.resumeSessionAt;
 		session = createSdkSession(model, context, options, config, store, continuation);
 	}
 	const fail = (error: unknown) => {

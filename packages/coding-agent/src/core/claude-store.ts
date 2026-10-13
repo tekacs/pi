@@ -284,7 +284,7 @@ export class ClaudeStore implements SessionStore {
 		sessionStore: SessionStore;
 	} {
 		if (this.writer) throw new Error("Native fork requires a fresh writer");
-		const records = structuredClone([...entries]);
+		const records = resumable(structuredClone([...entries]));
 		const cursor = records.at(-1)?.uuid;
 		if (!cursor) throw new Error("Native staging requires a final record identity");
 		const resume = randomUUID();
@@ -398,4 +398,29 @@ function syncDirectory(path: string): void {
 	} finally {
 		closeSync(fd);
 	}
+}
+
+/**
+ * Trim to the last record the native loader keeps as a message. It discards an
+ * assistant record holding only thinking (an interrupted reply), so resuming at one
+ * fails with "No message found with message.uuid". The model never sees such a
+ * record anyway, so dropping trailing ones loses nothing it would read.
+ */
+function resumable(records: SessionStoreEntry[]): SessionStoreEntry[] {
+	let end = records.length;
+	while (end > 0) {
+		const record = records[end - 1];
+		if (record.uuid && !thinkingOnly(record)) break;
+		end--;
+	}
+	return records.slice(0, end);
+}
+
+function thinkingOnly(record: SessionStoreEntry): boolean {
+	const content = (record.message as { content?: unknown } | undefined)?.content;
+	return (
+		record.type === "assistant" &&
+		Array.isArray(content) &&
+		content.every((block) => block?.type === "thinking" || block?.type === "redacted_thinking")
+	);
 }
