@@ -1,9 +1,4 @@
-import {
-	type GenerateContentConfig,
-	type GenerateContentParameters,
-	GoogleGenAI,
-	type ThinkingConfig,
-} from "@google/genai";
+import type { GenerateContentConfig, GenerateContentParameters, GoogleGenAI, ThinkingConfig } from "@google/genai";
 import { calculateCost, clampThinkingLevel } from "../models.ts";
 import type {
 	Api,
@@ -30,6 +25,7 @@ import type { GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel } from "./goog
 import {
 	convertMessages,
 	convertTools,
+	createGoogleGenAI,
 	getDisabledGoogleThinkingConfig,
 	isThinkingPart,
 	mapStopReason,
@@ -360,7 +356,7 @@ function createClient(
 		httpOptions.headers = headers;
 	}
 
-	return new GoogleGenAI({
+	return createGoogleGenAI({
 		apiKey,
 		httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
 	});
