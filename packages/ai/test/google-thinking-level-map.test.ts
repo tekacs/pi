@@ -1,7 +1,7 @@
 import type { GenerateContentParameters } from "@google/genai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { streamSimple as streamSimpleGoogle } from "../src/api/google-generative-ai.ts";
-import { resolveGoogleThinkingLevel } from "../src/api/google-shared.ts";
+import { createGoogleGenAI, resolveGoogleThinkingLevel } from "../src/api/google-shared.ts";
 import { streamSimple as streamSimpleVertex } from "../src/api/google-vertex.ts";
 import type { Model, ThinkingBudgets, ThinkingLevel, ThinkingLevelMap } from "../src/types.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
@@ -160,6 +160,23 @@ describe("Google thinking level maps", () => {
 		expect(payload.config?.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
 	});
 
+	it.each(googleAdapters)("uses discrete thinkingLevel for Gemini 4 Argon on $name", async ({ capture }) => {
+		const thinkingLevelMap: ThinkingLevelMap = {
+			off: null,
+			minimal: null,
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: null,
+			max: null,
+		};
+		const mediumPayload = await capture("gemini-4-argon", thinkingLevelMap, "medium");
+		expect(mediumPayload.config?.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+
+		const defaultPayload = await capture("gemini-4-argon", thinkingLevelMap);
+		expect(defaultPayload.config?.thinkingConfig).toEqual({ thinkingLevel: "LOW" });
+	});
+
 	it.each(googleAdapters)("disables Gemini 2.5 thinking when reasoning is omitted on $name", async ({ capture }) => {
 		const payload = await capture("gemini-2.5-flash", {});
 
@@ -208,5 +225,26 @@ describe("Google thinking level maps", () => {
 		});
 
 		expect(payload).toMatchObject({ config: { thinkingConfig: { thinkingBudget: 4321 } } });
+	});
+
+	it("silences @google/genai constructor console.debug and console.warn when ambient API keys are set", () => {
+		const originalGemini = process.env.GEMINI_API_KEY;
+		const originalGoogle = process.env.GOOGLE_API_KEY;
+		const debugSpy = vi.spyOn(console, "debug");
+		const warnSpy = vi.spyOn(console, "warn");
+		try {
+			process.env.GEMINI_API_KEY = "test-gemini-key";
+			process.env.GOOGLE_API_KEY = "test-google-key";
+			createGoogleGenAI({ vertexai: true, project: "test-project", location: "global" });
+			expect(debugSpy).not.toHaveBeenCalled();
+			expect(warnSpy).not.toHaveBeenCalled();
+		} finally {
+			debugSpy.mockRestore();
+			warnSpy.mockRestore();
+			if (originalGemini === undefined) delete process.env.GEMINI_API_KEY;
+			else process.env.GEMINI_API_KEY = originalGemini;
+			if (originalGoogle === undefined) delete process.env.GOOGLE_API_KEY;
+			else process.env.GOOGLE_API_KEY = originalGoogle;
+		}
 	});
 });
