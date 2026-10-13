@@ -124,6 +124,67 @@ describe("interrupted native Claude continuation", () => {
 		60_000,
 	);
 
+	it("continues after an interruption that follows a completed thinking block", async () => {
+		const root = mkdtempSync(join(tmpdir(), "pi-claude-thinking-interruption-"));
+		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+		// A tool call starting after the signed thinking makes Pi commit the thinking alone;
+		// the user interrupts while the call's arguments are still streaming.
+		const endpoint = await nativeEndpoint((_body, index) =>
+			index === 1
+				? {
+						before: [{ type: "thinking", thinking: "Completed reasoning.", signature: "fixture-signature" }],
+						partial: { type: "tool_use", id: "interrupted-call", name: "mcp__pi__probe", input: {} },
+					}
+				: [{ type: "text", text: `Complete native reply ${index}.` }],
+		);
+		cleanups.push(endpoint.close);
+		const tool: AgentTool = {
+			name: "probe",
+			label: "Probe",
+			description: "Local effect",
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text", text: "unused" }], details: {} };
+			},
+		};
+		const manager = SessionManager.create(root, join(root, "sessions"));
+		const state = await host(manager, root, endpoint.url, tool);
+		// Interrupt when Pi starts certifying the thinking-only frame as a checkpoint.
+		const history = ClaudeHistory.prototype as unknown as {
+			bind(
+				this: ClaudeHistory,
+				boundary: { message: { content: { type: string }[] } },
+				...rest: unknown[]
+			): Promise<unknown>;
+		};
+		const bind = history.bind;
+		let certified: Promise<unknown> | undefined;
+		history.bind = function (boundary, ...rest) {
+			const checkpoint = bind.call(this, boundary, ...rest);
+			if (boundary.message.content.every((block) => block.type === "thinking")) {
+				certified = checkpoint;
+				state.agent.abort();
+			}
+			return checkpoint;
+		};
+		cleanups.push(() => {
+			history.bind = bind;
+		});
+		await state.session.prompt("Original interrupted question.");
+		history.bind = bind;
+		expect(await certified).toBeDefined();
+		expect(state.session.messages.slice(-2)).toMatchObject([
+			{ role: "assistant", stopReason: "stop", content: [{ type: "thinking" }] },
+			{ role: "assistant", stopReason: "aborted", content: [] },
+		]);
+		// The native loader discards the thinking-only record, so it cannot be the resume point.
+		await state.session.prompt("Additional clarification.");
+		settled(state.session);
+		const resumed = JSON.stringify(endpoint.requests.at(-1)!.messages);
+		expect(resumed).toContain("Original interrupted question.");
+		expect(resumed).toContain("Additional clarification.");
+	}, 60_000);
+
 	it("resumes a durable result while the same native response is still streaming its next call", async () => {
 		const root = mkdtempSync(join(tmpdir(), "pi-claude-streaming-effect-"));
 		cleanups.push(() => rmSync(root, { recursive: true, force: true }));
