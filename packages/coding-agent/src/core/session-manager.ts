@@ -1000,7 +1000,8 @@ async function listSessionsFromDir(
  * Each session entry has an id and parentId forming a tree structure. The "leaf"
  * pointer tracks the current position. Appending creates a child of the current leaf.
  * Branching moves the leaf to an earlier entry, allowing new branches without
- * modifying history.
+ * modifying history. An append that fails persistence is not published to readers;
+ * further appends are fenced until the session is reopened.
  *
  * Use buildSessionContext() to get the resolved message list for the LLM, which
  * handles compaction summaries and follows the path from root to current leaf.
@@ -1238,18 +1239,16 @@ export class SessionManager {
 	private _appendEntry(entry: SessionEntry, durable = false): void {
 		if (this.writeError) throw this.writeError;
 		this.fileEntries.push(entry);
-		if (durable) {
-			try {
-				this._persistDurable(entry);
-			} catch (cause) {
-				this.fileEntries.pop();
-				this.writeError = new Error("Durable session append failed; reopen before continuing", { cause });
-				throw this.writeError;
-			}
+		try {
+			if (durable) this._persistDurable(entry);
+			else this._persist(entry);
+		} catch (cause) {
+			this.fileEntries.pop();
+			this.writeError = new Error("Session append failed; reopen before continuing", { cause });
+			throw this.writeError;
 		}
 		this.byId.set(entry.id, entry);
 		this.leafId = entry.id;
-		if (!durable) this._persist(entry);
 	}
 
 	/** Append a message as child of current leaf, then advance leaf. Returns entry id.
