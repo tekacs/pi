@@ -1001,7 +1001,8 @@ async function listSessionsFromDir(
  * Each session entry has an id and parentId forming a tree structure. The "leaf"
  * pointer tracks the current position. Appending creates a child of the current leaf.
  * Branching moves the leaf to an earlier entry, allowing new branches without
- * modifying history.
+ * modifying history. An append that fails persistence is not published to readers;
+ * further appends are fenced until the session is reopened.
  *
  * Use buildSessionContext() to get the resolved message list for the LLM, which
  * handles compaction summaries and follows the path from root to current leaf.
