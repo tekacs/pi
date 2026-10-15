@@ -189,8 +189,8 @@ class PendingMessageQueue {
 		this.messages.push(message);
 	}
 
-	hasItems(): boolean {
-		return this.messages.length > 0;
+	hasItems(matches?: (message: AgentMessage) => boolean): boolean {
+		return matches ? this.messages.some(matches) : this.messages.length > 0;
 	}
 
 	peek(): AgentMessage[] {
@@ -388,8 +388,8 @@ export class Agent {
 	}
 
 	/** Returns true when either queue still contains pending messages. */
-	hasQueuedMessages(): boolean {
-		return this.steeringQueue.hasItems() || this.followUpQueue.hasItems();
+	hasQueuedMessages(matches?: (message: AgentMessage) => boolean): boolean {
+		return this.steeringQueue.hasItems(matches) || this.followUpQueue.hasItems(matches);
 	}
 
 	/** Preview the messages selected for the next turn without consuming them. */
