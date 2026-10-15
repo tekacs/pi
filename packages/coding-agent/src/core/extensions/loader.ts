@@ -168,6 +168,8 @@ export function createExtensionRuntime(): ExtensionRuntime {
 	};
 
 	const runtime: ExtensionRuntime = {
+		admitMessage: notInitialized,
+		cancelMessage: notInitialized,
 		triggerTurn: notInitialized,
 		sendMessage: notInitialized,
 		sendUserMessage: notInitialized,
@@ -392,6 +394,16 @@ function createExtensionAPI(
 		triggerTurn(): void {
 			runtime.assertActive();
 			runtime.triggerTurn();
+		},
+
+		admitMessage(id, message, options): string {
+			assertActive();
+			return runtime.admitMessage(id, message, options);
+		},
+
+		cancelMessage(id: string): void {
+			assertActive();
+			runtime.cancelMessage(id);
 		},
 
 		sendMessage(message, options): void {

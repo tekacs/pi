@@ -80,6 +80,8 @@ describe("ExtensionRunner", () => {
 	};
 
 	const extensionActions: ExtensionActions = {
+		admitMessage: () => "admission",
+		cancelMessage: () => {},
 		triggerTurn: () => {},
 		sendMessage: () => {},
 		sendUserMessage: () => {},
@@ -157,6 +159,32 @@ describe("ExtensionRunner", () => {
 			trigger?.();
 
 			expect(triggered).toHaveBeenCalledOnce();
+		});
+
+		it("returns durable admission results and propagates refusal through the public API", async () => {
+			const runtime = createExtensionRuntime();
+			let offer!: () => string;
+			let cancel!: () => void;
+			const extension = await loadExtensionFromFactory(
+				(pi) => {
+					offer = () => pi.admitMessage("receipt", { customType: "fixture", content: "result", display: false });
+					cancel = () => pi.cancelMessage("receipt");
+				},
+				tempDir,
+				createEventBus(),
+				runtime,
+			);
+			const runner = new ExtensionRunner([extension], runtime, tempDir, sessionManager, modelRegistry);
+			const admitMessage = vi.fn(() => "persisted-entry");
+			const cancelMessage = vi.fn();
+			runner.bindCore({ ...extensionActions, admitMessage, cancelMessage }, extensionContextActions);
+			expect(offer()).toBe("persisted-entry");
+			cancel();
+			expect(cancelMessage).toHaveBeenCalledWith("receipt");
+			admitMessage.mockImplementation(() => {
+				throw new Error("write refused");
+			});
+			expect(offer).toThrow("write refused");
 		});
 
 		it("forwards a caller-owned abort signal to provider context counting", async () => {

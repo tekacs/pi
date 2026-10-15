@@ -451,6 +451,8 @@ export class ExtensionRunner {
 		},
 	): void {
 		// Copy actions into the shared runtime (all extension APIs reference this)
+		this.runtime.admitMessage = actions.admitMessage;
+		this.runtime.cancelMessage = actions.cancelMessage;
 		this.runtime.triggerTurn = actions.triggerTurn;
 		this.runtime.sendMessage = actions.sendMessage;
 		this.runtime.sendUserMessage = actions.sendUserMessage;
@@ -1197,7 +1199,10 @@ export class ExtensionRunner {
 		);
 	}
 
-	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
+	async emit<TEvent extends RunnerEmitEvent>(
+		event: TEvent,
+		options: { strict?: boolean } = {},
+	): Promise<RunnerEmitResult<TEvent>> {
 		const ctx = this.createContext();
 		let result: SessionBeforeEventResult | undefined;
 
@@ -1221,6 +1226,7 @@ export class ExtensionRunner {
 						error: message,
 						stack,
 					});
+					if (options.strict) throw err;
 				}
 			}
 		}

@@ -175,6 +175,8 @@ export interface SessionInfoEntry extends SessionEntryBase {
  * - true: rendered with distinct styling (different from user messages)
  */
 export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
+	/** Durable admission request fulfilled by this projection. */
+	inputId?: string;
 	type: "custom_message";
 	customType: string;
 	content: string | (TextContent | ImageContent)[];
@@ -470,7 +472,14 @@ export function sessionEntryToContextMessages(entry: SessionEntry): AgentMessage
 	}
 	if (entry.type === "custom_message") {
 		return [
-			createCustomMessage(entry.customType, entry.content ?? [], entry.display, entry.details, entry.timestamp),
+			createCustomMessage(
+				entry.customType,
+				entry.content ?? [],
+				entry.display,
+				entry.details,
+				entry.timestamp,
+				entry.inputId,
+			),
 		];
 	}
 	if (entry.type === "branch_summary" && entry.summary) {
@@ -1343,7 +1352,7 @@ export class SessionManager {
 	}
 
 	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
-	appendCustomEntry(customType: string, data?: unknown): string {
+	appendCustomEntry(customType: string, data?: unknown, options: { durable?: boolean } = {}): string {
 		const entry: CustomEntry = {
 			type: "custom",
 			customType,
@@ -1352,7 +1361,7 @@ export class SessionManager {
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 		};
-		this._appendEntry(entry);
+		this._appendEntry(entry, options.durable);
 		return entry.id;
 	}
 
@@ -1397,9 +1406,11 @@ export class SessionManager {
 		content: string | (TextContent | ImageContent)[],
 		display: boolean,
 		details?: T,
+		inputId?: string,
 	): string {
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
+			...(inputId ? { inputId } : {}),
 			customType,
 			content,
 			display,
@@ -1408,7 +1419,7 @@ export class SessionManager {
 			parentId: this.leafId,
 			timestamp: new Date().toISOString(),
 		};
-		this._appendEntry(entry);
+		this._appendEntry(entry, inputId !== undefined);
 		return entry.id;
 	}
 
