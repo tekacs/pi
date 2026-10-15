@@ -44,6 +44,8 @@ export interface BashExecutionMessage {
  * These are custom messages that extensions can inject into the conversation.
  */
 export interface CustomMessage<T = unknown> {
+	/** Durable admission request fulfilled by this projection. */
+	inputId?: string;
 	role: "custom";
 	customType: string;
 	content: string | (TextContent | ImageContent)[];
@@ -126,6 +128,7 @@ export function createCustomMessage(
 	display: boolean,
 	details: unknown | undefined,
 	timestamp: string,
+	inputId?: string,
 ): CustomMessage {
 	return {
 		role: "custom",
@@ -133,6 +136,7 @@ export function createCustomMessage(
 		content,
 		display,
 		details,
+		...(inputId ? { inputId } : {}),
 		timestamp: new Date(timestamp).getTime(),
 	};
 }
