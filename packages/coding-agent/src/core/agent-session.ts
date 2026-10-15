@@ -68,6 +68,7 @@ import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
+import { type AdmissionOptions, Admissions, type AdmittedMessage } from "./admission.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
@@ -400,6 +401,8 @@ export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
 	readonly settingsManager: SettingsManager;
+	private readonly _admissions: Admissions;
+	private readonly _executing = new Set<string>();
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
 
@@ -518,6 +521,20 @@ export class AgentSession {
 		this.agent = config.agent;
 		this.sessionManager = config.sessionManager;
 		this.settingsManager = config.settingsManager;
+		this._admissions = new Admissions(this.sessionManager, {
+			queue: (message) => this.agent.steer(message),
+			executing: (callId) => this._executing.has(callId),
+			queued: (id) => this.agent.hasQueuedMessages((message) => message.role === "custom" && message.inputId === id),
+			discard: (id) => this.agent.discardQueued((message) => message.role === "custom" && message.inputId === id),
+			start: () => this.triggerTurn(),
+			idle: () => this.isIdle && !this._isEmittingAgentSettled,
+			warn: (error) =>
+				this._extensionRunner.emitError({
+					extensionPath: "<runtime>",
+					event: "admit_message",
+					error: error instanceof Error ? error.message : String(error),
+				}),
+		});
 		this._scopedModels = config.scopedModels ?? [];
 		this._resourceLoader = config.resourceLoader;
 		this._customTools = config.customTools ?? [];
@@ -787,10 +804,7 @@ export class AgentSession {
 					onUpdate,
 				});
 			},
-			emit: async (event) => {
-				await this._extensionRunner.emit(event);
-				this._emit(event);
-			},
+			emit: (event) => this._handleAgentEvent(event),
 		});
 		return this._nestedToolCalls.execute(parentToolCallId, name, args, options);
 	}
@@ -1098,6 +1112,7 @@ export class AgentSession {
 	}
 
 	private _resolveIdleWaitIfIdle(): void {
+		if (this.isIdle) this._admissions.idle();
 		if (!this.isIdle || !this._resolveIdleWait) {
 			return;
 		}
@@ -1111,6 +1126,8 @@ export class AgentSession {
 		this._cacheWarmer?.onAgentSettled();
 		this._isAgentRunActive = false;
 		this._isEmittingAgentSettled = true;
+		this._executing.clear();
+		this._admissions.settle(this._agentRunAbortRequested);
 		try {
 			const aborted = this._agentRunAbortRequested;
 			await this._extensionRunner.emit({ type: "agent_settled", aborted });
@@ -1136,6 +1153,8 @@ export class AgentSession {
 		// An abort requested while the run was starting, e.g. during before_agent_start, stops it
 		// here. agent_start is awaited before the first request.
 		if (event.type === "agent_start" && this._agentRunAbortRequested) this.agent.abort();
+		if (event.type === "tool_execution_start") this._executing.add(event.toolCallId);
+		if (event.type === "tool_execution_end") this._executing.delete(event.toolCallId);
 		// Record the calls a tool made through ctx.executeTool() and their usage on its result message.
 		if (this._nestedToolCalls) {
 			if (event.type === "message_start" && event.message.role === "toolResult") {
@@ -1156,9 +1175,16 @@ export class AgentSession {
 			if (this._queuedInput.delete(event.message)) this._emitQueueUpdate();
 		}
 
+		// Admission identity is runtime-owned; message replacement cannot detach it.
+		const inputId =
+			(event.type === "message_end" || event.type === "message_start") && event.message.role === "custom"
+				? event.message.inputId
+				: undefined;
 		// Emit to extensions first, then notify public listeners.
 		await this._emitExtensionEvent(event);
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
+		// All tool results are persisted before turn_end; steering drains immediately afterward.
+		if (event.type === "turn_end") this._admissions.boundary();
 
 		// Handle session persistence. Provider-managed commits are immutable
 		// assistant segments; unlike message_end they do not pass through extension
@@ -1167,12 +1193,17 @@ export class AgentSession {
 			let entryId: string | undefined;
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
+				if (inputId && !this._admissions.allowed(inputId)) {
+					this.agent.state.messages = this.agent.state.messages.filter((message) => message !== event.message);
+					return;
+				}
 				// Persist as CustomMessageEntry
 				entryId = this.sessionManager.appendCustomMessageEntry(
 					event.message.customType,
 					event.message.content,
 					event.message.display,
 					event.message.details,
+					inputId,
 				);
 			} else if (
 				event.message.role === "system" ||
@@ -1181,9 +1212,16 @@ export class AgentSession {
 				event.message.role === "toolResult"
 			) {
 				// Regular LLM message - persist as SessionMessageEntry
-				entryId = this.sessionManager.appendMessage(event.message, { durable: event.type === "message_commit" });
+				entryId = this.sessionManager.appendMessage(event.message, {
+					durable:
+						event.type === "message_commit" ||
+						(event.message.role === "toolResult" && this._admissions.toolResult(event.message)),
+				});
 			}
-			if (entryId) this._entryIdsByMessage.set(event.message, entryId);
+			if (entryId) {
+				this._entryIdsByMessage.set(event.message, entryId);
+				this._admissions.accept(this.sessionManager.getEntry(entryId)!);
+			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
 			// Track the terminal assistant message for retry and auto-compaction.
@@ -1430,6 +1468,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this._admissions.close();
 		this._compactionTurn = undefined;
 		try {
 			this.abortRetry();
@@ -1899,7 +1938,7 @@ export class AgentSession {
 	// =========================================================================
 
 	/**
-	 * Start a run from a user or custom message. The session counts as busy from here on, so
+	 * Start a run from submitted input or existing context. The session counts as busy from here on, so
 	 * messages sent while before_agent_start handlers run are queued into this run instead of
 	 * starting another, and an abort requested meanwhile aborts the run as soon as it exists.
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
@@ -1927,6 +1966,7 @@ export class AgentSession {
 		this._flushPendingCustomMessages();
 		onStarted?.();
 
+		this._admissions.resume();
 		// A turn deferred during compaction joins this run without adding a synthetic prompt.
 		messages.push(...(this._compactionTurn ?? []));
 		this._compactionTurn = undefined;
@@ -2362,6 +2402,27 @@ export class AgentSession {
 		}
 	}
 
+	/** Prepare and run existing or extension-projected context without manufacturing a prompt message. */
+	async triggerTurn(): Promise<void> {
+		if (this.isStreaming) throw new Error("Cannot trigger a context-only turn while the agent is already running");
+		if (this.isCompacting) {
+			this._compactionTurn ??= [];
+			return;
+		}
+		await this._startRun({ messageType: "context" });
+	}
+
+	admitMessage(id: string, message: AdmittedMessage, options?: AdmissionOptions): string {
+		if (options?.toolCallId && !this._executing.has(options.toolCallId)) {
+			throw new Error("Input admission must name a currently executing tool");
+		}
+		return this._admissions.admit(id, message, options);
+	}
+
+	cancelMessage(id: string): void {
+		this._admissions.cancel(id);
+	}
+
 	/**
 	 * Send a custom message to the session. Creates a CustomMessageEntry.
 	 *
@@ -2376,16 +2437,6 @@ export class AgentSession {
 	 * @param options.triggerTurn If true and not streaming, triggers a new LLM turn
 	 * @param options.deliverAs Delivery mode: "steer", "followUp", or "nextTurn"
 	 */
-	/** Run a context-only turn. Extensions use this when durable state changed but no payload belongs in transcript. */
-	async triggerTurn(): Promise<void> {
-		if (this.isStreaming) throw new Error("Cannot trigger a context-only turn while the agent is already running");
-		if (this.isCompacting) {
-			this._compactionTurn ??= [];
-			return;
-		}
-		await this._startRun({ messageType: "context" });
-	}
-
 	async sendCustomMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
@@ -2538,6 +2589,7 @@ export class AgentSession {
 	 * Abort current operation and wait for agent to become idle.
 	 */
 	async abort(): Promise<void> {
+		this._admissions.suspend();
 		if (this._isAgentRunActive) {
 			this._agentRunAbortRequested = true;
 		}
@@ -3524,9 +3576,10 @@ export class AgentSession {
 		}
 
 		this._applyExtensionBindings(this._extensionRunner);
-		await this._extensionRunner.emit(this._sessionStartEvent);
+		await this._extensionRunner.emit(this._sessionStartEvent, { strict: true });
 		this._extensionRunner.reportUnhandledMcpServers();
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+		this._admissions.start();
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
@@ -3633,6 +3686,8 @@ export class AgentSession {
 
 		runner.bindCore(
 			{
+				admitMessage: (id, message, options) => this.admitMessage(id, message, options),
+				cancelMessage: (id) => this.cancelMessage(id),
 				triggerTurn: () => {
 					this.triggerTurn().catch((err) => {
 						runner.emitError({

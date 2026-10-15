@@ -56,6 +56,7 @@ import type {
 } from "@earendil-works/pi-tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
+import type { AdmissionOptions, AdmittedMessage } from "../admission.ts";
 import type { BashResult } from "../bash-executor.ts";
 import type { CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult } from "../cache-warmer.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
@@ -1848,6 +1849,11 @@ export interface ExtensionAPI {
 	/** Run normal startup preparation against existing or extension-projected context, without adding provider input. */
 	triggerTurn(): void;
 
+	/** Persist keyed custom input and transfer crash-recoverable delivery custody to Pi. */
+	admitMessage(id: string, message: AdmittedMessage, options?: AdmissionOptions): string;
+	/** Cancel outstanding admitted input without cancelling its external producer. */
+	cancelMessage(id: string): void;
+
 	/** Send a custom message to the session. A turn requested during compaction starts once compaction ends. */
 	sendMessage<T = unknown>(
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
@@ -2334,6 +2340,8 @@ export interface ExtensionRuntimeState {
  * Provided to runner.initialize(), copied into the shared runtime.
  */
 export interface ExtensionActions {
+	admitMessage: ExtensionAPI["admitMessage"];
+	cancelMessage: ExtensionAPI["cancelMessage"];
 	triggerTurn: TriggerTurnHandler;
 	sendMessage: SendMessageHandler;
 	sendUserMessage: SendUserMessageHandler;
