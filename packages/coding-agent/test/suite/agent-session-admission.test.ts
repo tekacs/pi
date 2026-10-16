@@ -109,6 +109,83 @@ describe("AgentSession durable input admission", () => {
 		expect(h.session.admitMessage("receipt", input)).toBe(request);
 	});
 
+	it("retains held custody without inference and delivers once after a policy change", async () => {
+		let held = true;
+		let accepted = 0;
+		const h = await fixture({
+			extensionFactories: [
+				(pi) => {
+					pi.registerInputPolicy("source", {
+						check: () => (held ? "hold" : "allow"),
+						accept: () => {
+							accepted++;
+						},
+					});
+				},
+			],
+		});
+		const request = h.session.admitMessage("receipt", input, { policy: "source" });
+		await delay(250);
+		expect(h.faux.state.callCount).toBe(0);
+		expect(accepted).toBe(0);
+		h.setResponses([fauxAssistantMessage("received")]);
+		const done = settled(h);
+		held = false;
+		h.session.refreshInputs();
+		await done;
+		expect(accepted).toBe(1);
+		expect(h.faux.state.callCount).toBe(1);
+		expect(
+			h.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.inputId === request),
+		).toHaveLength(1);
+		h.session.refreshInputs();
+		await delay(250);
+		expect(h.faux.state.callCount).toBe(1);
+	});
+
+	it("retains input until its missing policy is registered", async () => {
+		let register!: () => void;
+		const h = await fixture({
+			extensionFactories: [
+				(pi) => {
+					register = () => pi.registerInputPolicy("late", { check: () => "allow" });
+				},
+			],
+		});
+		h.session.admitMessage("receipt", input, { policy: "late" });
+		await delay(250);
+		expect(h.faux.state.callCount).toBe(0);
+		h.setResponses([fauxAssistantMessage("received")]);
+		const done = settled(h);
+		register();
+		await done;
+		expect(h.faux.state.callCount).toBe(1);
+	});
+
+	it("checks policy again after a queued input reaches message hooks", async () => {
+		let held = false;
+		const h = await fixture({
+			extensionFactories: [
+				(pi) => {
+					pi.registerInputPolicy("source", { check: () => (held ? "hold" : "allow") });
+					pi.on("message_start", (event) => {
+						if (event.message.role === "custom") held = true;
+					});
+				},
+			],
+		});
+		h.setResponses([
+			(context) => {
+				expect(JSON.stringify(context.messages)).not.toContain("external result");
+				return fauxAssistantMessage("no receipt delivered");
+			},
+		]);
+		const done = settled(h);
+		h.session.admitMessage("receipt", input, { policy: "source" });
+		await done;
+		expect(h.sessionManager.getEntries().filter((entry) => entry.type === "custom_message")).toHaveLength(0);
+	});
+
 	it("keeps custody dormant when extension startup cannot complete", async () => {
 		const h = await fixture(
 			{

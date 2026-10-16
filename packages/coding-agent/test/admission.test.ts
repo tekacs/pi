@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Admissions, type AdmittedMessage } from "../src/core/admission.ts";
+import { Admissions, type AdmittedMessage, type InputPolicy } from "../src/core/admission.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 
@@ -17,6 +17,7 @@ function fixture(manager?: SessionManager) {
 	}
 	const queue: CustomMessage[] = [];
 	const executing = new Set<string>();
+	const policies = new Map<string, InputPolicy>();
 	let idle = false;
 	const start = vi.fn(async () => {});
 	const owner = new Admissions(manager, {
@@ -25,6 +26,7 @@ function fixture(manager?: SessionManager) {
 		},
 		queued: (id) => queue.some((input) => input.inputId === id),
 		executing: (id) => executing.has(id),
+		policy: (name) => policies.get(name),
 		discard: (id) => {
 			const index = queue.findIndex((input) => input.inputId === id);
 			if (index >= 0) queue.splice(index, 1);
@@ -42,6 +44,7 @@ function fixture(manager?: SessionManager) {
 		manager,
 		queue,
 		executing,
+		policies,
 		start,
 		idle: () => {
 			idle = true;
@@ -157,6 +160,7 @@ describe("durable custom input admission", () => {
 
 	it("fulfills tool-result admissions without a second custom message", () => {
 		const f = fixture();
+		f.executing.add("tool");
 		const request = f.owner.admit("receipt", message, { toolCallId: "tool" });
 		expect(f.queue).toHaveLength(0);
 		const id = f.manager.appendMessage(
@@ -201,6 +205,56 @@ describe("durable custom input admission", () => {
 			expect(recovered.queue.map((input) => input.inputId)).toEqual([request]);
 		},
 	);
+
+	it("recovery holds a missing policy, then releases exactly once under current authority", async () => {
+		const first = fixture();
+		const request = first.owner.admit("receipt", message, { policy: "source" });
+		expect(first.queue).toHaveLength(0);
+		first.owner.close();
+		const f = fixture(SessionManager.open(first.manager.getSessionFile()!));
+		await f.owner.boundary();
+		expect(f.queue).toHaveLength(0);
+		let held = true;
+		f.policies.set("source", { check: () => (held ? "hold" : "allow") });
+		await f.owner.boundary();
+		expect(f.queue).toHaveLength(0);
+		held = false;
+		await f.owner.boundary();
+		await f.owner.boundary();
+		expect(f.queue.map((input) => input.inputId)).toEqual([request]);
+		f.project();
+		expect(f.owner.admit("receipt", message, { policy: "source" })).toBe(request);
+	});
+
+	it("revalidates authority after queueing and persists policy cancellation", async () => {
+		const f = fixture();
+		let decision: "allow" | "hold" | "cancel" = "allow";
+		f.policies.set("source", { check: () => decision });
+		const request = f.owner.admit("receipt", message, { policy: "source" });
+		await f.owner.boundary();
+		expect(f.queue).toHaveLength(1);
+		decision = "hold";
+		expect(await f.owner.authorize(request)).toBe(false);
+		expect(f.queue).toHaveLength(0);
+		decision = "cancel";
+		await f.owner.boundary();
+		expect(() => f.owner.admit("receipt", message, { policy: "source" })).toThrow("cancelled");
+		const recovered = fixture(SessionManager.open(f.manager.getSessionFile()!));
+		expect(recovered.queue).toHaveLength(0);
+	});
+
+	it("cannot replace an immutable policy or resume aborted input by reevaluation", async () => {
+		vi.useFakeTimers();
+		const f = fixture();
+		f.idle();
+		f.policies.set("source", { check: () => "allow" });
+		f.owner.admit("receipt", message, { policy: "source" });
+		f.owner.suspend();
+		f.owner.refresh();
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(f.start).not.toHaveBeenCalled();
+		expect(() => f.owner.admit("receipt", message)).toThrow("policy");
+	});
 
 	it("reclaims only finished tool admissions at a completed turn boundary", () => {
 		const f = fixture();
