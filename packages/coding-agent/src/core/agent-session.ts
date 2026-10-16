@@ -523,6 +523,7 @@ export class AgentSession {
 		this.settingsManager = config.settingsManager;
 		this._admissions = new Admissions(this.sessionManager, {
 			queue: (message) => this.agent.steer(message),
+			policy: (name) => this._extensionRunner?.getInputPolicy(name),
 			executing: (callId) => this._executing.has(callId),
 			queued: (id) => this.agent.hasQueuedMessages((message) => message.role === "custom" && message.inputId === id),
 			discard: (id) => this.agent.discardQueued((message) => message.role === "custom" && message.inputId === id),
@@ -1184,7 +1185,7 @@ export class AgentSession {
 		await this._emitExtensionEvent(event);
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
 		// All tool results are persisted before turn_end; steering drains immediately afterward.
-		if (event.type === "turn_end") this._admissions.boundary();
+		if (event.type === "turn_end") await this._admissions.boundary();
 
 		// Handle session persistence. Provider-managed commits are immutable
 		// assistant segments; unlike message_end they do not pass through extension
@@ -1193,7 +1194,7 @@ export class AgentSession {
 			let entryId: string | undefined;
 			// Check if this is a custom message from extensions
 			if (event.message.role === "custom") {
-				if (inputId && !this._admissions.allowed(inputId)) {
+				if (inputId && !(await this._admissions.authorize(inputId))) {
 					this.agent.state.messages = this.agent.state.messages.filter((message) => message !== event.message);
 					return;
 				}
@@ -2417,6 +2418,10 @@ export class AgentSession {
 			throw new Error("Input admission must name a currently executing tool");
 		}
 		return this._admissions.admit(id, message, options);
+	}
+
+	refreshInputs(): void {
+		this._admissions.refresh();
 	}
 
 	cancelMessage(id: string): void {
@@ -3687,6 +3692,7 @@ export class AgentSession {
 		runner.bindCore(
 			{
 				admitMessage: (id, message, options) => this.admitMessage(id, message, options),
+				refreshInputs: () => this.refreshInputs(),
 				cancelMessage: (id) => this.cancelMessage(id),
 				triggerTurn: () => {
 					this.triggerTurn().catch((err) => {

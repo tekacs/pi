@@ -48,6 +48,33 @@ Nested tool calls can admit input, but their unpersisted results do not fulfill
 it. Copying a nested marker into a parent result does not change its call ID;
 the input remains pending for ordinary delivery.
 
+## Delivery authority
+
+Custody does not grant delivery permission. An admission can name an immutable
+`options.policy`. Its extension registers that name with
+`pi.registerInputPolicy(name, { check, accept? })`. `check` receives the receipt
+ID, request entry ID and immutable message, and returns `allow`, `hold` or
+`cancel`. `accept` is synchronous: immediately before an automatic turn starts,
+Pi invokes it for the permitted queued inputs so the source can bind attribution.
+Checks do not themselves grant that attribution.
+Pi treats a missing policy as `hold`. Recovery retains the same policy name;
+restarting without the owning extension cannot authorize its pending input.
+
+Pi checks the policy before queueing input or starting an automatic turn, and
+checks it again before persisting a queued custom-message projection. A hold
+removes a queued attempt but retains the durable request. Cancellation uses the
+same durable cancellation operation as `cancelMessage`. A refusal throws no
+acceptance away: Pi retains custody and reports the policy error.
+
+`pi.refreshInputs()` notifies the admission owner that policy facts changed.
+It does not reoffer receipts or grant permission. The owner reevaluates retained
+requests; hold does not cause periodic polling. Abort remains independent:
+reevaluation of existing input cannot itself undo an abort suspension.
+
+A tool result carrying the exact request marker records delivery through that
+explicit executing tool, rather than permission for a separate automatic turn.
+An unfinished tool handoff must pass the policy before custom-message delivery.
+
 ## Cancellation and lifecycle
 
 `pi.cancelMessage(id)` durably cancels outstanding input and removes its queued
