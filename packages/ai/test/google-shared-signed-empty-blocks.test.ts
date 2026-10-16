@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { convertMessages } from "../src/api/google-shared.ts";
+import { convertMessages, normalizeGoogleOutputAnsi } from "../src/api/google-shared.ts";
 import type { AssistantMessage, Context, Model } from "../src/types.ts";
 import { normalizeContext } from "../src/utils/transcript.ts";
 
@@ -122,5 +122,30 @@ describe("google-shared convertMessages — signed empty blocks", () => {
 		expect(modelTurn?.parts).toHaveLength(1);
 		expect(modelTurn?.parts?.[0]?.functionCall).toBeTruthy();
 		expect(JSON.stringify(modelTurn)).not.toContain(VALID_SIG);
+	});
+
+	it("strips ANSI SGR and broken <0x1B>/space-prefixed SGR remnants from replayed Google history", () => {
+		const model = makeModel();
+		const contents = convertMessages(
+			model,
+			normalizeContext(
+				makeContext(model, [
+					{
+						type: "text",
+						text: "\u001b[1;38;2;134;239;172mClean\u001b[0m and \u001b<0x1B>[1;38;2;245;205;120mBroken\u001b<0x1B>[0m and  [1;38;2;110;231;249mSpaceBroken [0m",
+					},
+				]),
+			),
+		);
+		const modelTurn = contents.find((c) => c.role === "model");
+		expect(modelTurn?.parts?.[0]?.text).toBe("Clean and Broken and  SpaceBroken ");
+	});
+
+	it("normalizes SentencePiece ESC+space+[ and malformed SGR prefixes in streamed Google output", () => {
+		expect(
+			normalizeGoogleOutputAnsi(
+				"\u001b [1;38;2;134;239;172mA\u001b [0m \u001b<0x1B>[1mB\u001b\u001b[0m  [2;38;2;140;145;160mC [0m",
+			),
+		).toBe("\u001b[1;38;2;134;239;172mA\u001b[0m \u001b[1mB\u001b[0m  \u001b[2;38;2;140;145;160mC \u001b[0m");
 	});
 });
