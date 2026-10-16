@@ -172,6 +172,30 @@ export function retainThoughtSignature(existing: string | undefined, incoming: s
 // Thought signatures must be base64 for Google APIs (TYPE_BYTES).
 const base64SignaturePattern = /^[A-Za-z0-9+/]+={0,2}$/;
 
+// Google's Gemini API input preprocessor replaces raw ESC (0x1B) bytes in replayed
+// conversation history and tool outputs with ASCII spaces (0x20), leaving broken
+// "[1;38;2;...m" skeletons in context that the model then imitates on later turns.
+const googleHistoryAnsiPattern =
+	/(?:\u001b+(?:<0x1[bB]>| )*|\u009b|<0x1[bB]>|\\x1[bB]|\\u001[bB])\[[0-9;:]*[A-Za-z]|(?<=^|[\s(])\[(?:0|[12](?:;[0-9;:]+)?|[34]8;2;[0-9;]+)m/gm;
+
+function sanitizeGoogleHistoryText(text: string): string {
+	return sanitizeSurrogates(text).replace(googleHistoryAnsiPattern, "");
+}
+
+const googleSplitEscPrefixPattern = /^(?:<0x1[bB]>|\u001b| )+(?=\[[0-9;:]*m)/;
+const googleMalformedAnsiOutputPattern =
+	/(?:\u001b+(?:<0x1[bB]>| )*|<0x1[bB]>|\\x1[bB]|\\u001[bB])\[(?=[0-9;:]*m)|(?<=^|[\s(])\[(?=(?:0|[12](?:;[0-9;:]+)?|[34]8;2;[0-9;]+)m)/gm;
+
+/**
+ * Normalize Gemini streamed text when SentencePiece detokenizes `<0x1B>` + `▁[`
+ * as `\x1b [` (ESC + space + `[`) or when the model emits `<0x1B>[`, `\x1b\x1b[`,
+ * or bare SGR brackets after input-preprocessor stripping.
+ */
+export function normalizeGoogleOutputAnsi(delta: string, previousText = ""): string {
+	const joined = previousText.endsWith("\u001b") ? delta.replace(googleSplitEscPrefixPattern, "") : delta;
+	return joined.replace(googleMalformedAnsiOutputPattern, "\u001b[");
+}
+
 function isValidThoughtSignature(signature: string | undefined): boolean {
 	if (!signature) return false;
 	if (signature.length % 4 !== 0) return false;
@@ -230,12 +254,12 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			if (typeof msg.content === "string") {
 				contents.push({
 					role: "user",
-					parts: [{ text: sanitizeSurrogates(msg.content) }],
+					parts: [{ text: sanitizeGoogleHistoryText(msg.content) }],
 				});
 			} else {
 				const parts: Part[] = msg.content.map((item) => {
 					if (item.type === "text") {
-						return { text: sanitizeSurrogates(item.text) };
+						return { text: sanitizeGoogleHistoryText(item.text) };
 					} else {
 						return {
 							inlineData: {
@@ -265,7 +289,7 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 					// turns with a thought-only STOP (empty completion, no tool call).
 					if ((!block.text || block.text.trim() === "") && !thoughtSignature) continue;
 					parts.push({
-						text: sanitizeSurrogates(block.text),
+						text: sanitizeGoogleHistoryText(block.text),
 						...(thoughtSignature && { thoughtSignature }),
 					});
 				} else if (block.type === "thinking") {
@@ -278,14 +302,14 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 						if ((!block.thinking || block.thinking.trim() === "") && !thoughtSignature) continue;
 						parts.push({
 							thought: true,
-							text: sanitizeSurrogates(block.thinking),
+							text: sanitizeGoogleHistoryText(block.thinking),
 							...(thoughtSignature && { thoughtSignature }),
 						});
 					} else {
 						// Cross-provider/model: the signature is unusable, empty blocks stay dropped.
 						if (!block.thinking || block.thinking.trim() === "") continue;
 						parts.push({
-							text: sanitizeSurrogates(block.thinking),
+							text: sanitizeGoogleHistoryText(block.thinking),
 						});
 					}
 				} else if (block.type === "toolCall") {
@@ -324,7 +348,11 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 			const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
 			// Use "output" key for success, "error" key for errors as per SDK documentation
-			const responseValue = hasText ? sanitizeSurrogates(textResult) : hasImages ? "(see attached image)" : "";
+			const responseValue = hasText
+				? sanitizeGoogleHistoryText(textResult)
+				: hasImages
+					? "(see attached image)"
+					: "";
 
 			const imageParts: Part[] = imageContent.map((imageBlock) => ({
 				inlineData: {
