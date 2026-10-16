@@ -81,6 +81,7 @@ describe("ExtensionRunner", () => {
 
 	const extensionActions: ExtensionActions = {
 		admitMessage: () => "admission",
+		refreshInputs: () => {},
 		cancelMessage: () => {},
 		triggerTurn: () => {},
 		sendMessage: () => {},

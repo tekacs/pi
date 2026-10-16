@@ -452,6 +452,7 @@ export class ExtensionRunner {
 	): void {
 		// Copy actions into the shared runtime (all extension APIs reference this)
 		this.runtime.admitMessage = actions.admitMessage;
+		this.runtime.refreshInputs = actions.refreshInputs;
 		this.runtime.cancelMessage = actions.cancelMessage;
 		this.runtime.triggerTurn = actions.triggerTurn;
 		this.runtime.sendMessage = actions.sendMessage;
@@ -848,6 +849,12 @@ export class ExtensionRunner {
 			}
 		}
 		return false;
+	}
+
+	getInputPolicy(name: string) {
+		const policies = this.extensions.flatMap((ext) => ext.inputPolicies?.get(name) ?? []);
+		if (policies.length > 1) throw new Error(`Input policy ${name} has multiple owners`);
+		return policies[0];
 	}
 
 	getMessageRenderer(customType: string): MessageRenderer | undefined {

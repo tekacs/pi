@@ -56,7 +56,7 @@ import type {
 } from "@earendil-works/pi-tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
-import type { AdmissionOptions, AdmittedMessage } from "../admission.ts";
+import type { AdmissionOptions, AdmittedMessage, InputPolicy } from "../admission.ts";
 import type { BashResult } from "../bash-executor.ts";
 import type { CacheWarmingDecisionEvent, CacheWarmingDecisionEventResult } from "../cache-warmer.ts";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.ts";
@@ -1839,6 +1839,10 @@ export interface ExtensionAPI {
 
 	/** Persist keyed custom input and transfer crash-recoverable delivery custody to Pi. */
 	admitMessage(id: string, message: AdmittedMessage, options?: AdmissionOptions): string;
+	/** Register the live authority for admissions naming this policy. Missing policies hold input. */
+	registerInputPolicy(name: string, policy: InputPolicy): void;
+	/** Reevaluate retained input after policy facts change; never grants authority itself. */
+	refreshInputs(): void;
 	/** Cancel outstanding admitted input without cancelling its external producer. */
 	cancelMessage(id: string): void;
 
@@ -2329,6 +2333,7 @@ export interface ExtensionRuntimeState {
  */
 export interface ExtensionActions {
 	admitMessage: ExtensionAPI["admitMessage"];
+	refreshInputs: ExtensionAPI["refreshInputs"];
 	cancelMessage: ExtensionAPI["cancelMessage"];
 	triggerTurn: TriggerTurnHandler;
 	sendMessage: SendMessageHandler;
@@ -2428,6 +2433,7 @@ export interface Extension {
 	handlers: Map<string, HandlerFn[]>;
 	tools: Map<string, RegisteredTool>;
 	messageRenderers: Map<string, MessageRenderer>;
+	inputPolicies?: Map<string, InputPolicy>;
 	toolRenderers?: ToolRendererResolver[];
 	markdownTransformer?: MarkdownTransformer;
 	entryRenderers?: Map<string, EntryRenderer>;

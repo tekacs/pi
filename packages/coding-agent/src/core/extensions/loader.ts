@@ -169,6 +169,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
 
 	const runtime: ExtensionRuntime = {
 		admitMessage: notInitialized,
+		refreshInputs: notInitialized,
 		cancelMessage: notInitialized,
 		triggerTurn: notInitialized,
 		sendMessage: notInitialized,
@@ -366,6 +367,16 @@ function createExtensionAPI(
 			extension.messageRenderers.set(customType, renderer as MessageRenderer);
 		},
 
+		registerInputPolicy(name, policy): void {
+			assertActive();
+			if (!name) throw new Error("Input policy name must not be empty");
+			extension.inputPolicies ??= new Map();
+			const policies = extension.inputPolicies;
+			if (policies.has(name)) throw new Error(`Input policy ${name} is already registered`);
+			policies.set(name, policy);
+			if (state === "active") runtime.refreshInputs();
+		},
+
 		registerMarkdownTransformer(transformer: MarkdownTransformer): void {
 			assertActive();
 			extension.markdownTransformer = transformer;
@@ -399,6 +410,11 @@ function createExtensionAPI(
 		admitMessage(id, message, options): string {
 			assertActive();
 			return runtime.admitMessage(id, message, options);
+		},
+
+		refreshInputs(): void {
+			assertActive();
+			runtime.refreshInputs();
 		},
 
 		cancelMessage(id: string): void {
