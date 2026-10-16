@@ -38,6 +38,7 @@ import {
 	getDisabledGoogleThinkingConfig,
 	isThinkingPart,
 	mapStopReason,
+	normalizeGoogleOutputAnsi,
 	resolveGoogleFunctionCallingMode,
 	resolveGoogleThinkingLevel,
 	retainThoughtSignature,
@@ -168,7 +169,8 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 									partial: output,
 								});
 							} else {
-								currentBlock.text += part.text;
+								const normalizedText = normalizeGoogleOutputAnsi(part.text, currentBlock.text);
+								currentBlock.text += normalizedText;
 								currentBlock.textSignature = retainThoughtSignature(
 									currentBlock.textSignature,
 									part.thoughtSignature,
@@ -176,7 +178,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 								stream.push({
 									type: "text_delta",
 									contentIndex: blockIndex(),
-									delta: part.text,
+									delta: normalizedText,
 									partial: output,
 								});
 							}
