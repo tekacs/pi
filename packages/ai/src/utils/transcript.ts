@@ -1,4 +1,4 @@
-import type { Context, Message, SystemMessage, Tool, ToolReference, TranscriptContext } from "../types.ts";
+import type { Context, Message, SystemMessage, TextContent, Tool, ToolReference, TranscriptContext } from "../types.ts";
 import { contentText, getSystemMessageText } from "./text.ts";
 
 export type { TranscriptContext } from "../types.ts";
@@ -72,6 +72,7 @@ export function getCurrentTools(messages: TranscriptMessages): Tool[] {
  */
 export function getCurrentSystemMessage(messages: TranscriptMessages): SystemMessage | undefined {
 	const content: string[] = [];
+	const blocks: TextContent[] = [];
 	const sections = new Map<string, string>();
 	let timestamp: number | undefined;
 	for (const message of messages) {
@@ -79,6 +80,16 @@ export function getCurrentSystemMessage(messages: TranscriptMessages): SystemMes
 		timestamp ??= message.timestamp;
 		const text = contentText(message.content);
 		if (text.length > 0) content.push(text);
+		const parts = typeof message.content === "string"
+			? [{ type: "text" as const, text: message.content }]
+			: message.content;
+		if (text.length > 0 || parts.some((part) => part.cache !== undefined)) {
+			const separated = blocks.length > 0;
+			blocks.push(...parts.map((part, index) => ({
+				...part,
+				text: `${separated && index === 0 ? "\n" : ""}${part.text}`,
+			})));
+		}
 		for (const [name, value] of Object.entries(message.sections ?? {})) {
 			if (value === null) sections.delete(name);
 			else sections.set(name, value);
@@ -88,7 +99,7 @@ export function getCurrentSystemMessage(messages: TranscriptMessages): SystemMes
 	if (timestamp === undefined && tools.length === 0) return undefined;
 	return {
 		role: "system",
-		content: content.join("\n\n"),
+		content: blocks.some((block) => block.cache !== undefined) ? blocks : content.join("\n\n"),
 		...(sections.size > 0 ? { sections: Object.fromEntries(sections) } : {}),
 		...(tools.length > 0 ? { toolsAdded: tools } : {}),
 		timestamp: timestamp ?? 0,

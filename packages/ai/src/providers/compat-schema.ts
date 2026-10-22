@@ -185,6 +185,11 @@ function optionalSessionAffinityFormat(options?: TSchemaOptions) {
 	return Type.Optional(sessionAffinityFormat(options));
 }
 
+const explicitPromptCacheMode = optionalCompatBoolean({
+	description: "Whether the selected model and endpoint accept prompt_cache_options and per-block prompt_cache_breakpoint controls.",
+	default: false,
+});
+
 export const OpenAICompletionsCompatSchema = Type.Object(
 	{
 		supportsStore: Type.Optional(
@@ -317,6 +322,7 @@ export const OpenAICompletionsCompatSchema = Type.Object(
 				"Whether the provider supports the strict field in tool definitions. Generated capable models enable it explicitly.",
 			default: false,
 		}),
+		supportsExplicitPromptCacheMode: explicitPromptCacheMode,
 		cacheControlFormat: Type.Optional(
 			Type.Literal("anthropic", {
 				description:
@@ -390,12 +396,7 @@ export const OpenAIResponsesCompatSchema = Type.Object(
 				default: false,
 			}),
 		),
-		supportsExplicitPromptCacheMode: Type.Optional(
-			Type.Boolean({
-				description: "Whether the model accepts prompt_cache_options. Older OpenAI models reject the parameter.",
-				default: false,
-			}),
-		),
+		supportsExplicitPromptCacheMode: explicitPromptCacheMode,
 		supportsMidConvoEffort: Type.Optional(
 			Type.Boolean({
 				description:
@@ -538,6 +539,7 @@ export const SystemOneCompatSchema = Type.Object(
 );
 
 const ProviderCompatPropertyOverrides = {
+	supportsExplicitPromptCacheMode: explicitPromptCacheMode,
 	supportsDeveloperRole: optionalCompatBoolean({
 		description: "Whether the provider supports the developer role instead of system. Defaults are API-specific.",
 	}),

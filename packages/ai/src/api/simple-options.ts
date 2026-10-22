@@ -50,6 +50,7 @@ export function buildBaseOptions(
 		fetch: options?.fetch,
 		transport: options?.transport,
 		cacheRetention: options?.cacheRetention,
+		promptCache: options?.promptCache,
 		sessionId: options?.sessionId,
 		headers: options?.headers,
 		identity: options?.identity,

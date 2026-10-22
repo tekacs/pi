@@ -41,6 +41,7 @@ const compat: Omit<Required<OpenAICompletionsCompat>, "thinkingTokenBudgetField"
 	sendSessionAffinityHeaders: false,
 	sessionAffinityFormat: "openai",
 	supportsLongCacheRetention: true,
+	supportsExplicitPromptCacheMode: false,
 };
 
 function buildToolResult(toolCallId: string, timestamp: number): ToolResultMessage {

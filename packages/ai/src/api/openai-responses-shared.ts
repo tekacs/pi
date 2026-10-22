@@ -35,7 +35,7 @@ import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson, parseToolCallArguments } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
-import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
+import { getSystemMessageText, renderSystemMessageUpdate, systemBlocks } from "../utils/text.ts";
 import { resolveTranscript, resolveTranscriptTools, type TranscriptToolSupport } from "../utils/transcript.ts";
 import {
 	appendGrammarToolInputJsonDelta,
@@ -45,6 +45,7 @@ import {
 	resolveGrammarConstrainedSampling,
 	resolveJsonSchemaStrictSampling,
 } from "./constrained-sampling.ts";
+import { applyCacheWrites, cacheBreakpoint, validatePromptCache } from "./openai-prompt-cache.ts";
 import { transformMessages } from "./transform-messages.ts";
 
 // =============================================================================
@@ -83,6 +84,13 @@ function convertToolResultOutput<TApi extends Api>(
 	model: Model<TApi>,
 	content: readonly (TextContent | ImageContent)[],
 ): string | ToolResultOutputContent {
+	if (content.some((block) => block.cache !== undefined)) {
+		return content.map((block): ResponseInputText | ResponseInputImage => {
+			if (block.type === "text") return { type: "input_text", text: sanitizeSurrogates(block.text), ...cacheBreakpoint(block) };
+			if (!model.input.includes("image")) throw new Error("Cannot preserve a cache breakpoint on unsupported image input");
+			return { type: "input_image", detail: "auto", image_url: `data:${block.mimeType};base64,${block.data}`, ...cacheBreakpoint(block) };
+		});
+	}
 	const textResult = content
 		.filter((c): c is TextContent => c.type === "text")
 		.map((c) => c.text)
@@ -194,6 +202,8 @@ export function convertResponsesMessages<TApi extends Api>(
 	allowedToolCallProviders: ReadonlySet<string>,
 	options?: ConvertResponsesMessagesOptions,
 ): ResponseInput {
+	const cacheCompat = model.compat as { supportsExplicitPromptCacheMode?: boolean } | undefined;
+	validatePromptCache(context, undefined, cacheCompat?.supportsExplicitPromptCacheMode ?? false);
 	const normalizedContext = resolveTranscript(context, options?.supportsMidConvoSystemMessages);
 	const messages: ResponseInput = [];
 
@@ -293,7 +303,14 @@ export function convertResponsesMessages<TApi extends Api>(
 				}
 				const text = parts.filter((part) => part.length > 0).join("\n\n");
 				if (text.length > 0) {
-					messages.push({ role: instructionRole, content: sanitizeSurrogates(text) });
+					const marked = Array.isArray(msg.content) && msg.content.some((block) => block.cache !== undefined);
+					const blocks = marked ? systemBlocks(msg, !isLeadingSystemMessage) : [];
+					for (const notice of parts.slice(1).filter((part) => part.length > 0)) {
+						blocks.push({ type: "text", text: `${blocks.length > 0 ? "\n\n" : ""}${notice}` });
+					}
+					messages.push({ role: instructionRole, content: marked
+						? blocks.map((block) => ({ type: "input_text" as const, text: sanitizeSurrogates(block.text), ...cacheBreakpoint(block) }))
+						: sanitizeSurrogates(text) });
 				}
 			}
 		} else if (msg.role === "user") {
@@ -308,12 +325,14 @@ export function convertResponsesMessages<TApi extends Api>(
 						return {
 							type: "input_text",
 							text: sanitizeSurrogates(item.text),
+							...cacheBreakpoint(item),
 						} satisfies ResponseInputText;
 					}
 					return {
 						type: "input_image",
 						detail: "auto",
 						image_url: `data:${item.mimeType};base64,${item.data}`,
+						...cacheBreakpoint(item),
 					} satisfies ResponseInputImage;
 				});
 				if (content.length === 0) continue;
@@ -637,7 +656,7 @@ export async function processResponsesStream<TApi extends Api>(
 		}
 		if (response?.usage) {
 			const inputDetails = response.usage.input_tokens_details as
-				| { cached_tokens?: number; cache_write_tokens?: number }
+				| { cached_tokens?: number; cache_write_tokens?: number; cache_write_tokens_details?: unknown }
 				| undefined;
 			const cachedTokens = inputDetails?.cached_tokens || 0;
 			const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
@@ -651,6 +670,8 @@ export async function processResponsesStream<TApi extends Api>(
 				totalTokens: response.usage.total_tokens || 0,
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 			};
+			const compat = model.compat as { supportsExplicitPromptCacheMode?: boolean } | undefined;
+			applyCacheWrites(output.usage, inputDetails?.cache_write_tokens_details, compat?.supportsExplicitPromptCacheMode ?? false);
 		}
 		calculateCost(model, output.usage);
 		if (options?.applyServiceTierPricing) {

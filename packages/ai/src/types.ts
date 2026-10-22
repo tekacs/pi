@@ -249,6 +249,8 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 * Default: "short".
 	 */
 	cacheRetention?: CacheRetention;
+	/** Modern per-prefix cache policy. Mutually exclusive with explicit legacy cacheRetention. */
+	promptCache?: PromptCache;
 	/**
 	 * Optional session identifier for providers that support session-based caching.
 	 * Providers can use this to enable prompt caching, request routing, or other
@@ -419,10 +421,25 @@ export interface TextSignatureV1 {
 	phase?: "commentary" | "final_answer";
 }
 
+/** Modern OpenAI-style cache lifetime. Availability depends on the endpoint and model. */
+export type CacheLifetime = "30m" | "12h";
+
+export interface PromptCache {
+	mode?: "implicit" | "explicit";
+	ttl?: CacheLifetime;
+}
+
+/** End of a cumulative reusable prefix. An absent TTL inherits the request policy. */
+export interface CacheBreakpoint {
+	ttl?: CacheLifetime;
+}
+
 export interface TextContent {
 	type: "text";
 	text: string;
 	textSignature?: string; // e.g., for OpenAI responses, message metadata (legacy id string or TextSignatureV1 JSON)
+	/** Input-prefix boundary, emitted only by adapters with explicit cache support. */
+	cache?: CacheBreakpoint;
 }
 
 export interface ThinkingContent {
@@ -439,6 +456,8 @@ export interface ImageContent {
 	type: "image";
 	data: string; // base64 encoded image data
 	mimeType: string; // e.g., "image/jpeg", "image/png"
+	/** Input-prefix boundary, emitted only by adapters with explicit cache support. */
+	cache?: CacheBreakpoint;
 }
 
 export interface ToolCall {
@@ -463,6 +482,8 @@ export interface Usage {
 	cacheWrite: number;
 	/** Subset of `cacheWrite` written with 1h retention. Only Anthropic reports this split. */
 	cacheWrite1h?: number;
+	/** Non-overlapping cache writes priced as multiples of the request's ordinary input rate. */
+	cacheWriteDetails?: { tokens: number; inputMultiplier: number; ttlSeconds?: number }[];
 	/**
 	 * Reasoning/thinking tokens, when the provider reports them. This is a subset of
 	 * `output`: `output` already includes these tokens. Set to a number (possibly 0) by
@@ -476,6 +497,8 @@ export interface Usage {
 		cacheRead: number;
 		cacheWrite: number;
 		total: number;
+		/** A conservative write-cost estimate was used because the provider omitted lifetime counts. */
+		estimated?: true;
 	};
 }
 

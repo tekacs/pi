@@ -40,7 +40,7 @@ import {
 } from "../utils/transcript.ts";
 import { uuidv7 } from "../utils/uuid.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
+import { clampOpenAIPromptCacheKey, hasCacheBreakpoints, validatePromptCache } from "./openai-prompt-cache.ts";
 import {
 	convertResponsesMessages,
 	convertResponsesTools,
@@ -549,6 +549,9 @@ function buildRequestBody(
 		model.compat?.supportsOpenAIGrammarTools ?? false,
 	),
 ): RequestBody {
+	validatePromptCache(context, options, model.compat?.supportsExplicitPromptCacheMode ?? false);
+	const initialSystemMessage = getInitialSystemMessage(context.messages);
+	const markedInstructions = Array.isArray(initialSystemMessage?.content) && initialSystemMessage.content.some((block) => block.cache !== undefined);
 	const supportsStrictMode = model.compat?.supportsStrictMode ?? true;
 	const supportsOpenAIGrammarTools = model.compat?.supportsOpenAIGrammarTools ?? false;
 	const supportsAdditionalTools = model.compat?.supportsAdditionalTools ?? false;
@@ -562,7 +565,7 @@ function buildRequestBody(
 		}),
 	);
 	const messages = convertResponsesMessages(model, context, CODEX_TOOL_CALL_PROVIDERS, {
-		includeSystemPrompt: false,
+		includeSystemPrompt: markedInstructions,
 		grammarToolInputProperties,
 		supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
 		supportsAdditionalTools,
@@ -570,17 +573,17 @@ function buildRequestBody(
 		toolOptions: { strict: null, supportsStrictMode, supportsOpenAIGrammarTools },
 	});
 
-	const initialSystemMessage = getInitialSystemMessage(context.messages);
 	const instructions = initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "";
 	const body: RequestBody = {
 		model: model.id,
 		store: false,
 		stream: true,
-		instructions: instructions || "You are a helpful assistant.",
+		instructions: markedInstructions ? "" : instructions || "You are a helpful assistant.",
 		input: messages,
 		text: { verbosity: options?.textVerbosity || "low" },
 		include: ["reasoning.encrypted_content"],
 		prompt_cache_key: cacheSessionId,
+		prompt_cache_options: options?.promptCache ?? (hasCacheBreakpoints(context) ? {} : undefined),
 		tool_choice: options?.toolChoice ?? "auto",
 		parallel_tool_calls: true,
 	};

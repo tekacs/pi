@@ -45,6 +45,7 @@ function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], p
 
 	for (const block of content) {
 		if (block.type === "image") {
+			if (block.cache !== undefined) throw new Error("Cannot replace an image carrying a cache breakpoint");
 			if (!previousWasPlaceholder) {
 				result.push({ type: "text", text: placeholder });
 			}

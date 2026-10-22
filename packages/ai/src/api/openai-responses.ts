@@ -24,7 +24,7 @@ import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
+import { clampOpenAIPromptCacheKey, hasCacheBreakpoints, sdkPromptCache, validatePromptCache } from "./openai-prompt-cache.ts";
 import {
 	convertResponsesMessages,
 	convertResponsesTools,
@@ -350,6 +350,9 @@ function buildParams(
 	grammarToolInputProperties: ReadonlyMap<string, string>,
 	configurationUpdateEffort: string | undefined,
 ) {
+	const omitUnsupportedFields = isChatGPTSignIn(model, options?.apiKey);
+	validatePromptCache(context, options, compat.supportsExplicitPromptCacheMode && !omitUnsupportedFields);
+	const modernCache = options?.promptCache ?? (hasCacheBreakpoints(context) ? {} : undefined);
 	const transcriptTools = resolveTranscriptTools(context.messages, getResponsesToolSupport(compat));
 	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
 		grammarToolInputProperties,
@@ -364,15 +367,13 @@ function buildParams(
 	});
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
-	// Sign in with ChatGPT rejects these request fields.
-	const omitUnsupportedFields = isChatGPTSignIn(model, options?.apiKey);
 	const params: ResponseCreateParamsStreaming = {
 		model: model.id,
 		input: messages,
 		stream: true,
 		prompt_cache_key: cacheRetention === "none" ? undefined : clampOpenAIPromptCacheKey(options?.sessionId),
-		prompt_cache_retention: omitUnsupportedFields ? undefined : getPromptCacheRetention(compat, cacheRetention),
-		prompt_cache_options: omitUnsupportedFields ? undefined : getPromptCacheOptions(compat, cacheRetention),
+		prompt_cache_retention: omitUnsupportedFields || modernCache ? undefined : getPromptCacheRetention(compat, cacheRetention),
+		prompt_cache_options: omitUnsupportedFields ? undefined : sdkPromptCache(modernCache ?? getPromptCacheOptions(compat, cacheRetention)),
 		store: false,
 	};
 

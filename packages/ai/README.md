@@ -4,6 +4,8 @@ Unified LLM API with provider collections, automatic auth resolution, token and 
 
 **Note**: The chat catalog only includes models that support tool calling (function calling), as this is essential for agentic workflows. Image and classifier catalogs use their operation-specific capabilities.
 
+For per-block cache lifetimes and non-generation requests, see [Prompt caching and preparation](docs/preparation.md).
+
 ## Table of Contents
 
 - [Supported Providers](#supported-providers)

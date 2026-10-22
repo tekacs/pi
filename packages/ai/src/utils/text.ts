@@ -11,6 +11,24 @@ export function contentText(content: string | readonly Content[], separator = "\
 		.join(separator);
 }
 
+/** System prompt blocks, with exactly the separators used by the string renderer. */
+export function systemBlocks(message: SystemMessage, update = false): TextContent[] {
+	const blocks: TextContent[] = typeof message.content === "string"
+		? [{ type: "text", text: message.content }]
+		: message.content.map((block, index) => ({ ...block, text: `${index === 0 ? "" : "\n"}${block.text}` }));
+	if (blocks.every((block) => block.text.length === 0 && block.cache === undefined)) blocks.length = 0;
+	for (const [name, value] of Object.entries(message.sections ?? {})) {
+		const text = update
+			? value === null
+				? `Removed system prompt section "${name}".`
+				: `Updated system prompt section "${name}":\n\n${value}`
+			: value;
+		if (text === null || (!update && text.length === 0)) continue;
+		blocks.push({ type: "text", text: `${blocks.length > 0 ? "\n\n" : ""}${text}` });
+	}
+	return blocks;
+}
+
 /** Render a system message as a complete prompt: its content followed by its sections. */
 export function getSystemMessageText(message: SystemMessage): string {
 	const parts = [contentText(message.content)];
