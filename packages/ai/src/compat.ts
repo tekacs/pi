@@ -52,6 +52,7 @@ import type {
 	AssistantMessageEventStream,
 	Context,
 	Model,
+	Prepared,
 	ProviderStreamOptions,
 	ProviderStreams,
 	SimpleStreamOptions,
@@ -86,12 +87,12 @@ export interface ApiProvider<TApi extends Api = Api, TOptions extends StreamOpti
 	api: TApi;
 	stream: StreamFunction<TApi, TOptions>;
 	streamSimple: StreamFunction<TApi, SimpleStreamOptions>;
+	prepare?(model: Model<TApi>, context: TranscriptContext, options?: TOptions): Promise<Prepared>;
+	prepareSimple?(model: Model<TApi>, context: TranscriptContext, options?: SimpleStreamOptions): Promise<Prepared>;
 }
 
-interface ApiProviderInternal {
+interface ApiProviderInternal extends ProviderStreams {
 	api: Api;
-	stream: ApiStreamFunction;
-	streamSimple: ApiStreamSimpleFunction;
 }
 
 type RegisteredApiProvider = {
@@ -134,6 +135,28 @@ export function registerApiProvider<TApi extends Api, TOptions extends StreamOpt
 			api: provider.api,
 			stream: wrapStream(provider.api, provider.stream),
 			streamSimple: wrapStreamSimple(provider.api, provider.streamSimple),
+			...(provider.prepare
+				? {
+						prepare: async (model: Model<Api>, context: TranscriptContext, options?: StreamOptions) => {
+							if (model.api !== provider.api)
+								throw new Error(`Mismatched api: ${model.api} expected ${provider.api}`);
+							return provider.prepare!(model as Model<TApi>, context, options as TOptions);
+						},
+					}
+				: {}),
+			...(provider.prepareSimple
+				? {
+						prepareSimple: async (
+							model: Model<Api>,
+							context: TranscriptContext,
+							options?: SimpleStreamOptions,
+						) => {
+							if (model.api !== provider.api)
+								throw new Error(`Mismatched api: ${model.api} expected ${provider.api}`);
+							return provider.prepareSimple!(model as Model<TApi>, context, options);
+						},
+					}
+				: {}),
 		},
 		sourceId,
 	});
@@ -200,7 +223,7 @@ const builtinApiProviderInstances = new Map<Api, ReturnType<typeof getApiProvide
 export function registerBuiltInApiProviders(): void {
 	for (const [api, streams] of BUILTIN_APIS) {
 		if (!getApiProvider(api)) {
-			registerApiProvider({ api, stream: streams.stream, streamSimple: streams.streamSimple });
+			registerApiProvider({ api, ...streams });
 		}
 		builtinApiProviderInstances.set(api, getApiProvider(api));
 	}

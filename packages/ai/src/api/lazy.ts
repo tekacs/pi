@@ -91,6 +91,7 @@ export function lazyStream(
  * loads. Load failures terminate the returned stream with an error event.
  */
 export interface LazyApiCapabilities {
+	prepare?: boolean;
 	fetchDeferred?: boolean;
 	cancelDeferred?: boolean;
 }
@@ -103,6 +104,20 @@ export function lazyApi(load: () => Promise<ProviderStreams>, capabilities?: Laz
 			lazyStream(model, async () => (await load()).streamSimple(model, context, options)),
 	};
 
+	if (capabilities?.prepare) {
+		api.prepare = async (model, context, options) => {
+			const implementation = await load();
+			if (!implementation.prepare) throw new Error("API does not support preparation");
+			options?.signal?.throwIfAborted();
+			return implementation.prepare(model, context, options);
+		};
+		api.prepareSimple = async (model, context, options) => {
+			const implementation = await load();
+			if (!implementation.prepareSimple) throw new Error("API does not support preparation");
+			options?.signal?.throwIfAborted();
+			return implementation.prepareSimple(model, context, options);
+		};
+	}
 	if (capabilities?.fetchDeferred) {
 		api.fetchDeferred = (model, handle, options) =>
 			lazyStream(model, async () => {

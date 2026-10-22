@@ -186,7 +186,8 @@ function optionalSessionAffinityFormat(options?: TSchemaOptions) {
 }
 
 const explicitPromptCacheMode = optionalCompatBoolean({
-	description: "Whether the selected model and endpoint accept prompt_cache_options and per-block prompt_cache_breakpoint controls.",
+	description:
+		"Whether the selected model and endpoint accept prompt_cache_options and per-block prompt_cache_breakpoint controls.",
 	default: false,
 });
 
@@ -357,6 +358,13 @@ export const OpenAICompletionsCompatSchema = Type.Object(
 
 export const OpenAIResponsesCompatSchema = Type.Object(
 	{
+		preparation: Type.Optional(
+			Type.Union([Type.Literal(false), Type.Literal("cache"), Type.Literal("connection")], {
+				description:
+					"Non-generation protocol accepted by this endpoint: cache uses Responses prewarm; connection uses Codex WebSocket generate:false. Unset or false disables preparation.",
+				default: false,
+			}),
+		),
 		supportsDeveloperRole: optionalCompatBoolean({
 			description: "Whether the provider supports the developer role instead of system.",
 			default: true,

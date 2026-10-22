@@ -1407,9 +1407,9 @@ export class AgentSession {
 
 	/**
 	 * Remove all listeners and disconnect from agent.
-	 * Call this when completely done with the session.
+	 * Await this when completely done with the session to join provider preparation cleanup.
 	 */
-	dispose(): void {
+	dispose(): Promise<void> {
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1429,7 +1429,7 @@ export class AgentSession {
 			this._cacheWarmer.onWarmed = undefined;
 			this._cacheWarmer.cancel();
 		}
-		cleanupSessionResources(this.sessionId);
+		return cleanupSessionResources(this.sessionId);
 	}
 
 	// =========================================================================

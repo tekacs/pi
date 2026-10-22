@@ -86,9 +86,16 @@ function convertToolResultOutput<TApi extends Api>(
 ): string | ToolResultOutputContent {
 	if (content.some((block) => block.cache !== undefined)) {
 		return content.map((block): ResponseInputText | ResponseInputImage => {
-			if (block.type === "text") return { type: "input_text", text: sanitizeSurrogates(block.text), ...cacheBreakpoint(block) };
-			if (!model.input.includes("image")) throw new Error("Cannot preserve a cache breakpoint on unsupported image input");
-			return { type: "input_image", detail: "auto", image_url: `data:${block.mimeType};base64,${block.data}`, ...cacheBreakpoint(block) };
+			if (block.type === "text")
+				return { type: "input_text", text: sanitizeSurrogates(block.text), ...cacheBreakpoint(block) };
+			if (!model.input.includes("image"))
+				throw new Error("Cannot preserve a cache breakpoint on unsupported image input");
+			return {
+				type: "input_image",
+				detail: "auto",
+				image_url: `data:${block.mimeType};base64,${block.data}`,
+				...cacheBreakpoint(block),
+			};
 		});
 	}
 	const textResult = content
@@ -308,9 +315,16 @@ export function convertResponsesMessages<TApi extends Api>(
 					for (const notice of parts.slice(1).filter((part) => part.length > 0)) {
 						blocks.push({ type: "text", text: `${blocks.length > 0 ? "\n\n" : ""}${notice}` });
 					}
-					messages.push({ role: instructionRole, content: marked
-						? blocks.map((block) => ({ type: "input_text" as const, text: sanitizeSurrogates(block.text), ...cacheBreakpoint(block) }))
-						: sanitizeSurrogates(text) });
+					messages.push({
+						role: instructionRole,
+						content: marked
+							? blocks.map((block) => ({
+									type: "input_text" as const,
+									text: sanitizeSurrogates(block.text),
+									...cacheBreakpoint(block),
+								}))
+							: sanitizeSurrogates(text),
+					});
 				}
 			}
 		} else if (msg.role === "user") {
@@ -654,32 +668,7 @@ export async function processResponsesStream<TApi extends Api>(
 		if (response?.id) {
 			output.responseId = response.id;
 		}
-		if (response?.usage) {
-			const inputDetails = response.usage.input_tokens_details as
-				| { cached_tokens?: number; cache_write_tokens?: number; cache_write_tokens_details?: unknown }
-				| undefined;
-			const cachedTokens = inputDetails?.cached_tokens || 0;
-			const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
-			output.usage = {
-				// OpenAI includes cached and cache-write tokens in input_tokens, so subtract both.
-				input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
-				output: response.usage.output_tokens || 0,
-				cacheRead: cachedTokens,
-				cacheWrite: cacheWriteTokens,
-				reasoning: response.usage.output_tokens_details?.reasoning_tokens || 0,
-				totalTokens: response.usage.total_tokens || 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			};
-			const compat = model.compat as { supportsExplicitPromptCacheMode?: boolean } | undefined;
-			applyCacheWrites(output.usage, inputDetails?.cache_write_tokens_details, compat?.supportsExplicitPromptCacheMode ?? false);
-		}
-		calculateCost(model, output.usage);
-		if (options?.applyServiceTierPricing) {
-			const serviceTier = options.resolveServiceTier
-				? options.resolveServiceTier(response?.service_tier, options.serviceTier)
-				: (response?.service_tier ?? options.serviceTier);
-			options.applyServiceTierPricing(output.usage, serviceTier);
-		}
+		output.usage = responseUsage(response, model, options) ?? output.usage;
 		// Map status to stop reason. For incomplete responses, retain the provider's
 		// specific reason so max-output truncation and content filtering stay distinct.
 		const status = response?.status;
@@ -873,6 +862,37 @@ export async function processResponsesStream<TApi extends Api>(
 			}
 		}
 	}
+}
+
+/** Normalize provider-reported usage for both generation and non-generation requests. */
+export function responseUsage<TApi extends Api>(
+	response: Extract<ResponseStreamEvent, { type: "response.completed" }>["response"],
+	model: Model<TApi>,
+	options?: OpenAIResponsesStreamOptions,
+): Usage | undefined {
+	if (!response.usage) return undefined;
+	const inputDetails = response.usage.input_tokens_details as
+		| { cached_tokens?: number; cache_write_tokens?: number; cache_write_tokens_details?: unknown }
+		| undefined;
+	const cachedTokens = inputDetails?.cached_tokens || 0;
+	const cacheWriteTokens = inputDetails?.cache_write_tokens || 0;
+	const usage: Usage = {
+		input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
+		output: response.usage.output_tokens || 0,
+		cacheRead: cachedTokens,
+		cacheWrite: cacheWriteTokens,
+		reasoning: response.usage.output_tokens_details?.reasoning_tokens || 0,
+		totalTokens: response.usage.total_tokens || 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+	const compat = model.compat as { supportsExplicitPromptCacheMode?: boolean } | undefined;
+	applyCacheWrites(usage, inputDetails?.cache_write_tokens_details, compat?.supportsExplicitPromptCacheMode ?? false);
+	calculateCost(model, usage);
+	const serviceTier = options?.resolveServiceTier
+		? options.resolveServiceTier(response.service_tier, options.serviceTier)
+		: (response.service_tier ?? options?.serviceTier);
+	options?.applyServiceTierPricing?.(usage, serviceTier);
+	return usage;
 }
 
 function mapStopReason(

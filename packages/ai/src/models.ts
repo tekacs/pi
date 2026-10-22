@@ -20,6 +20,7 @@ import type {
 	ProviderAuth,
 } from "./auth/types.ts";
 import { InMemoryModelsStore, type ModelsStore, type ModelsStoreEntry } from "./models-store.ts";
+import { sessionOperation } from "./session-resources.ts";
 import { observeModelRequest } from "./telemetry.ts";
 import type {
 	AnyModel,
@@ -46,6 +47,7 @@ import type {
 	ModelThinkingLevel,
 	ModelType,
 	ModelTypeMap,
+	Prepared,
 	ProviderClassifier,
 	ProviderHeaders,
 	ProviderImages,
@@ -230,6 +232,12 @@ export interface Provider<TApi extends Api = Api> {
 		options?: DeferredFetchOptions,
 	): AssistantMessageEventStream;
 	cancelDeferred?(model: Model<TApi>, handle: DeferredHandle, options?: DeferredCancelOptions): Promise<void>;
+	prepare?<T extends TApi>(
+		model: Model<T>,
+		context: TranscriptContext,
+		options?: ApiStreamOptions<T>,
+	): Promise<Prepared>;
+	prepareSimple?(model: Model<TApi>, context: TranscriptContext, options?: SimpleStreamOptions): Promise<Prepared>;
 
 	/** Present when the provider supports dedicated image models. Never rejects. */
 	generateImages?(
@@ -335,6 +343,13 @@ export interface Models {
 
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream;
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage>;
+	/** Prepare known context without generation. Rejects when the native operation is unavailable. */
+	prepare<TApi extends Api>(
+		model: Model<TApi>,
+		context: Context,
+		options?: ModelsApiStreamOptions<TApi>,
+	): Promise<Prepared>;
+	prepareSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<Prepared>;
 	streamDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
@@ -947,6 +962,35 @@ class ModelsImpl implements MutableModels {
 		return this.streamSimple(model, context, options).result();
 	}
 
+	prepare<TApi extends Api>(
+		model: Model<TApi>,
+		context: Context,
+		options?: ModelsApiStreamOptions<TApi>,
+	): Promise<Prepared> {
+		return sessionOperation(options?.sessionId, options?.signal, async ({ signal }) => {
+			const provider = this.requireChatProvider(model);
+			if (!provider.prepare)
+				throw new ModelsError("provider", `Provider ${model.provider} does not support preparation`);
+			const transcript = normalizeContext(context);
+			const scoped = { ...options, signal } as ModelsApiStreamOptions<Api>;
+			const { requestModel, requestOptions } = await this.applyAuth(model, scoped);
+			signal.throwIfAborted();
+			return provider.prepare(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>);
+		});
+	}
+
+	prepareSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<Prepared> {
+		return sessionOperation(options?.sessionId, options?.signal, async ({ signal }) => {
+			const provider = this.requireChatProvider(model);
+			if (!provider.prepareSimple)
+				throw new ModelsError("provider", `Provider ${model.provider} does not support preparation`);
+			const transcript = normalizeContext(context);
+			const { requestModel, requestOptions } = await this.applyAuth(model, { ...options, signal });
+			signal.throwIfAborted();
+			return provider.prepareSimple(requestModel, transcript, requestOptions);
+		});
+	}
+
 	streamDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
@@ -1161,6 +1205,22 @@ export function createProvider<TApi extends Api = Api>(input: CreateProviderOpti
 			dispatch(model, (streams) => streams.streamSimple(model, context, options)),
 	};
 
+	if (streams.some((entry) => entry.prepare !== undefined)) {
+		provider.prepare = async (model, context, options) => {
+			const implementation = apiFor(model);
+			if (!implementation?.prepare)
+				throw new ModelsError("provider", `Provider ${input.id} does not support preparation for ${model.api}`);
+			return implementation.prepare(model, context, options);
+		};
+	}
+	if (streams.some((entry) => entry.prepareSimple !== undefined)) {
+		provider.prepareSimple = async (model, context, options) => {
+			const implementation = apiFor(model);
+			if (!implementation?.prepareSimple)
+				throw new ModelsError("provider", `Provider ${input.id} does not support preparation for ${model.api}`);
+			return implementation.prepareSimple(model, context, options);
+		};
+	}
 	if (streams.some((entry) => entry.fetchDeferred !== undefined)) {
 		provider.fetchDeferred = (model, handle, options) =>
 			lazyStream(model, async () => {
@@ -1248,7 +1308,10 @@ export function calculateCost(model: AnyModel, usage: Usage): Usage["cost"] {
 	const longWrite = usage.cacheWrite1h ?? 0;
 	const detailedWrites = usage.cacheWriteDetails ?? [];
 	const detailedTokens = detailedWrites.reduce((sum, write) => sum + write.tokens, 0);
-	const detailedCost = detailedWrites.reduce((sum, write) => sum + write.tokens * write.inputMultiplier * rates.input, 0);
+	const detailedCost = detailedWrites.reduce(
+		(sum, write) => sum + write.tokens * write.inputMultiplier * rates.input,
+		0,
+	);
 	const shortWrite = Math.max(0, usage.cacheWrite - longWrite - detailedTokens);
 	usage.cost.input = (rates.input / 1000000) * usage.input;
 	usage.cost.output = (rates.output / 1000000) * usage.output;

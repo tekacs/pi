@@ -1,12 +1,14 @@
 import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { clampThinkingLevel } from "../models.ts";
+import { sessionOperation } from "../session-resources.ts";
 import type {
 	Api,
 	AssistantMessage,
 	CacheRetention,
 	Model,
 	OpenAIResponsesCompat,
+	Prepared,
 	ProviderEnv,
 	ProviderHeaders,
 	SimpleStreamOptions,
@@ -24,7 +26,13 @@ import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
-import { clampOpenAIPromptCacheKey, hasCacheBreakpoints, sdkPromptCache, validatePromptCache } from "./openai-prompt-cache.ts";
+import { readPreparation } from "./openai-preparation.ts";
+import {
+	clampOpenAIPromptCacheKey,
+	hasCacheBreakpoints,
+	sdkPromptCache,
+	validatePromptCache,
+} from "./openai-prompt-cache.ts";
 import {
 	convertResponsesMessages,
 	convertResponsesTools,
@@ -90,6 +98,7 @@ function resolveCacheRetention(cacheRetention?: CacheRetention, env?: ProviderEn
 
 function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCompat> {
 	return {
+		preparation: model.compat?.preparation ?? false,
 		supportsDeveloperRole: model.compat?.supportsDeveloperRole ?? true,
 		supportsMidConvoSystemMessages: model.compat?.supportsMidConvoSystemMessages ?? false,
 		sessionAffinityFormat: model.compat?.sessionAffinityFormat ?? detectSessionAffinityFormat(model),
@@ -157,7 +166,6 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 	options?: OpenAIResponsesOptions,
 ): AssistantMessageEventStream => {
 	const stream = new AssistantMessageEventStream();
-	const normalizedContext = resolveTranscript(context, getCompat(model).supportsMidConvoSystemMessages);
 
 	// Start async processing
 	(async () => {
@@ -183,49 +191,9 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 		};
 
 		try {
-			// Create OpenAI client
-			const apiKey = getClientApiKey(model.provider, options?.apiKey, options?.headers);
-			const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
-			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const grammarToolInputProperties = createGrammarToolInputProperties(
-				getDeclaredTools(normalizedContext.messages),
-				compat.supportsOpenAIGrammarTools,
-			);
-			const client = createClient(
-				model,
-				normalizedContext,
-				apiKey,
-				options?.headers,
-				options?.identity,
-				options?.fetch,
-				cacheSessionId,
-			);
-			let params = buildParams(
-				model,
-				normalizedContext,
-				options,
-				compat,
-				grammarToolInputProperties,
-				configurationUpdateEffort,
-			);
-			const nextParams = await options?.onPayload?.(params, model);
-			if (nextParams !== undefined) {
-				params = nextParams as ResponseCreateParamsStreaming;
-			}
-			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
-				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-				maxRetries: 0,
-			};
-			const { data: openaiStream, response } = await retryProviderRequest(
-				() => client.responses.create(params, requestOptions).withResponse(),
-				{
-					maxRetries: options?.maxRetries,
-					maxRetryDelayMs: options?.maxRetryDelayMs,
-					signal: options?.signal,
-				},
-			);
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			const request = await createRequest(model, context, options);
+			const { grammarToolInputProperties } = request;
+			const openaiStream = await openResponse(model, request, options);
 			stream.push({ type: "start", partial: output });
 
 			await processResponsesStream(openaiStream, output, stream, model, {
@@ -277,11 +245,11 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 	return stream;
 };
 
-export const streamSimple: StreamFunction<"openai-responses", SimpleStreamOptions> = (
+function simpleOptions(
 	model: Model<"openai-responses">,
 	context: TranscriptContext,
 	options?: SimpleStreamOptions,
-): AssistantMessageEventStream => {
+): OpenAIResponsesOptions {
 	getClientApiKey(model.provider, options?.apiKey, options?.headers);
 
 	const base = {
@@ -291,11 +259,116 @@ export const streamSimple: StreamFunction<"openai-responses", SimpleStreamOption
 	const clampedReasoning = options?.reasoning ? clampThinkingLevel(model, options.reasoning) : undefined;
 	const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
 
-	return stream(model, context, {
-		...base,
-		reasoningEffort,
-	} satisfies OpenAIResponsesOptions);
-};
+	return { ...base, reasoningEffort };
+}
+
+export const streamSimple: StreamFunction<"openai-responses", SimpleStreamOptions> = (model, context, options) =>
+	stream(model, context, simpleOptions(model, context, options));
+
+export async function prepareSimple(
+	model: Model<"openai-responses">,
+	context: TranscriptContext,
+	options?: SimpleStreamOptions,
+): Promise<Prepared> {
+	return prepare(model, context, simpleOptions(model, context, options));
+}
+
+/** Use the ordinary HTTP builder and decoder, with generation disabled after payload hooks. */
+export function prepare(
+	model: Model<"openai-responses">,
+	context: TranscriptContext,
+	options?: OpenAIResponsesOptions,
+): Promise<Prepared> {
+	return sessionOperation(options?.sessionId, options?.signal, async ({ signal }) => {
+		if (
+			model.compat?.preparation !== "cache" ||
+			!model.compat.supportsExplicitPromptCacheMode ||
+			isChatGPTSignIn(model, options?.apiKey)
+		)
+			throw new Error("This endpoint does not support cache preparation");
+		const scoped = { ...options, signal };
+		const request = await createRequest(model, context, scoped);
+		request.params.stream = true;
+		request.params.prompt_cache_options = { ...request.params.prompt_cache_options, prewarm: true };
+		const events = await openResponse(model, request, scoped);
+		return readPreparation(events, model, {
+			onProviderStreamEvent: options?.onProviderStreamEvent,
+			serviceTier: options?.serviceTier,
+			applyServiceTierPricing: (usage, tier) => applyServiceTierPricing(usage, tier, model),
+		});
+	});
+}
+
+async function createRequest(
+	model: Model<"openai-responses">,
+	context: TranscriptContext,
+	options?: OpenAIResponsesOptions,
+) {
+	options?.signal?.throwIfAborted();
+	const compat = getCompat(model);
+	const normalizedContext = resolveTranscript(context, compat.supportsMidConvoSystemMessages);
+	const configurationUpdateEffort = getConfigurationUpdateEffort(model, options, compat);
+	const apiKey = getClientApiKey(model.provider, options?.apiKey, options?.headers);
+	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);
+	const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
+	const grammarToolInputProperties = createGrammarToolInputProperties(
+		getDeclaredTools(normalizedContext.messages),
+		compat.supportsOpenAIGrammarTools,
+	);
+	const client = createClient(
+		model,
+		normalizedContext,
+		apiKey,
+		options?.headers,
+		options?.identity,
+		options?.fetch,
+		cacheSessionId,
+	);
+	let params = buildParams(
+		model,
+		normalizedContext,
+		options,
+		compat,
+		grammarToolInputProperties,
+		configurationUpdateEffort,
+	);
+	const nextParams = await options?.onPayload?.(params, model);
+	if (nextParams !== undefined) {
+		params = nextParams as ResponseCreateParamsStreaming;
+	}
+	const requestOptions = {
+		...(options?.signal ? { signal: options.signal } : {}),
+		...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+		maxRetries: 0,
+	};
+	options?.signal?.throwIfAborted();
+	params = JSON.parse(JSON.stringify(params)) as ResponseCreateParamsStreaming;
+	return { client, params, requestOptions, grammarToolInputProperties };
+}
+
+async function openResponse(
+	model: Model<"openai-responses">,
+	request: Awaited<ReturnType<typeof createRequest>>,
+	options?: OpenAIResponsesOptions,
+) {
+	const { client, params, requestOptions } = request;
+	const { data: openaiStream, response } = await retryProviderRequest(
+		() => client.responses.create(params, requestOptions).withResponse(),
+		{
+			maxRetries: options?.maxRetries,
+			maxRetryDelayMs: options?.maxRetryDelayMs,
+			signal: options?.signal,
+		},
+	);
+	try {
+		await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+	} catch (error) {
+		openaiStream.controller.abort();
+		await response.body?.cancel().catch(() => {});
+		throw error;
+	}
+	return openaiStream;
+}
 
 function createClient(
 	model: Model<"openai-responses">,
@@ -372,8 +445,11 @@ function buildParams(
 		input: messages,
 		stream: true,
 		prompt_cache_key: cacheRetention === "none" ? undefined : clampOpenAIPromptCacheKey(options?.sessionId),
-		prompt_cache_retention: omitUnsupportedFields || modernCache ? undefined : getPromptCacheRetention(compat, cacheRetention),
-		prompt_cache_options: omitUnsupportedFields ? undefined : sdkPromptCache(modernCache ?? getPromptCacheOptions(compat, cacheRetention)),
+		prompt_cache_retention:
+			omitUnsupportedFields || modernCache ? undefined : getPromptCacheRetention(compat, cacheRetention),
+		prompt_cache_options: omitUnsupportedFields
+			? undefined
+			: sdkPromptCache(modernCache ?? getPromptCacheOptions(compat, cacheRetention)),
 		store: false,
 	};
 

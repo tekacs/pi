@@ -51,11 +51,13 @@ import {
 	type ModelTypeMap,
 	type MutableModels,
 	normalizeContext,
+	type Prepared,
 	type Provider,
 	type ProviderHeaders,
 	type ProviderRequestOptions,
 	type SimpleStreamOptions,
 	type StreamOptions,
+	sessionOperation,
 } from "@earendil-works/pi-ai";
 import * as builtinProviderCatalog from "@earendil-works/pi-ai/providers/all";
 import { personalizeOpenRouterCatalog } from "@earendil-works/pi-ai/providers/openrouter";
@@ -734,19 +736,8 @@ export class ModelRuntime implements Models {
 			// Requests outside the agent loop are routed here. Callers sized them before routing, so
 			// cap the output budget to the routed model.
 			return lazyStream(model, async () => {
-				const route = await this.resolveModel(model, transcript.messages, {
-					reason: "direct",
-					thinkingLevel: options?.reasoning ?? "off",
-					signal: options?.signal,
-				});
-				const { maxTokens: limit } = route.model;
-				const maxTokens = options?.maxTokens && limit > 0 ? Math.min(options.maxTokens, limit) : options?.maxTokens;
-				const reasoning = route.thinkingLevel === "off" ? undefined : route.thinkingLevel;
-				// Caller credentials were resolved for the virtual model's provider. Another provider
-				// resolves its own, so they are not sent to the wrong vendor.
-				const { apiKey, headers, env, ...rest } = options ?? {};
-				const auth = route.model.provider === model.provider ? { apiKey, headers, env } : {};
-				return this.streamSimple(route.model, context, { ...rest, ...auth, maxTokens, reasoning });
+				const route = await this.routeSimple(model, context, options);
+				return this.streamSimple(route.model, context, route.options);
 			});
 		}
 		return lazyStream(model, async () => {
@@ -758,6 +749,61 @@ export class ModelRuntime implements Models {
 
 	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {
 		return this.streamSimple(model, context, options).result();
+	}
+
+	private async routeSimple(
+		model: Model<Api>,
+		context: Context,
+		options?: ModelsSimpleStreamOptions,
+	): Promise<{ model: Model<Api>; options: ModelsSimpleStreamOptions }> {
+		const route = await this.resolveModel(model, normalizeContext(context).messages, {
+			reason: "direct",
+			thinkingLevel: options?.reasoning ?? "off",
+			signal: options?.signal,
+		});
+		const { maxTokens: limit } = route.model;
+		const maxTokens = options?.maxTokens && limit > 0 ? Math.min(options.maxTokens, limit) : options?.maxTokens;
+		const reasoning = route.thinkingLevel === "off" ? undefined : route.thinkingLevel;
+		// A route to another provider must resolve that provider's credentials.
+		const { apiKey, headers, env, ...rest } = options ?? {};
+		const auth = route.model.provider === model.provider ? { apiKey, headers, env } : {};
+		return { model: route.model, options: { ...rest, ...auth, maxTokens, reasoning } };
+	}
+
+	prepare<TApi extends Api>(
+		model: Model<TApi>,
+		context: Context,
+		options?: ModelsApiStreamOptions<TApi>,
+	): Promise<Prepared> {
+		return sessionOperation(options?.sessionId, options?.signal, async ({ signal }) => {
+			assertChatModel(model);
+			const scoped = { ...options, signal } as StreamOptions & ModelsRequestTransforms;
+			const request = await this.prepareRequest(model, scoped);
+			if (!request.provider.prepare)
+				throw new ModelsError("provider", `Provider ${model.provider} does not support preparation`);
+			signal.throwIfAborted();
+			return request.provider.prepare(
+				request.model,
+				normalizeContext(context),
+				request.options as ApiStreamOptions<TApi>,
+			);
+		});
+	}
+
+	prepareSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<Prepared> {
+		return sessionOperation(options?.sessionId, options?.signal, async ({ signal }) => {
+			const scoped = { ...options, signal };
+			if (isVirtualModel(model)) {
+				const route = await this.routeSimple(model, context, scoped);
+				return this.prepareSimple(route.model, context, route.options);
+			}
+			assertChatModel(model);
+			const request = await this.prepareRequest(model, scoped);
+			if (!request.provider.prepareSimple)
+				throw new ModelsError("provider", `Provider ${model.provider} does not support preparation`);
+			signal.throwIfAborted();
+			return request.provider.prepareSimple(request.model, normalizeContext(context), request.options);
+		});
 	}
 
 	streamDeferred(

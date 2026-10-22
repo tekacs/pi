@@ -13,9 +13,10 @@ export function contentText(content: string | readonly Content[], separator = "\
 
 /** System prompt blocks, with exactly the separators used by the string renderer. */
 export function systemBlocks(message: SystemMessage, update = false): TextContent[] {
-	const blocks: TextContent[] = typeof message.content === "string"
-		? [{ type: "text", text: message.content }]
-		: message.content.map((block, index) => ({ ...block, text: `${index === 0 ? "" : "\n"}${block.text}` }));
+	const blocks: TextContent[] =
+		typeof message.content === "string"
+			? [{ type: "text", text: message.content }]
+			: message.content.map((block, index) => ({ ...block, text: `${index === 0 ? "" : "\n"}${block.text}` }));
 	if (blocks.every((block) => block.text.length === 0 && block.cache === undefined)) blocks.length = 0;
 	for (const [name, value] of Object.entries(message.sections ?? {})) {
 		const text = update

@@ -38,7 +38,9 @@ const BUDGETS = {
 		"./models": {
 			// Request telemetry reaches pi-ai's telemetry.ts and pi-telemetry's root (index, noop, metrics, memory).
 			// Request identity reaches utils/identity.ts and its version constant.
-			maxFiles: 20,
+			// Preparation registers setup before auth in session-resources.ts, which combines cancellation signals.
+			// Both modules are provider-independent; provider SDKs must still remain outside this graph.
+			maxFiles: 22,
 			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
 			allow: ["packages/telemetry/src/index.ts"],
 		},

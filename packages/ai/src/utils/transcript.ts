@@ -80,15 +80,16 @@ export function getCurrentSystemMessage(messages: TranscriptMessages): SystemMes
 		timestamp ??= message.timestamp;
 		const text = contentText(message.content);
 		if (text.length > 0) content.push(text);
-		const parts = typeof message.content === "string"
-			? [{ type: "text" as const, text: message.content }]
-			: message.content;
+		const parts =
+			typeof message.content === "string" ? [{ type: "text" as const, text: message.content }] : message.content;
 		if (text.length > 0 || parts.some((part) => part.cache !== undefined)) {
 			const separated = blocks.length > 0;
-			blocks.push(...parts.map((part, index) => ({
-				...part,
-				text: `${separated && index === 0 ? "\n" : ""}${part.text}`,
-			})));
+			blocks.push(
+				...parts.map((part, index) => ({
+					...part,
+					text: `${separated && index === 0 ? "\n" : ""}${part.text}`,
+				})),
+			);
 		}
 		for (const [name, value] of Object.entries(message.sections ?? {})) {
 			if (value === null) sections.delete(name);

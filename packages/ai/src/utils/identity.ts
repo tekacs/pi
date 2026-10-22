@@ -176,6 +176,8 @@ export function withClientIdentity(models: Models, identity: ClientIdentity): Mo
 		complete: (model, context, options) => models.complete(model, context, withIdentity(options)),
 		streamSimple: (model, context, options) => models.streamSimple(model, context, withIdentity(options)),
 		completeSimple: (model, context, options) => models.completeSimple(model, context, withIdentity(options)),
+		prepare: (model, context, options) => models.prepare(model, context, withIdentity(options)),
+		prepareSimple: (model, context, options) => models.prepareSimple(model, context, withIdentity(options)),
 		streamDeferred: (model, handle, options) => models.streamDeferred(model, handle, withIdentity(options)),
 		fetchDeferred: (model, handle, options) => models.fetchDeferred(model, handle, withIdentity(options)),
 		cancelDeferred: (model, handle, options) => models.cancelDeferred(model, handle, withIdentity(options)),

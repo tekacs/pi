@@ -4,11 +4,14 @@ import type { CacheBreakpoint, PromptCache, StreamOptions, TranscriptContext, Us
 export const OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH = 64;
 
 /** Wire extension documented by OpenAI; the released SDK still restricts TTL to 30m. */
-export type PromptCacheOptions = Omit<NonNullable<ResponseCreateParamsStreaming["prompt_cache_options"]>, "ttl"> & PromptCache;
+export type PromptCacheOptions = Omit<NonNullable<ResponseCreateParamsStreaming["prompt_cache_options"]>, "ttl"> &
+	PromptCache;
 
 export function hasCacheBreakpoints(context: TranscriptContext): boolean {
-	return context.messages.some((message) =>
-		Array.isArray(message.content) && message.content.some((block) => "cache" in block && block.cache !== undefined),
+	return context.messages.some(
+		(message) =>
+			Array.isArray(message.content) &&
+			message.content.some((block) => "cache" in block && block.cache !== undefined),
 	);
 }
 
@@ -34,7 +37,8 @@ export function validatePromptCache(
 		for (const block of message.content) {
 			if (!("cache" in block) || block.cache === undefined) continue;
 			if (message.role === "assistant") throw new Error("Cache breakpoints require input content");
-			if (block.type === "text" && block.text.length === 0) throw new Error("Cache breakpoint text must not be empty");
+			if (block.type === "text" && block.text.length === 0)
+				throw new Error("Cache breakpoint text must not be empty");
 			validateLifetime(block.cache);
 		}
 	}
@@ -60,8 +64,15 @@ export function applyCacheWrites(usage: Usage, details: unknown, modern: boolean
 		const split = details as Record<string, unknown>;
 		const short = split.ttl_30m_tokens;
 		const long = split.ttl_12h_tokens;
-		if (typeof short !== "number" || !Number.isSafeInteger(short) || short < 0 ||
-			typeof long !== "number" || !Number.isSafeInteger(long) || long < 0 || short + long !== usage.cacheWrite) {
+		if (
+			typeof short !== "number" ||
+			!Number.isSafeInteger(short) ||
+			short < 0 ||
+			typeof long !== "number" ||
+			!Number.isSafeInteger(long) ||
+			long < 0 ||
+			short + long !== usage.cacheWrite
+		) {
 			throw new Error("Invalid cache-write lifetime counts");
 		}
 		usage.cacheWriteDetails = [
@@ -76,7 +87,9 @@ export function applyCacheWrites(usage: Usage, details: unknown, modern: boolean
 }
 
 /** SDK 7.x accepts the current wire shape at runtime but has not typed 12h yet. */
-export function sdkPromptCache(policy: PromptCacheOptions | undefined): ResponseCreateParamsStreaming["prompt_cache_options"] {
+export function sdkPromptCache(
+	policy: PromptCacheOptions | undefined,
+): ResponseCreateParamsStreaming["prompt_cache_options"] {
 	return policy as ResponseCreateParamsStreaming["prompt_cache_options"];
 }
 

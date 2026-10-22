@@ -17,6 +17,7 @@ import {
 	type OAuthAuth,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
+	type Prepared,
 	type Provider,
 	type ProviderClassifier,
 	type ProviderHeaders,
@@ -585,6 +586,28 @@ export function composeModelProvider(
 	if (!apiKey && !oauth) throw new Error(`Provider ${providerId}: no authentication method configured.`);
 
 	const supportsBaseApi = (model: Model<Api>) => base?.getModels().some((entry) => entry.api === model.api) ?? false;
+	const requestApi = (model: Model<Api>) => {
+		if (base && supportsBaseApi(model)) return base;
+		const api = getApiProvider(model.api);
+		if (!api) throw new Error(`No API provider registered for api: ${model.api}`);
+		return api;
+	};
+	const prepareWith = async (
+		model: Model<Api>,
+		context: TranscriptContext,
+		options: StreamOptions | undefined,
+		simple: boolean,
+	): Promise<Prepared> => {
+		if (extension?.streamSimple && model.api === extension.api)
+			throw new Error("Custom stream override does not implement preparation");
+		const api = requestApi(model);
+		if (simple) {
+			if (!api.prepareSimple) throw new Error(`No preparation implementation for api: ${model.api}`);
+			return api.prepareSimple(model, context, options as SimpleStreamOptions);
+		}
+		if (!api.prepare) throw new Error(`No preparation implementation for api: ${model.api}`);
+		return api.prepare(model, context, options);
+	};
 	const streamWith = (
 		model: Model<Api>,
 		context: TranscriptContext,
@@ -595,13 +618,7 @@ export function composeModelProvider(
 			if (extension?.streamSimple && model.api === extension.api) {
 				return extension.streamSimple(model, context, options as SimpleStreamOptions);
 			}
-			if (base && supportsBaseApi(model)) {
-				return simple
-					? base.streamSimple(model, context, options as SimpleStreamOptions)
-					: base.stream(model, context, options);
-			}
-			const api = getApiProvider(model.api);
-			if (!api) throw new Error(`No API provider registered for api: ${model.api}`);
+			const api = requestApi(model);
 			return simple
 				? api.streamSimple(model, context, options as SimpleStreamOptions)
 				: api.stream(model, context, options);
@@ -646,6 +663,8 @@ export function composeModelProvider(
 			: undefined,
 		stream: (model, context, options) => streamWith(model, context, options, false),
 		streamSimple: (model, context, options) => streamWith(model, context, options, true),
+		prepare: (model, context, options) => prepareWith(model, context, options, false),
+		prepareSimple: (model, context, options) => prepareWith(model, context, options, true),
 	};
 
 	const fetchDeferred = base?.fetchDeferred;

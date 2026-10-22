@@ -57,5 +57,5 @@ try {
 	await session.prompt("Use codemode to count the TypeScript files in src/ and list the three largest.");
 	console.log();
 } finally {
-	session.dispose();
+	await session.dispose();
 }

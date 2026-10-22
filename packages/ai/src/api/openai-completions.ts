@@ -61,7 +61,14 @@ import {
 	resolveJsonSchemaStrictSampling,
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
-import { applyCacheWrites, cacheBreakpoint, clampOpenAIPromptCacheKey, hasCacheBreakpoints, sdkPromptCache, validatePromptCache } from "./openai-prompt-cache.ts";
+import {
+	applyCacheWrites,
+	cacheBreakpoint,
+	clampOpenAIPromptCacheKey,
+	hasCacheBreakpoints,
+	sdkPromptCache,
+	validatePromptCache,
+} from "./openai-prompt-cache.ts";
 import {
 	buildBaseOptions,
 	clampThinkingBudgetToAnswerRoom,
@@ -838,7 +845,8 @@ function buildParams(
 			(cacheRetention === "long" && compat.supportsLongCacheRetention)
 				? clampOpenAIPromptCacheKey(options?.sessionId)
 				: undefined,
-		prompt_cache_retention: !modernCache && cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
+		prompt_cache_retention:
+			!modernCache && cacheRetention === "long" && compat.supportsLongCacheRetention ? "24h" : undefined,
 		prompt_cache_options: sdkPromptCache(modernCache),
 	};
 
@@ -1273,9 +1281,16 @@ export function convertMessages(
 			const text = i === 0 ? getSystemMessageText(msg) : renderSystemMessageUpdate(msg);
 			if (text.length > 0) {
 				const marked = Array.isArray(msg.content) && msg.content.some((block) => block.cache !== undefined);
-				params.push({ role: instructionRole, content: marked
-					? systemBlocks(msg, i !== 0).map((block) => ({ type: "text" as const, text: sanitizeSurrogates(block.text), ...cacheBreakpoint(block) }))
-					: sanitizeSurrogates(text) });
+				params.push({
+					role: instructionRole,
+					content: marked
+						? systemBlocks(msg, i !== 0).map((block) => ({
+								type: "text" as const,
+								text: sanitizeSurrogates(block.text),
+								...cacheBreakpoint(block),
+							}))
+						: sanitizeSurrogates(text),
+				});
 			}
 		} else if (msg.role === "user") {
 			if (typeof msg.content === "string") {
@@ -1438,7 +1453,8 @@ export function convertMessages(
 					.join("\n");
 				const hasImages = toolMsg.content.some((c) => c.type === "image");
 				const marked = toolMsg.content.some((block) => block.cache !== undefined);
-				if (marked && hasImages) throw new Error("Chat Completions cannot preserve cache boundaries on tool results with images");
+				if (marked && hasImages)
+					throw new Error("Chat Completions cannot preserve cache boundaries on tool results with images");
 
 				// Always send tool result with text (or placeholder if only images)
 				const hasText = textResult.trim().length > 0;
@@ -1446,11 +1462,13 @@ export function convertMessages(
 				// Some providers require the 'name' field in tool results
 				const toolResultMsg: ChatCompletionToolMessageParam = {
 					role: "tool",
-					content: marked ? toolMsg.content.filter(isTextContentBlock).map((block, index) => ({
-						type: "text" as const,
-						text: sanitizeSurrogates(`${index === 0 ? "" : "\n"}${block.text}`),
-						...cacheBreakpoint(block),
-					})) : sanitizeSurrogates(toolResultText),
+					content: marked
+						? toolMsg.content.filter(isTextContentBlock).map((block, index) => ({
+								type: "text" as const,
+								text: sanitizeSurrogates(`${index === 0 ? "" : "\n"}${block.text}`),
+								...cacheBreakpoint(block),
+							}))
+						: sanitizeSurrogates(toolResultText),
 					tool_call_id: toolMsg.toolCallId,
 				};
 				if (compat.requiresToolResultName && toolMsg.toolName) {
@@ -1549,7 +1567,11 @@ function parseChunkUsage(
 		completion_tokens?: number;
 		cached_tokens?: number;
 		prompt_cache_hit_tokens?: number;
-		prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number; cache_write_tokens_details?: unknown };
+		prompt_tokens_details?: {
+			cached_tokens?: number;
+			cache_write_tokens?: number;
+			cache_write_tokens_details?: unknown;
+		};
 		completion_tokens_details?: { reasoning_tokens?: number };
 	},
 	model: Model<"openai-completions">,
@@ -1581,7 +1603,11 @@ function parseChunkUsage(
 		totalTokens: input + outputTokens + cacheReadTokens + cacheWriteTokens,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
-	applyCacheWrites(usage, rawUsage.prompt_tokens_details?.cache_write_tokens_details, model.compat?.supportsExplicitPromptCacheMode ?? false);
+	applyCacheWrites(
+		usage,
+		rawUsage.prompt_tokens_details?.cache_write_tokens_details,
+		model.compat?.supportsExplicitPromptCacheMode ?? false,
+	);
 	calculateCost(model, usage);
 	return usage;
 }
@@ -1727,7 +1753,8 @@ function getCompat(model: Model<"openai-completions">): ResolvedOpenAICompletion
 
 	return {
 		supportsStore: model.compat.supportsStore ?? detected.supportsStore,
-		supportsExplicitPromptCacheMode: model.compat.supportsExplicitPromptCacheMode ?? detected.supportsExplicitPromptCacheMode,
+		supportsExplicitPromptCacheMode:
+			model.compat.supportsExplicitPromptCacheMode ?? detected.supportsExplicitPromptCacheMode,
 		supportsDeveloperRole: model.compat.supportsDeveloperRole ?? detected.supportsDeveloperRole,
 		supportsReasoningEffort: model.compat.supportsReasoningEffort ?? detected.supportsReasoningEffort,
 		supportsUsageInStreaming: model.compat.supportsUsageInStreaming ?? detected.supportsUsageInStreaming,

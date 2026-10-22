@@ -273,6 +273,13 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 
 export type ProviderStreamOptions = StreamOptions & Record<string, unknown>;
 
+/** Completed non-generation preparation. Reuse reports no new provider usage. */
+export interface Prepared {
+	responseId?: string;
+	usage?: Usage;
+	reused: boolean;
+}
+
 export interface DeferredFetchOptions extends ProviderRequestOptions<Model<Api>> {
 	/**
 	 * Maximum provider long-poll duration in milliseconds.
@@ -331,6 +338,9 @@ export interface ProviderStreams {
 		options?: DeferredFetchOptions,
 	): AssistantMessageEventStream;
 	cancelDeferred?(model: Model<Api>, handle: DeferredHandle, options?: DeferredCancelOptions): Promise<void>;
+	/** Native non-generation operation; absence means unsupported, never a generation fallback. */
+	prepare?(model: Model<Api>, context: TranscriptContext, options?: StreamOptions): Promise<Prepared>;
+	prepareSimple?(model: Model<Api>, context: TranscriptContext, options?: SimpleStreamOptions): Promise<Prepared>;
 }
 
 /**
