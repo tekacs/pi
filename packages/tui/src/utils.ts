@@ -998,7 +998,7 @@ function wrapSingleLine(line: string, width: number): string[] {
 
 		// Token itself is too long - break it character by character
 		if (tokenVisibleLength > width && !isWhitespace) {
-			if (currentLine) {
+			if (currentVisibleLength > 0) {
 				// Trim before adding the reset, which would otherwise block the final trimEnd()
 				currentLine = currentLine.trimEnd();
 				// Add specific reset for underline only (preserves background)
@@ -1039,7 +1039,8 @@ function wrapSingleLine(line: string, width: number): string[] {
 			}
 			wrapped.push(lineToWrap);
 			if (isWhitespace) {
-				// Don't start new line with whitespace
+				// Drop the visible space, not its style transition. Carry the post-space state.
+				updateTrackerFromText(token, tracker);
 				currentLine = tracker.getActiveCodes();
 				currentVisibleLength = 0;
 				continue;
@@ -1059,8 +1060,8 @@ function wrapSingleLine(line: string, width: number): string[] {
 		updateTrackerFromText(token, tracker);
 	}
 
-	if (currentLine) {
-		// No reset at end of final line - let caller handle it
+	if (currentVisibleLength > 0 || wrapped.length === 0) {
+		// A string containing only ANSI state is not another visible line.
 		wrapped.push(currentLine);
 	}
 
