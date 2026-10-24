@@ -547,6 +547,12 @@ export type HarnessSettings = {
 	readonly extensions?: readonly Extension[];
 	readonly stream?: ConversationStreamOptions;
 	readonly retry?: Partial<ConversationRetryPolicy>;
+	/**
+	 * Replace the built-in transient-error classifier for generation and compaction retries. Called only for an error
+	 * within the enabled retry budget, never for abort or context overflow. A throw is reported and refuses retry. Host code,
+	 * not a stored agent choice: reinstall it when reopening storage. Does not change provider/SDK retries.
+	 */
+	readonly retryable?: (message: Readonly<AssistantMessage>) => boolean;
 	readonly compaction?: CompactionSettings;
 	readonly progress?: Partial<ProgressPolicy>;
 	readonly toolExecution?: ToolExecutionMode;
@@ -586,6 +592,7 @@ export type Settings = {
 	readonly extensions?: readonly Extension[];
 	readonly stream: ConversationStreamOptions;
 	readonly retry: ConversationRetryPolicy;
+	readonly retryable?: HarnessSettings["retryable"];
 	/** Harness-wide policy over the defaults; per-model overrides apply where the model is known. */
 	readonly compaction: CompactionPolicy & Pick<CompactionSettings, "modelOverrides">;
 	readonly progress: ProgressPolicy;

@@ -1,7 +1,10 @@
 import { copyJson, type Draft } from "@earendil-works/chord";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
+import { isRetryableAssistantError } from "@earendil-works/pi-ai/utils/retry";
 import { defineDoc } from "../documents.ts";
 import { documentRetention } from "../session/session.ts";
-import type { ConversationId, ConversationRecord, Tx } from "../types.ts";
+import type { ConversationId, ConversationRecord, ReportFrom, Tx } from "../types.ts";
 import type {
 	Agent,
 	AgentChange,
@@ -23,6 +26,26 @@ export const DEFAULT_RETRY_POLICY: ConversationRetryPolicy = {
 	baseDelayMs: 2000,
 	maxAgentDelayMs: 60000,
 };
+
+/** One host classification boundary for generation and compaction, not another retry loop. */
+export function retryable(
+	runtime: { readonly settings: Settings; report(error: unknown, from?: ReportFrom): void },
+	message: AssistantMessage,
+	attempt: number,
+): boolean {
+	const settings = runtime.settings;
+	const policy = settings.retry;
+	if (message.stopReason !== "error" || isContextOverflow(message) || !policy.enabled || attempt > policy.maxRetries)
+		return false;
+	try {
+		return settings.retryable === undefined
+			? isRetryableAssistantError(message)
+			: settings.retryable(message) === true;
+	} catch (error) {
+		runtime.report(error, { type: "host", callback: "retryable" });
+		return false;
+	}
+}
 
 export const DEFAULT_COMPACTION_POLICY: CompactionPolicy = {
 	enabled: true,
@@ -68,6 +91,7 @@ export function resolveSettings(settings: HarnessSettings | undefined): Settings
 		...(extensions === undefined ? {} : { extensions }),
 		stream: { ...settings?.stream },
 		retry: { ...DEFAULT_RETRY_POLICY, ...settings?.retry },
+		...(settings?.retryable === undefined ? {} : { retryable: settings.retryable }),
 		compaction: { ...DEFAULT_COMPACTION_POLICY, ...settings?.compaction },
 		// Field by field, so an explicitly undefined interval keeps its default.
 		progress: {

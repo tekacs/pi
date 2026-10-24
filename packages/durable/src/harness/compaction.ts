@@ -1,7 +1,7 @@
 import type { Context, Draft } from "@earendil-works/chord";
 import type { AssistantMessage, Message, ModelThinkingLevel, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { calculateContextTokens, estimateMessageTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { isRetryableAssistantError, retryDelayMs } from "@earendil-works/pi-ai/utils/retry";
+import { retryDelayMs } from "@earendil-works/pi-ai/utils/retry";
 import { CompactionEntry } from "../entries.ts";
 import { defineTask } from "../tasks.ts";
 import type {
@@ -14,6 +14,7 @@ import type {
 	TaskRuntime,
 	Tx,
 } from "../types.ts";
+import { retryable } from "./agent.ts";
 import { orderToolResults } from "./context.ts";
 import {
 	addCompactionStatus,
@@ -186,11 +187,7 @@ export const CompactionTask = defineTask<CompactionInput, CompactionCheckpoint, 
 			runtime.signal.throwIfAborted();
 			const summary = summaryText(message);
 			const policy = runtime.settings.retry;
-			const retry =
-				message.stopReason === "error" &&
-				isRetryableAssistantError(message) &&
-				policy.enabled &&
-				attempt <= policy.maxRetries;
+			const retry = retryable(runtime, message, attempt);
 			const until = retry ? runtime.now() + retryDelayMs(policy, attempt) : 0;
 			await runtime.commit(async (tx, current): Promise<Next> => {
 				await recordUsage(

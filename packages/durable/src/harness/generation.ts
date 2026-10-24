@@ -10,7 +10,7 @@ import type {
 	ToolCall,
 } from "@earendil-works/pi-ai";
 import { isContextOverflow } from "@earendil-works/pi-ai/utils/overflow";
-import { isRetryableAssistantError, retryDelayMs } from "@earendil-works/pi-ai/utils/retry";
+import { retryDelayMs } from "@earendil-works/pi-ai/utils/retry";
 import { getCurrentTools } from "@earendil-works/pi-ai/utils/transcript";
 import { AssistantEntry, ResetEntry, SystemEntry, UserEntry } from "../entries.ts";
 import type { ExecutionEnv } from "../env/index.ts";
@@ -28,7 +28,7 @@ import type {
 	Tx,
 	TypedEntry,
 } from "../types.ts";
-import { addTools, sectionExtension } from "./agent.ts";
+import { addTools, retryable, sectionExtension } from "./agent.ts";
 import { compactionPolicy, createCompaction, estimateContext, selectCut } from "./compaction.ts";
 import { applyBoundary, type Boundary, prepareBoundary, withdrawQueuedInputs } from "./inbox.ts";
 import { assignJson } from "./json.ts";
@@ -558,12 +558,7 @@ async function classify(
 	}
 	const policy = settings.retry;
 	// An overflow is never retried: only a compaction can make the next request fit.
-	const retry =
-		message.stopReason === "error" &&
-		!overflow &&
-		isRetryableAssistantError(message) &&
-		policy.enabled &&
-		attempt <= policy.maxRetries;
+	const retry = retryable(runtime, message, attempt);
 	const until = retry ? runtime.now() + retryDelayMs(policy, attempt) : 0;
 	await runtime.commit(async (tx): Promise<Next> => {
 		// Read before the first table write; only a failure uses it.

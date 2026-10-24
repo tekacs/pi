@@ -603,6 +603,24 @@ stream.start(async (events) => {
 
 Events are derived from commits, one batch per commit, and apply on top of the snapshot. Message and tool updates carry deltas: text and thinking appends, appended tool-call argument text, and output trims and appends. When a consumer falls more than 100 batches behind, it receives a fresh `snapshot` event instead. See `test/examples/19-json.ts` for the full stream of one run.
 
+### Host retry classification
+
+`HarnessOptions.settings.retryable(message)` replaces the built-in transient-error
+classifier for generation and compaction retries. It returns a boolean, not a retry loop. The
+Harness calls it only for a terminal error inside the enabled retry budget; aborts
+and context overflow never reach it. A throw is reported as a `host_error` from
+`retryable` and refuses retry, preserving the original model failure.
+
+The host reinstalls this callback when reopening storage. Its decision commits
+through the ordinary retry/sleep checkpoint. Reopen and cancellation use the
+persisted attempt count and backoff deadline; the host supplies the current
+classification and budget when a new error is classified. It cannot replay an earlier
+tool round or admit another input. Provider/SDK retries inside a request are a
+separate policy; set `settings.stream.maxRetries` independently. Without the
+callback the built-in classifier remains unchanged. For example, a host with
+transport-owned evidence can return `safeMessages.has(message)` instead of
+matching provider error text. That evidence must belong to this exact attempt.
+
 ## Hooks
 
 Hooks let extensions observe or adjust the built-in tasks, in the conversations that select them:
