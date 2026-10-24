@@ -21,6 +21,7 @@ import scala from "highlight.js/lib/languages/scala.js";
 import swift from "highlight.js/lib/languages/swift.js";
 import typescript from "highlight.js/lib/languages/typescript.js";
 import { decodeHtmlEntityAt } from "./html.ts";
+import { isSchemeLanguage, SchemeHighlighter } from "./scheme-highlight.ts";
 
 const eagerLanguages = {
 	python,
@@ -77,6 +78,7 @@ export interface HighlightOptions {
 	ignoreIllegals?: boolean;
 	languageSubset?: string[];
 	theme?: HighlightTheme;
+	scheme?: SchemeHighlighter;
 }
 
 const SPAN_CLOSE = "</span>";
@@ -205,6 +207,9 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
 }
 
 export function highlight(code: string, options: HighlightOptions = {}): string {
+	if (isSchemeLanguage(options.language)) {
+		return (options.scheme ?? new SchemeHighlighter()).highlight(code, options.theme);
+	}
 	const html = options.language
 		? hljs.highlight(code, {
 				language: options.language,
@@ -215,5 +220,5 @@ export function highlight(code: string, options: HighlightOptions = {}): string 
 }
 
 export function supportsLanguage(name: string): boolean {
-	return hljs.getLanguage(name) !== undefined;
+	return isSchemeLanguage(name) || hljs.getLanguage(name) !== undefined;
 }

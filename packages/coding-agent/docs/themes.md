@@ -129,6 +129,14 @@ Five colors are optional and inherit another color when omitted:
 
 If `export` colors are omitted, Pi derives HTML page and panel backgrounds from `userMessageBg`.
 
+## Scheme and Steel code fences
+
+Interactive code fences tagged `scheme`, `scm`, `ss`, or `steel` use structural highlighting. Matching parentheses and brackets share a depth color. Core forms and outer heads, inner call heads, recognized binding positions, `#:keywords`, qualified atoms such as `Example::Title`, strings, comments, and quoted data receive different treatments. Ordinary references remain neutral. The highlighter reads syntax without evaluating code or expanding macros; it does not infer bindings in unknown macros.
+
+These colors follow the active theme's existing `syntax*` colors. Depth colors blend toward the text foreground so they remain quieter than form heads without fading into the background. Incomplete strings, comments, quotes, and lists render while streaming; highlighting never inserts missing syntax. The renderer generates colors locally, so source messages and whole-message copies contain no generated ANSI codes. Terminal selection retains the existing rendered wrapping and whitespace behavior.
+
+This treatment applies only to explicitly tagged fences, not prose or inferred file extensions. HTML export continues to use its separate highlight.js grammar.
+
 ## Load a theme from a project or package
 
 Place a project theme in `.pi/themes/`. Project themes load only after [project trust](security.md#understand-project-trust) is granted.

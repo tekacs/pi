@@ -26,8 +26,10 @@ import chalk from "chalk";
 import { getCustomThemesDir, getThemesDir } from "../../../config.ts";
 import type { SourceInfo } from "../../../core/source-info.ts";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.ts";
+import { SchemeHighlighter } from "../../../utils/scheme-highlight.ts";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts";
 import { stripBom } from "../../../utils/text.ts";
+import { buildSchemeTheme } from "./scheme-theme.ts";
 import { generateSystemThemeColors, SYSTEM_THEME_NAME, terminalAppearance } from "./system-theme.ts";
 import {
 	type ResolvedThemeColorValues,
@@ -881,11 +883,13 @@ export function getThemeExportColors(themeName?: string): {
 
 type CliHighlightTheme = Record<string, (s: string) => string>;
 
-let cachedHighlightThemeFor: Theme | undefined;
+let cachedHighlightColors: Theme["colors"] | undefined;
+let cachedHighlightMode: TerminalColorMode | undefined;
 let cachedCliHighlightTheme: CliHighlightTheme | undefined;
 
 function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
 	return {
+		...buildSchemeTheme(t),
 		keyword: (s: string) => t.fg("syntaxKeyword", s),
 		built_in: (s: string) => t.fg("syntaxType", s),
 		literal: (s: string) => t.fg("syntaxNumber", s),
@@ -916,8 +920,9 @@ function buildCliHighlightTheme(t: Theme): CliHighlightTheme {
 }
 
 function getCliHighlightTheme(t: Theme): CliHighlightTheme {
-	if (cachedHighlightThemeFor !== t || !cachedCliHighlightTheme) {
-		cachedHighlightThemeFor = t;
+	if (cachedHighlightColors !== t.colors || cachedHighlightMode !== t.getColorMode() || !cachedCliHighlightTheme) {
+		cachedHighlightColors = t.colors;
+		cachedHighlightMode = t.getColorMode();
 		cachedCliHighlightTheme = buildCliHighlightTheme(t);
 	}
 	return cachedCliHighlightTheme;
@@ -928,11 +933,12 @@ function getCliHighlightTheme(t: Theme): CliHighlightTheme {
  * Returns array of highlighted lines.
  */
 export function highlightCode(code: string, lang?: string): string[] {
-	// Validate language before highlighting to avoid stderr spam from cli-highlight
+	return renderCode(code, lang);
+}
+
+function renderCode(code: string, lang?: string, scheme?: SchemeHighlighter): string[] {
+	// Only explicit supported languages: never infer syntax from prose.
 	const validLang = lang && supportsLanguage(lang) ? lang : undefined;
-	// Skip highlighting when no valid language is specified. cli-highlight's
-	// auto-detection is unreliable and can misidentify prose as AppleScript,
-	// LiveCodeServer, etc., coloring random English words as keywords.
 	if (!validLang) {
 		return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
 	}
@@ -940,11 +946,12 @@ export function highlightCode(code: string, lang?: string): string[] {
 		language: validLang,
 		ignoreIllegals: true,
 		theme: getCliHighlightTheme(theme),
+		scheme,
 	};
 	try {
 		return highlight(code, opts).split("\n");
 	} catch {
-		return code.split("\n");
+		return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
 	}
 }
 
@@ -1020,6 +1027,7 @@ export function getLanguageFromPath(filePath: string): string | undefined {
 }
 
 export function getMarkdownTheme(): MarkdownTheme {
+	const scheme = new SchemeHighlighter();
 	return {
 		heading: (text: string) => theme.fg("mdHeading", text),
 		link: (text: string) => theme.fg("mdLink", text),
@@ -1035,26 +1043,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 		italic: (text: string) => theme.italic(text),
 		underline: (text: string) => theme.underline(text),
 		strikethrough: (text: string) => theme.strikethrough(text),
-		highlightCode: (code: string, lang?: string): string[] => {
-			// Validate language before highlighting to avoid stderr spam from cli-highlight
-			const validLang = lang && supportsLanguage(lang) ? lang : undefined;
-			// Skip highlighting when no valid language is specified. cli-highlight's
-			// auto-detection is unreliable and can misidentify prose as AppleScript,
-			// LiveCodeServer, etc., coloring random English words as keywords.
-			if (!validLang) {
-				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
-			}
-			const opts = {
-				language: validLang,
-				ignoreIllegals: true,
-				theme: getCliHighlightTheme(theme),
-			};
-			try {
-				return highlight(code, opts).split("\n");
-			} catch {
-				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
-			}
-		},
+		highlightCode: (code: string, lang?: string): string[] => renderCode(code, lang, scheme),
 	};
 }
 
