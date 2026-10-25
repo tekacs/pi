@@ -21,15 +21,11 @@ describe("host generation retry classifier", () => {
 		] as const) {
 			const setup = chatSetup();
 			setup.settings.retry = { enabled: true, maxRetries: 2, baseDelayMs: 1 };
-			setup.settings.retryable = (value) =>
-				value.errorMessage === "not dispatched";
+			setup.settings.retryable = (value) => value.errorMessage === "not dispatched";
 			setup.faux.setResponses([message, fauxAssistantMessage("ok")]);
 			const { harness, root } = await openChat(new MemoryStorage(), setup);
 			try {
-				const submission = await root.submit(
-					{ type: "input", content: "synthetic" },
-					context,
-				);
+				const submission = await root.submit({ type: "input", content: "synthetic" }, context);
 				expect((await submission.wait(context)).status).toBe(expected);
 				expect(setup.faux.state.callCount).toBe(calls);
 			} finally {
@@ -49,10 +45,7 @@ describe("host generation retry classifier", () => {
 		setup.faux.setResponses([safe, safe, fauxAssistantMessage("never")]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		try {
-			const submission = await root.submit(
-				{ type: "input", content: "synthetic" },
-				context,
-			);
+			const submission = await root.submit({ type: "input", content: "synthetic" }, context);
 			expect(await submission.wait(context)).toMatchObject({
 				status: "unanswered",
 				reason: "model_error",
@@ -73,10 +66,7 @@ describe("host generation retry classifier", () => {
 		setup.faux.setResponses([ambiguous, fauxAssistantMessage("never")]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		try {
-			const submission = await root.submit(
-				{ type: "input", content: "synthetic" },
-				context,
-			);
+			const submission = await root.submit({ type: "input", content: "synthetic" }, context);
 			expect(await submission.wait(context)).toMatchObject({
 				status: "unanswered",
 				reason: "model_error",
@@ -112,10 +102,7 @@ describe("host generation retry classifier", () => {
 			setup.faux.setResponses([message, fauxAssistantMessage("never")]);
 			const { harness, root } = await openChat(new MemoryStorage(), setup);
 			try {
-				const submission = await root.submit(
-					{ type: "input", content: "synthetic" },
-					context,
-				);
+				const submission = await root.submit({ type: "input", content: "synthetic" }, context);
 				expect((await submission.wait(context)).status).toBe("unanswered");
 				expect(setup.faux.state.callCount).toBe(1);
 				expect(decisions).toBe(0);
@@ -129,8 +116,7 @@ describe("host generation retry classifier", () => {
 		const setup = chatSetup();
 		let now = 1000;
 		setup.settings.retry = { enabled: true, maxRetries: 1, baseDelayMs: 1000 };
-		setup.settings.retryable = (value) =>
-			value.errorMessage === "not dispatched";
+		setup.settings.retryable = (value) => value.errorMessage === "not dispatched";
 		setup.faux.setResponses([safe, fauxAssistantMessage("recovered")]);
 		const storage = new ControlledStorage();
 		let harness = await Harness.open(
@@ -147,15 +133,8 @@ describe("host generation retry classifier", () => {
 		const root = await harness.root(context, {
 			agent: { model: { provider: "faux", modelId: "faux-1" } },
 		});
-		const submission = await root.submit(
-			{ type: "input", content: "synthetic", requestId: "one" },
-			context,
-		);
-		await waitFor(
-			async () =>
-				(await harness.snapshot(LiveDoc, root.id, context))?.generation
-					?.retry !== undefined,
-		);
+		const submission = await root.submit({ type: "input", content: "synthetic", requestId: "one" }, context);
+		await waitFor(async () => (await harness.snapshot(LiveDoc, root.id, context))?.generation?.retry !== undefined);
 		expect(setup.faux.state.callCount).toBe(1);
 		await harness.close(context);
 		now = 3000;
@@ -189,8 +168,7 @@ describe("host generation retry classifier", () => {
 			const setup = chatSetup();
 			setup.settings.compaction = { enabled: false, keepRecentTokens: 1 };
 			setup.settings.retry = { enabled: true, maxRetries: 1, baseDelayMs: 1 };
-			setup.settings.retryable = (value) =>
-				value.errorMessage === "not dispatched";
+			setup.settings.retryable = (value) => value.errorMessage === "not dispatched";
 			setup.faux.setResponses([
 				fauxAssistantMessage("a".repeat(2000)),
 				fauxAssistantMessage("b".repeat(2000)),
@@ -199,22 +177,10 @@ describe("host generation retry classifier", () => {
 			]);
 			const { harness, root } = await openChat(new MemoryStorage(), setup);
 			try {
-				await (
-					await root.submit(
-						{ type: "input", content: "first".repeat(400) },
-						context,
-					)
-				).wait(context);
-				await (
-					await root.submit(
-						{ type: "input", content: "second".repeat(400) },
-						context,
-					)
-				).wait(context);
+				await (await root.submit({ type: "input", content: "first".repeat(400) }, context)).wait(context);
+				await (await root.submit({ type: "input", content: "second".repeat(400) }, context)).wait(context);
 				const task = await root.compact(undefined, context);
-				expect(
-					(await harness.waitForTask(task, context)).state.outcome.status,
-				).toBe(expected);
+				expect((await harness.waitForTask(task, context)).state.outcome.status).toBe(expected);
 				expect(setup.faux.state.callCount).toBe(calls);
 			} finally {
 				await harness.close(context);
@@ -233,14 +199,9 @@ describe("host generation retry classifier", () => {
 		setup.faux.setResponses([safe, fauxAssistantMessage("never")]);
 		const { harness, root } = await openChat(new MemoryStorage(), setup);
 		try {
-			const submission = await root.submit(
-				{ type: "input", content: "synthetic" },
-				context,
-			);
+			const submission = await root.submit({ type: "input", content: "synthetic" }, context);
 			await waitFor(
-				async () =>
-					(await harness.snapshot(LiveDoc, root.id, context))?.generation
-						?.retry !== undefined,
+				async () => (await harness.snapshot(LiveDoc, root.id, context))?.generation?.retry !== undefined,
 			);
 			await root.abort(context);
 			expect(await submission.wait(context)).toMatchObject({

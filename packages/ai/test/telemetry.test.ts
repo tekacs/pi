@@ -129,6 +129,7 @@ describe("AI telemetry", () => {
 				{ name: "pi.ai.first_chunk", attributes: {} },
 				{ name: "pi.ai.block", attributes: { type: "text", index: 0, chars: 11 } },
 				{ name: "pi.ai.block", attributes: { type: "thinking", index: 1, chars: 15 } },
+				{ name: "pi.ai.first_arguments", attributes: { index: 2 } },
 				{ name: "pi.ai.block", attributes: { type: "tool_call", index: 2, chars: 27, tool: "lookup" } },
 			]);
 			expect(JSON.stringify(span)).not.toMatch(
@@ -248,6 +249,7 @@ describe("AI telemetry", () => {
 		});
 		await settled(telemetry);
 		expect(telemetry.getSpans()[1].events.slice(1)).toEqual([
+			{ name: "pi.ai.first_arguments", attributes: { index: 2 } },
 			{ name: "pi.ai.block", attributes: { type: "tool_call", index: 3, chars: 3, tool: "lookup" } },
 			{ name: "pi.ai.block", attributes: { type: "tool_call", index: 2, chars: 3, tool: "lookup" } },
 			{ name: "pi.ai.block", attributes: { type: "tool_call", index: 4, chars: 0, tool: "lookup" } },

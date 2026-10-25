@@ -451,7 +451,9 @@ async function streamResponse(
 	attempt: number,
 	context: Context,
 ): Promise<AssistantMessage> {
-	const interval = runtime.settings.progress.partialIntervalMs;
+	const { partialIntervalMs: interval, partialLeading } = runtime.settings.progress;
+	let leading = partialLeading;
+	let urgent = false;
 	let pending: AssistantMessage | undefined;
 	let timer: (() => void) | undefined;
 	let inFlight: Promise<void> | undefined;
@@ -461,6 +463,8 @@ async function streamResponse(
 		const partial = pending;
 		pending = undefined;
 		if (partial === undefined || stopped) return;
+		urgent = false;
+		context.telemetry.addEvent("pi.durable.partial", { phase: "writing" });
 		inFlight = (async () => {
 			// Copy synchronously: the provider keeps mutating its partial.
 			const message = copyJson(partial, { omitUndefinedProperties: true });
@@ -470,6 +474,7 @@ async function streamResponse(
 				assignJson(live.generation as Draft<Record<string, JsonValue>>, "message", message);
 				return undefined;
 			}, context);
+			context.telemetry.addEvent("pi.durable.partial", { phase: "stored" });
 		})()
 			.catch((error: unknown) => {
 				// Rejections after an abort mark or close are expected; the committed state stays consistent.
@@ -477,7 +482,10 @@ async function streamResponse(
 			})
 			.finally(() => {
 				inFlight = undefined;
-				if (pending !== undefined && !stopped) timer = runtime.setTimer(flush, interval);
+				if (pending !== undefined && !stopped) {
+					if (urgent) flush();
+					else timer = runtime.setTimer(flush, interval);
+				}
 			});
 	};
 	try {
@@ -487,7 +495,23 @@ async function streamResponse(
 			// never gets past it, so it never leaves a partial.
 			if (event.type === "done" || event.type === "error" || event.partial.content.length === 0) continue;
 			pending = event.partial;
-			if (timer === undefined && inFlight === undefined) timer = runtime.setTimer(flush, interval);
+			if (leading !== undefined) {
+				try {
+					if (leading(event.partial, runtime.conversationId) === true) {
+						leading = undefined;
+						urgent = true;
+						context.telemetry.addEvent("pi.durable.partial", { phase: "leading" });
+					}
+				} catch (error) {
+					leading = undefined;
+					runtime.report(error, { type: "host", callback: "partialLeading" });
+				}
+			}
+			if (urgent) {
+				timer?.();
+				timer = undefined;
+				if (inFlight === undefined) flush();
+			} else if (timer === undefined && inFlight === undefined) timer = runtime.setTimer(flush, interval);
 		}
 		return await events.result();
 	} finally {

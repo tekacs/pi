@@ -501,6 +501,8 @@ A slow watch keeps at most 100 undelivered frames. After that, the pending frame
 
 Partial answers and tool output are committed at most every 100 ms by default, so a crash loses at most that window. `settings.progress` changes the intervals; a host whose storage is remote can commit less often, for example `{ partialIntervalMs: 500, outputIntervalMs: 500 }`.
 
+`settings.progress.partialLeading(message, conversationId)` selects one leading partial per model request. On its first `true`, the Harness cancels the pending throttle timer and commits the latest partial immediately, or immediately after the one commit already in flight. Empty start events do not call it. All later partials keep `partialIntervalMs` coalescing, including any newer partial received during that leading commit. The predicate runs synchronously outside storage transactions and must not mutate the message. A throw is reported as a `host_error` from `partialLeading`, disables it for that request and leaves normal coalescing in place. The host reinstalls this policy after reopen; it does not change model input, execute tools early or expose uncommitted progress. Generation emits `pi.durable.partial` on its phase span at selection (`phase: leading`), commit start (`writing`) and commit settlement (`stored`). A watcher may run before the commit promise returns, so `stored` is not an fsync timestamp. The model span's `pi.ai.first_arguments` marks the first nonempty normalized tool-argument delta after native parsing, separately from `pi.ai.first_chunk`.
+
 ## Busy Conversations
 
 A conversation is busy while a run is working on an input. Submitting to a busy conversation queues the submission in the conversation's inbox, `docs["pi.inbox"]` in the view:

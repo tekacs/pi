@@ -97,6 +97,9 @@ export function resolveSettings(settings: HarnessSettings | undefined): Settings
 		progress: {
 			partialIntervalMs: settings?.progress?.partialIntervalMs ?? DEFAULT_PROGRESS_POLICY.partialIntervalMs,
 			outputIntervalMs: settings?.progress?.outputIntervalMs ?? DEFAULT_PROGRESS_POLICY.outputIntervalMs,
+			...(settings?.progress?.partialLeading === undefined
+				? {}
+				: { partialLeading: settings.progress.partialLeading }),
 		},
 		toolExecution: settings?.toolExecution ?? "parallel",
 		steeringMode: settings?.steeringMode ?? "one-at-a-time",

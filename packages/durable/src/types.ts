@@ -143,7 +143,16 @@ export type ReportTask = {
 };
 
 /** A host callback, by its `HarnessOptions` name; `env` is the environment builder, `models` a provider call. */
-export type HostCallback = "now" | "settings" | "registry" | "env" | "models" | "retryable" | "setTimer" | "onWake";
+export type HostCallback =
+	| "now"
+	| "settings"
+	| "registry"
+	| "env"
+	| "models"
+	| "retryable"
+	| "partialLeading"
+	| "setTimer"
+	| "onWake";
 
 /**
  * What a report to `HarnessOptions.onReport` is about. `extension`, where present, names the extension whose code

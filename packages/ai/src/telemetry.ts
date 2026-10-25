@@ -38,6 +38,10 @@ const request = {
 	},
 	events: {
 		"pi.ai.first_chunk": { description: "First normalized stream event delivered.", attributes: {} },
+		"pi.ai.first_arguments": {
+			description: "First nonempty normalized tool-argument delta, after native argument parsing.",
+			attributes: { index: { type: "number", description: "Content block index.", required: true } },
+		},
 		"pi.ai.block": {
 			description: "A completed content block; content is never recorded.",
 			attributes: {
@@ -134,6 +138,7 @@ export function observeModelRequest(
 	let span!: RequestSpan;
 	let finish!: () => void;
 	let first = true;
+	let argumentsSeen = false;
 	const toolChars = new Map<number, number>();
 	const finished = new Promise<void>((resolve) => {
 		finish = resolve;
@@ -159,6 +164,10 @@ export function observeModelRequest(
 				firstChunkDuration.record(performance.now() - started, attributes, span);
 			}
 			if (event.type === "toolcall_delta") {
+				if (!argumentsSeen && event.delta.length > 0) {
+					argumentsSeen = true;
+					span.addEvent("pi.ai.first_arguments", { index: event.contentIndex });
+				}
 				toolChars.set(event.contentIndex, (toolChars.get(event.contentIndex) ?? 0) + event.delta.length);
 			} else if (event.type === "text_end" || event.type === "thinking_end") {
 				span.addEvent("pi.ai.block", {

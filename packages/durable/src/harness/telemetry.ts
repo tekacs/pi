@@ -102,6 +102,17 @@ export const DURABLE_TELEMETRY_SCHEMA = defineTelemetrySchema({
 					description: "The running checkpoint's phase changed while the invocation continued.",
 					attributes: { phase: { type: "string", required: true, description: "Committed checkpoint phase." } },
 				},
+				"pi.durable.partial": {
+					description: "A selected leading partial, or a partial commit starting/settling; no message content.",
+					attributes: {
+						phase: {
+							type: "string",
+							required: true,
+							values: ["leading", "writing", "stored"],
+							description: "Progress boundary.",
+						},
+					},
+				},
 				"pi.durable.replay": {
 					description: "A nested tool call was answered from its stored result.",
 					attributes: { "tool.name": { type: "string", required: true, description: "Called tool name." } },

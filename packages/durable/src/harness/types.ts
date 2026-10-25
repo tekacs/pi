@@ -528,6 +528,8 @@ export type CompactionSettings = Partial<CompactionPolicy> & {
 export type ProgressPolicy = {
 	/** Minimum pause between commits of the answer being generated. */
 	partialIntervalMs: number;
+	/** Select one partial per request to commit without the interval; synchronous, read-only, outside the transaction. */
+	partialLeading?: (message: Readonly<AssistantMessage>, conversationId: ConversationId) => boolean;
 	/** Minimum pause between commits of running tool output; large commits also pause in proportion to their size. */
 	outputIntervalMs: number;
 };
