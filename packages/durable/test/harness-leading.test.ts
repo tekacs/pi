@@ -1,8 +1,9 @@
 import { fauxAssistantMessage, type Models } from "@earendil-works/pi-ai";
 import { Harness, type LiveState, type ProgressPolicy } from "@earendil-works/pi-durable";
+import { InMemoryTelemetryContext } from "@earendil-works/pi-telemetry";
 import { describe, expect, it } from "vitest";
 import { chatSetup, textOf, waitFor } from "./chat-support.ts";
-import { ControlledStorage, context, flush } from "./session-support.ts";
+import { ControlledStorage, context, flush, type Gate } from "./session-support.ts";
 
 function controlled() {
 	const steps = [Promise.withResolvers<void>(), Promise.withResolvers<void>(), Promise.withResolvers<void>()];
@@ -40,10 +41,12 @@ async function fixture(leading?: ProgressPolicy["partialLeading"]) {
 	const timers = new Set<() => void>();
 	const reports: unknown[] = [];
 	const storage = new ControlledStorage();
+	const telemetry = new InMemoryTelemetryContext();
 	const harness = await Harness.open(
 		storage,
 		{
 			models,
+			telemetry,
 			registry: setup.registry,
 			settings: { ...setup.settings, progress: { partialIntervalMs: 5000, partialLeading: leading } },
 			setTimer(callback, delay) {
@@ -85,7 +88,7 @@ async function fixture(leading?: ProgressPolicy["partialLeading"]) {
 		await submission.wait(context);
 		await harness.close(context);
 	};
-	return { ...run, storage, harness, root, values, timers, tick, reports, close };
+	return { ...run, storage, harness, root, values, timers, tick, reports, close, telemetry };
 }
 
 describe("leading partial policy", () => {
@@ -113,12 +116,20 @@ describe("leading partial policy", () => {
 		} finally {
 			await f.close();
 		}
+		expect(
+			f.telemetry
+				.getSpans()
+				.flatMap((span) => span.events)
+				.filter((event) => event.name === "pi.durable.partial")
+				.map((event) => event.attributes.phase),
+		).toEqual(["leading", "writing", "stored"]);
 	});
 
 	it("waits for the writer already in flight, then commits the selected latest partial without another interval", async () => {
 		const f = await fixture((message) => textOf(message) === "leading");
+		let gate: Gate | undefined;
 		try {
-			const gate = f.storage.holdCommits();
+			gate = f.storage.holdCommits();
 			f.tick();
 			await gate.entered;
 			f.steps[0]!.resolve();
@@ -131,8 +142,16 @@ describe("leading partial policy", () => {
 			expect(f.values).toEqual(["prefix", "later"]);
 			expect(f.timers.size).toBe(0);
 		} finally {
+			gate?.release();
 			await f.close();
 		}
+		expect(
+			f.telemetry
+				.getSpans()
+				.flatMap((span) => span.events)
+				.filter((event) => event.name === "pi.durable.partial")
+				.map((event) => event.attributes.phase),
+		).toEqual(["writing", "leading", "stored", "writing", "stored"]);
 	});
 
 	it("contains a throwing policy once and preserves the interval and terminal result", async () => {

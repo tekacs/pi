@@ -454,6 +454,7 @@ async function streamResponse(
 	const { partialIntervalMs: interval, partialLeading } = runtime.settings.progress;
 	let leading = partialLeading;
 	let urgent = false;
+	let observed = false;
 	let pending: AssistantMessage | undefined;
 	let timer: (() => void) | undefined;
 	let inFlight: Promise<void> | undefined;
@@ -463,8 +464,10 @@ async function streamResponse(
 		const partial = pending;
 		pending = undefined;
 		if (partial === undefined || stopped) return;
+		const measured = urgent || !observed;
+		observed = true;
 		urgent = false;
-		context.telemetry.addEvent("pi.durable.partial", { phase: "writing" });
+		if (measured) context.telemetry.addEvent("pi.durable.partial", { phase: "writing" });
 		inFlight = (async () => {
 			// Copy synchronously: the provider keeps mutating its partial.
 			const message = copyJson(partial, { omitUndefinedProperties: true });
@@ -474,7 +477,7 @@ async function streamResponse(
 				assignJson(live.generation as Draft<Record<string, JsonValue>>, "message", message);
 				return undefined;
 			}, context);
-			context.telemetry.addEvent("pi.durable.partial", { phase: "stored" });
+			if (measured) context.telemetry.addEvent("pi.durable.partial", { phase: "stored" });
 		})()
 			.catch((error: unknown) => {
 				// Rejections after an abort mark or close are expected; the committed state stays consistent.
