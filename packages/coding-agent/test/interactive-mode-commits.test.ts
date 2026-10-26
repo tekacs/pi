@@ -33,6 +33,7 @@ function view() {
 	const state = {
 		isInitialized: true,
 		footer: { invalidate: vi.fn() },
+		programStatus: { handleEvent: vi.fn() },
 		ui: { requestRender: vi.fn() },
 		chatContainer: new Container(),
 		streamingComponent: undefined as AssistantMessageComponent | undefined,
@@ -50,6 +51,7 @@ function view() {
 		toolOutputExpanded: false,
 		session: { retryAttempt: 0 },
 		bugReportHintShown: false,
+		maybeShowInstallChangeWarning: () => false,
 		addMessageToChat: Reflect.get(InteractiveMode.prototype, "addMessageToChat") as (
 			message: AssistantMessage,
 		) => void,

@@ -48,7 +48,8 @@ const BUDGETS = {
 			allow: ["packages/telemetry/src/index.ts"],
 		},
 		"./utils/*": {
-			maxFiles: 3,
+			// provider-retry shares retry classification, error normalization, and owned text slicing.
+			maxFiles: 4,
 			forbid: ["providers/", "api/", "index.ts"],
 			overrides: {
 				// Tool argument validation runs on pi-schema: its validator, coercion and format checks (the checks TypeBox's

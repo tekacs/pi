@@ -150,7 +150,6 @@ describe("context-only runs", () => {
 		expect(requests[0].messages.filter((message) => message.role === "user").map(getMessageText)).toEqual([
 			"stored input",
 			"queued input",
-			"next-turn input",
 			"startup input",
 		]);
 	});
