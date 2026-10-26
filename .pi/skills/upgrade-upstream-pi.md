@@ -98,15 +98,17 @@ Do **not** use `jj edit <local-tip>` for the clean-child case. Editing the tip m
 
 ## 4. Install the Rebased Pi Build
 
-After Pi's focused tests and `npm run check` are clean, replace the local Pi installation with the rebased checkout:
+After Pi's focused tests and `npm run check` are clean, install the rebased checkout in a versioned directory:
 
 ```bash
+revision="$(jj log -r @- --no-graph -T 'commit_id.short()')"
 npm run release:local -- \
-  --out /Users/amar/.local/share/pi-local \
-  --force \
+  --out "/Users/amar/.local/share/pi-local/upstream-$revision" \
   --skip-check \
   --skip-test
 ```
+
+Inspect the current `pi` launcher first. Do not replace or force-remove the `pi-local` parent: existing launchers and running processes can reference versioned children there. Verify the new installation before updating the launcher to its `bun/pi`; preserve its existing argument and process semantics. Keep earlier installations available to running sessions.
 
 The skip flags are valid only because this workflow already ran the checks and tests against the same committed tree. This installation is part of the upgrade, not an optional follow-up.
 
@@ -159,7 +161,7 @@ af install pi
 
 `cargo install` must use `--locked`. The second command installs the Pi extension embedded in that newly built AF binary.
 
-Verify that `~/.pi/agent/extensions/agent-fixes.ts` matches `src/agent/pi/extension.ts`. Existing Pi processes may require an extension reload or restart before using the installed source.
+Verify that the installed entry point matches `src/agent/pi/extension.ts`. The package installer writes `~/.pi/agent/extensions/agent-fixes/index.ts`; older installs may use `~/.pi/agent/extensions/agent-fixes.ts`. Verify the managed sibling modules too. Existing Pi processes may require an extension reload or restart before using the installed source.
 
 ## 8. Commit Pi and Report
 
