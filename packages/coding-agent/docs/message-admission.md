@@ -17,7 +17,9 @@ session, not a second independently owned session.
 
 Admission and delivery are different facts. Admission transfers custody to Pi;
 it does not claim that a provider has read the message. Pi queues admitted input
-at an ordinary safe boundary. The persisted custom message identifies its
+at an ordinary safe boundary. An automatic context-only wake leaves `nextTurn`
+asides queued for the next submitted user or custom input, including when a
+failed wake is retried. The persisted custom message identifies its
 admission request. Pi syncs that projection before recording it as delivered in
 memory. Recovery rebuilds pending requests from the session's physical journal,
 not solely from the currently selected branch.

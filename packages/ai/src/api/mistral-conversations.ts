@@ -14,7 +14,12 @@ import type {
 	TranscriptContext,
 } from "../types.ts";
 import { combineAbortSignals } from "../utils/abort-signals.ts";
-import { normalizeProviderError, ProviderFailureError, setProviderError, truncateErrorText } from "../utils/error-body.ts";
+import {
+	normalizeProviderError,
+	ProviderFailureError,
+	setProviderError,
+	truncateErrorText,
+} from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
