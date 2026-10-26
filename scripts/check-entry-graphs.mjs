@@ -42,7 +42,8 @@ const BUDGETS = {
 			forbid: ["providers/", "models.generated.ts", "index.ts", "utils/validation.ts", "utils/typebox-helpers.ts"],
 			allow: ["packages/telemetry/src/index.ts"],
 		},
-		"./utils/*": { maxFiles: 3, forbid: ["providers/", "api/", "index.ts"] },
+		// provider-retry shares retry classification, error normalization, and owned text slicing.
+		"./utils/*": { maxFiles: 4, forbid: ["providers/", "api/", "index.ts"] },
 	},
 	"packages/codemode": {
 		// Node and Bun users never load the Cloudflare entry, which imports the `cloudflare:workers` built-in.

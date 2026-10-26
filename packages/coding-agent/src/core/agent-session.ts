@@ -2044,9 +2044,11 @@ export class AgentSession {
 				timestamp: Date.now(),
 			});
 		}
-		// Inject any pending "nextTurn" messages as context alongside the starting message
-		messages.push(...this._pendingNextTurnMessages);
-		this._pendingNextTurnMessages = [];
+		// Context-only wakes do not consume asides held for the next submitted input.
+		if (trigger.messageType !== "context") {
+			messages.push(...this._pendingNextTurnMessages);
+			this._pendingNextTurnMessages = [];
+		}
 		for (const msg of result.messages) {
 			messages.push({
 				role: "custom",

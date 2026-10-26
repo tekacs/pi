@@ -78,12 +78,12 @@ describe("AgentSession durable input admission", () => {
 			{ customType: "aside", content: "next user only", display: false },
 			{ deliverAs: "nextTurn" },
 		);
-		const original = h.session.agent.promptTransient.bind(h.session.agent);
+		const original = h.session.agent.prompt.bind(h.session.agent);
 		let rejected!: () => void;
 		const rejection = new Promise<void>((resolve) => {
 			rejected = resolve;
 		});
-		h.session.agent.promptTransient = async () => {
+		h.session.agent.prompt = async () => {
 			throw new Error("temporary admission driver failure");
 		};
 		await h.session.bindExtensions({
@@ -100,13 +100,21 @@ describe("AgentSession durable input admission", () => {
 		]);
 		const request = h.session.admitMessage("receipt", input);
 		await rejection;
-		h.session.agent.promptTransient = original;
+		h.session.agent.prompt = original;
 		await settled(h);
 		expect(h.faux.state.callCount).toBe(1);
 		expect(
 			h.sessionManager.getEntries().filter((entry) => entry.type === "custom_message" && entry.inputId === request),
 		).toHaveLength(1);
 		expect(h.session.admitMessage("receipt", input)).toBe(request);
+		h.setResponses([
+			(context) => {
+				expect(JSON.stringify(context.messages)).toContain("next user only");
+				return fauxAssistantMessage("aside received");
+			},
+		]);
+		await h.session.prompt("next user input");
+		expect(h.faux.state.callCount).toBe(2);
 	});
 
 	it("retains held custody without inference and delivers once after a policy change", async () => {

@@ -134,7 +134,7 @@ function assertSuccessfulOutput(output: AssistantMessage): asserts output is Suc
 async function requestSse(
 	model: Model<"openai-codex-responses">,
 	headers: Headers,
-	body: Uint8Array | string,
+	body: Uint8Array<ArrayBuffer> | string,
 	timeoutMs: number | undefined,
 	options?: OpenAICodexResponsesOptions,
 ): Promise<Response> {

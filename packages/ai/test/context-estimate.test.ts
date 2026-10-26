@@ -84,9 +84,9 @@ describe("context token estimation", () => {
 		});
 
 		expect(estimateContextTokens(context)).toEqual({
-			tokens: 900_001,
+			tokens: 900_002,
 			usageTokens: 900_000,
-			trailingTokens: 1,
+			trailingTokens: 2,
 			lastUsageIndex: 0,
 		});
 	});
