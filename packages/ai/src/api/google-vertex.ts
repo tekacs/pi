@@ -35,6 +35,7 @@ import {
 	convertMessages,
 	convertTools,
 	createGoogleGenAI,
+	GooglePartialArgsStream,
 	getDisabledGoogleThinkingConfig,
 	isThinkingPart,
 	mapStopReason,
@@ -110,6 +111,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						options?.env,
 						options?.identity,
 					);
+			const currentTools = getCurrentTools(normalizedContext.messages);
 			let params = buildParams(model, normalizedContext, options);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -119,8 +121,49 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 
 			stream.push({ type: "start", partial: output });
 			let currentBlock: TextContent | ThinkingContent | null = null;
+			let openToolCall: {
+				toolCall: ToolCall;
+				contentIndex: number;
+				partialArgs: GooglePartialArgsStream;
+				hasReceivedChunks: boolean;
+			} | null = null;
 			const blocks = output.content;
 			const blockIndex = () => blocks.length - 1;
+			const closeCurrentBlock = () => {
+				if (!currentBlock) return;
+				if (currentBlock.type === "text") {
+					stream.push({
+						type: "text_end",
+						contentIndex: blockIndex(),
+						content: currentBlock.text,
+						partial: output,
+					});
+				} else {
+					stream.push({
+						type: "thinking_end",
+						contentIndex: blockIndex(),
+						content: currentBlock.thinking,
+						partial: output,
+					});
+				}
+				currentBlock = null;
+			};
+			const finishOpenToolCall = () => {
+				if (!openToolCall) return;
+				const { toolCall, contentIndex, partialArgs } = openToolCall;
+				openToolCall = null;
+				const finished = partialArgs.finish();
+				toolCall.arguments = finished.arguments;
+				if (finished.delta.length > 0) {
+					stream.push({
+						type: "toolcall_delta",
+						contentIndex,
+						delta: finished.delta,
+						partial: output,
+					});
+				}
+				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
+			};
 			for await (const chunk of googleStream) {
 				await options?.onProviderStreamEvent?.(chunk, model);
 				// Vertex uses the same @google/genai GenerateContentResponse type as Gemini.
@@ -192,49 +235,105 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						}
 
 						if (part.functionCall) {
-							if (currentBlock) {
-								if (currentBlock.type === "text") {
-									stream.push({
-										type: "text_end",
-										contentIndex: blockIndex(),
-										content: currentBlock.text,
-										partial: output,
-									});
-								} else {
-									stream.push({
-										type: "thinking_end",
-										contentIndex: blockIndex(),
-										content: currentBlock.thinking,
-										partial: output,
-									});
+							closeCurrentBlock();
+
+							const fc = part.functionCall;
+							const isStreamedChunk =
+								openToolCall !== null || fc.willContinue === true || fc.partialArgs !== undefined;
+
+							if (!isStreamedChunk) {
+								const providedId = fc.id;
+								const needsNewId =
+									!providedId || output.content.some((b) => b.type === "toolCall" && b.id === providedId);
+								const toolCallId = needsNewId ? `${fc.name}_${Date.now()}_${++toolCallCounter}` : providedId;
+
+								const toolCall: ToolCall = {
+									type: "toolCall",
+									id: toolCallId,
+									name: fc.name || "",
+									arguments: (fc.args as Record<string, any>) ?? {},
+									...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
+								};
+
+								output.content.push(toolCall);
+								stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+								stream.push({
+									type: "toolcall_delta",
+									contentIndex: blockIndex(),
+									delta: JSON.stringify(toolCall.arguments),
+									partial: output,
+								});
+								stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+							} else {
+								if (
+									openToolCall &&
+									((fc.name && openToolCall.toolCall.name && fc.name !== openToolCall.toolCall.name) ||
+										(fc.id && openToolCall.toolCall.id && fc.id !== openToolCall.toolCall.id) ||
+										(fc.name && openToolCall.hasReceivedChunks))
+								) {
+									finishOpenToolCall();
 								}
-								currentBlock = null;
+
+								if (!openToolCall) {
+									const providedId = fc.id;
+									const needsNewId =
+										!providedId || output.content.some((b) => b.type === "toolCall" && b.id === providedId);
+									const toolCallId = needsNewId
+										? `${fc.name || "tool"}_${Date.now()}_${++toolCallCounter}`
+										: providedId;
+									const toolName: string = fc.name || "";
+									const toolSchema: unknown = currentTools.find((t) => t.name === toolName)?.parameters;
+									const initialArgs = (fc.args as Record<string, any>) ?? {};
+									const toolCall: ToolCall = {
+										type: "toolCall",
+										id: toolCallId,
+										name: toolName,
+										arguments: initialArgs,
+										...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
+									};
+									output.content.push(toolCall);
+									const contentIndex = blockIndex();
+									openToolCall = {
+										toolCall,
+										contentIndex,
+										partialArgs: new GooglePartialArgsStream(toolSchema, initialArgs),
+										hasReceivedChunks: false,
+									};
+									stream.push({ type: "toolcall_start", contentIndex, partial: output });
+								} else {
+									if (!openToolCall.toolCall.name && fc.name) {
+										openToolCall.toolCall.name = fc.name;
+										openToolCall.partialArgs.setSchema(
+											currentTools.find((t) => t.name === fc.name)?.parameters,
+										);
+									}
+									const retainedSig = retainThoughtSignature(
+										openToolCall.toolCall.thoughtSignature,
+										part.thoughtSignature,
+									);
+									if (retainedSig) {
+										openToolCall.toolCall.thoughtSignature = retainedSig;
+									}
+								}
+
+								openToolCall.hasReceivedChunks = true;
+								if (fc.partialArgs && fc.partialArgs.length > 0) {
+									const { delta, arguments: nextArgs } = openToolCall.partialArgs.append(fc.partialArgs);
+									openToolCall.toolCall.arguments = nextArgs;
+									if (delta.length > 0) {
+										stream.push({
+											type: "toolcall_delta",
+											contentIndex: openToolCall.contentIndex,
+											delta,
+											partial: output,
+										});
+									}
+								}
+
+								if (!fc.willContinue) {
+									finishOpenToolCall();
+								}
 							}
-
-							const providedId = part.functionCall.id;
-							const needsNewId =
-								!providedId || output.content.some((b) => b.type === "toolCall" && b.id === providedId);
-							const toolCallId = needsNewId
-								? `${part.functionCall.name}_${Date.now()}_${++toolCallCounter}`
-								: providedId;
-
-							const toolCall: ToolCall = {
-								type: "toolCall",
-								id: toolCallId,
-								name: part.functionCall.name || "",
-								arguments: (part.functionCall.args as Record<string, any>) ?? {},
-								...(part.thoughtSignature && { thoughtSignature: part.thoughtSignature }),
-							};
-
-							output.content.push(toolCall);
-							stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-							stream.push({
-								type: "toolcall_delta",
-								contentIndex: blockIndex(),
-								delta: JSON.stringify(toolCall.arguments),
-								partial: output,
-							});
-							stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
 						}
 					}
 				}
@@ -269,26 +368,18 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 				}
 			}
 
-			if (currentBlock) {
-				if (currentBlock.type === "text") {
-					stream.push({
-						type: "text_end",
-						contentIndex: blockIndex(),
-						content: currentBlock.text,
-						partial: output,
-					});
-				} else {
-					stream.push({
-						type: "thinking_end",
-						contentIndex: blockIndex(),
-						content: currentBlock.thinking,
-						partial: output,
-					});
-				}
-			}
+			closeCurrentBlock();
 
 			if (options?.signal?.aborted) {
 				throw new Error("Request was aborted");
+			}
+
+			if (openToolCall) {
+				if (output.stopReason === "length") {
+					finishOpenToolCall();
+				} else {
+					throw new Error("Google Vertex stream ended with an incomplete function call");
+				}
 			}
 
 			if (output.stopReason === "pending") {
@@ -491,6 +582,7 @@ function buildParams(
 		currentTools.length > 0
 			? resolveGoogleFunctionCallingMode(currentTools, options.toolChoice, supportsStrictMode)
 			: undefined;
+	const streamFunctionCallArguments = currentTools.length > 0 && supportsStrictMode;
 	const systemInstruction = initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "";
 	const config: GenerateContentConfig = {
 		...(Object.keys(generationConfig).length > 0 && generationConfig),
@@ -498,8 +590,16 @@ function buildParams(
 		...(currentTools.length > 0 && {
 			tools: convertTools(currentTools, false, supportsStrictMode),
 		}),
-		...(functionCallingMode !== undefined && {
-			toolConfig: { functionCallingConfig: { mode: functionCallingMode } },
+		...(streamFunctionCallArguments && {
+			automaticFunctionCalling: { disable: true },
+		}),
+		...((functionCallingMode !== undefined || streamFunctionCallArguments) && {
+			toolConfig: {
+				functionCallingConfig: {
+					...(functionCallingMode !== undefined && { mode: functionCallingMode }),
+					...(streamFunctionCallArguments && { streamFunctionCallArguments: true }),
+				},
+			},
 		}),
 	};
 
