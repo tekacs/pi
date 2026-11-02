@@ -6,7 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { applyHttpProxySettings, configureHttpDispatcher } from "../src/core/http-dispatcher.ts";
 
 const PROXY_ENV_KEYS = ["HTTP_PROXY", "HTTPS_PROXY"] as const;
-const DISPATCHER_PROXY_ENV_KEYS = [...PROXY_ENV_KEYS, "http_proxy", "https_proxy", "NO_PROXY", "no_proxy"] as const;
+const DISPATCHER_PROXY_ENV_KEYS = [
+	...PROXY_ENV_KEYS,
+	"http_proxy",
+	"https_proxy",
+	"NO_PROXY",
+	"no_proxy",
+	"BUN_CONFIG_HTTP_IDLE_TIMEOUT",
+] as const;
 
 describe("http proxy settings", () => {
 	let savedEnv: Record<(typeof PROXY_ENV_KEYS)[number], string | undefined>;
@@ -167,5 +174,16 @@ describe("http dispatcher", () => {
 		);
 		expect(connectSpy.mock.calls[0]?.[0]).not.toHaveProperty("autoSelectFamily");
 		expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(originalAttemptTimeoutMs);
+	});
+
+	it("exports BUN_CONFIG_HTTP_IDLE_TIMEOUT in seconds and clamps at Bun's 14340s limit", () => {
+		configureHttpDispatcher(300_000);
+		expect(process.env.BUN_CONFIG_HTTP_IDLE_TIMEOUT).toBe("300");
+
+		configureHttpDispatcher(0);
+		expect(process.env.BUN_CONFIG_HTTP_IDLE_TIMEOUT).toBe("0");
+
+		configureHttpDispatcher(20_000_000);
+		expect(process.env.BUN_CONFIG_HTTP_IDLE_TIMEOUT).toBe("14340");
 	});
 });

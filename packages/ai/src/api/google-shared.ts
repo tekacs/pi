@@ -10,6 +10,7 @@ import {
 	type GoogleGenAIOptions,
 	ThinkingLevel as GoogleSdkThinkingLevel,
 	type Part,
+	type PartialArg,
 	type ThinkingConfig,
 } from "@google/genai";
 import { clampThinkingLevel } from "../models.ts";
@@ -623,4 +624,409 @@ export function retryGoogleRequest<T>(
 			signal: options?.signal,
 		},
 	);
+}
+
+export type GooglePartialArgPathSegment =
+	| { readonly kind: "member"; readonly key: string }
+	| { readonly kind: "element"; readonly index: number };
+
+export interface ParsedGooglePartialArgPath {
+	readonly segments: readonly GooglePartialArgPathSegment[];
+	readonly containerHint?: "array" | "object";
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function setRecordMember(target: Record<string, unknown>, key: string, value: unknown): void {
+	if (key === "__proto__") {
+		Object.defineProperty(target, key, {
+			value,
+			writable: true,
+			enumerable: true,
+			configurable: true,
+		});
+	} else {
+		target[key] = value;
+	}
+}
+
+function samePathSegment(
+	a: GooglePartialArgPathSegment | undefined,
+	b: GooglePartialArgPathSegment | undefined,
+): boolean {
+	if (!a || !b || a.kind !== b.kind) return false;
+	return a.kind === "member" ? a.key === (b as { key: string }).key : a.index === (b as { index: number }).index;
+}
+
+/**
+ * Parse a Vertex RFC 9535 `PartialArg.jsonPath` (such as `$.edits[0].newText`,
+ * `$.edits[0]{}`, or `$.tags[]`) into path segments and an optional container
+ * completion marker. Consulting `rootSchema` lets dotted property names in the
+ * tool's schema (such as `"a.b"`) stay a single member key instead of splitting.
+ */
+export function parseGooglePartialArgPath(
+	rawPath: string | undefined,
+	rootSchema?: unknown,
+): ParsedGooglePartialArgPath | undefined {
+	if (!rawPath || !rawPath.startsWith("$")) return undefined;
+	let path = rawPath.slice(1);
+	let containerHint: "array" | "object" | undefined;
+	if (path.endsWith("[]")) {
+		containerHint = "array";
+		path = path.slice(0, -2);
+	} else if (path.endsWith("{}")) {
+		containerHint = "object";
+		path = path.slice(0, -2);
+	}
+
+	const segments: GooglePartialArgPathSegment[] = [];
+	let currentSchema: unknown = rootSchema;
+	let i = 0;
+
+	const advanceMemberSchema = (key: string) => {
+		if (isPlainRecord(currentSchema) && isPlainRecord(currentSchema.properties)) {
+			currentSchema = currentSchema.properties[key];
+		} else if (isPlainRecord(currentSchema) && isPlainRecord(currentSchema.additionalProperties)) {
+			currentSchema = currentSchema.additionalProperties;
+		} else {
+			currentSchema = undefined;
+		}
+	};
+
+	const advanceElementSchema = () => {
+		if (isPlainRecord(currentSchema) && isPlainRecord(currentSchema.items)) {
+			currentSchema = currentSchema.items;
+		} else {
+			currentSchema = undefined;
+		}
+	};
+
+	while (i < path.length) {
+		const ch = path[i];
+		if (ch === ".") {
+			i++;
+			let matchedSchemaKey: string | undefined;
+			if (isPlainRecord(currentSchema) && isPlainRecord(currentSchema.properties)) {
+				for (const candidate of Object.keys(currentSchema.properties)) {
+					if (
+						(candidate.includes(".") || candidate.includes("[") || candidate.includes("{")) &&
+						path.startsWith(candidate, i)
+					) {
+						const after = i + candidate.length;
+						if (after === path.length || path[after] === "." || path[after] === "[" || path[after] === "{") {
+							if (!matchedSchemaKey || candidate.length > matchedSchemaKey.length) {
+								matchedSchemaKey = candidate;
+							}
+						}
+					}
+				}
+			}
+			if (matchedSchemaKey !== undefined) {
+				i += matchedSchemaKey.length;
+				segments.push({ kind: "member", key: matchedSchemaKey });
+				advanceMemberSchema(matchedSchemaKey);
+				continue;
+			}
+			const start = i;
+			while (i < path.length && path[i] !== "." && path[i] !== "[" && path[i] !== "{") {
+				i++;
+			}
+			const key = path.slice(start, i);
+			if (key.length > 0) {
+				segments.push({ kind: "member", key });
+				advanceMemberSchema(key);
+			}
+		} else if (ch === "[") {
+			i++;
+			if (path[i] === '"' || path[i] === "'") {
+				const quote = path[i++];
+				let key = "";
+				while (i < path.length && path[i] !== quote) {
+					if (path[i] === "\\" && i + 1 < path.length) {
+						i++;
+					}
+					key += path[i++];
+				}
+				if (path[i] === quote) i++;
+				if (path[i] === "]") i++;
+				segments.push({ kind: "member", key });
+				advanceMemberSchema(key);
+			} else {
+				const start = i;
+				while (i < path.length && path[i] !== "]") i++;
+				const indexStr = path.slice(start, i);
+				if (path[i] === "]") i++;
+				const index = Number.parseInt(indexStr, 10);
+				if (Number.isInteger(index) && index >= 0) {
+					segments.push({ kind: "element", index });
+					advanceElementSchema();
+				}
+			}
+		} else {
+			const start = i;
+			while (i < path.length && path[i] !== "." && path[i] !== "[" && path[i] !== "{") {
+				i++;
+			}
+			const key = path.slice(start, i);
+			if (key.length > 0) {
+				segments.push({ kind: "member", key });
+				advanceMemberSchema(key);
+			}
+		}
+	}
+
+	return { segments, containerHint };
+}
+
+/**
+ * Incremental accumulator for Vertex `streamFunctionCallArguments` (`PartialArg[]`).
+ *
+ * Updates a spine-cloned `arguments` snapshot in O(depth + delta) time per chunk
+ * (never re-parsing the accumulated string) while emitting compatible JSON
+ * `toolcall_delta` text chunks.
+ */
+export class GooglePartialArgsStream {
+	#schema: unknown;
+	#root: Record<string, any>;
+	#openStringPaths = new Set<string>();
+	#stack: Array<{ kind: "object" | "array"; segment?: GooglePartialArgPathSegment; hasEntries: boolean }> = [];
+	#openStringPath: string | undefined;
+	#started = false;
+
+	constructor(schema?: unknown, initialArgs?: Record<string, any>) {
+		this.#schema = schema;
+		this.#root = initialArgs && isPlainRecord(initialArgs) ? { ...initialArgs } : {};
+	}
+
+	setSchema(schema: unknown): void {
+		this.#schema = schema;
+	}
+
+	get arguments(): Record<string, any> {
+		return this.#root;
+	}
+
+	append(partialArgs: readonly PartialArg[]): { delta: string; arguments: Record<string, any> } {
+		let delta = "";
+		let nextRoot = this.#root;
+
+		for (const arg of partialArgs) {
+			const rawPath = typeof arg?.jsonPath === "string" ? arg.jsonPath : undefined;
+			const parsed = parseGooglePartialArgPath(rawPath, this.#schema);
+			if (!parsed || parsed.segments.length === 0) continue;
+			const { segments, containerHint } = parsed;
+
+			nextRoot = this.#applyToTree(nextRoot, rawPath, segments, containerHint, arg);
+			delta += this.#emitDelta(rawPath, segments, containerHint, arg);
+		}
+
+		this.#root = nextRoot;
+		return { delta, arguments: this.#root };
+	}
+
+	finish(): { delta: string; arguments: Record<string, any> } {
+		let delta = "";
+		if (this.#openStringPath !== undefined) {
+			delta += '"';
+			this.#openStringPath = undefined;
+		}
+		if (!this.#started) {
+			delta = JSON.stringify(this.#root);
+			this.#started = true;
+		} else {
+			while (this.#stack.length > 0) {
+				const popped = this.#stack.pop()!;
+				delta += popped.kind === "array" ? "]" : "}";
+			}
+		}
+		this.#openStringPaths.clear();
+		return { delta, arguments: this.#root };
+	}
+
+	#applyToTree(
+		root: Record<string, any>,
+		rawPath: string | undefined,
+		segments: readonly GooglePartialArgPathSegment[],
+		containerHint: "array" | "object" | undefined,
+		arg: PartialArg,
+	): Record<string, any> {
+		const clonedRoot: Record<string, any> = { ...root };
+		let curr: any = clonedRoot;
+
+		for (let d = 0; d < segments.length - 1; d++) {
+			const seg = segments[d]!;
+			const nextSeg = segments[d + 1]!;
+			const existing =
+				seg.kind === "member" ? (Object.hasOwn(curr, seg.key) ? curr[seg.key] : undefined) : curr[seg.index];
+			const child =
+				nextSeg.kind === "element"
+					? Array.isArray(existing)
+						? existing.slice()
+						: []
+					: isPlainRecord(existing)
+						? { ...existing }
+						: {};
+			if (seg.kind === "member") {
+				setRecordMember(curr, seg.key, child);
+			} else {
+				curr[seg.index] = child;
+			}
+			curr = child;
+		}
+
+		const last = segments[segments.length - 1]!;
+		const existing =
+			last.kind === "member" ? (Object.hasOwn(curr, last.key) ? curr[last.key] : undefined) : curr[last.index];
+
+		let nextValue: unknown;
+		if (containerHint === "array") {
+			nextValue = Array.isArray(existing) ? existing : [];
+		} else if (containerHint === "object") {
+			nextValue = isPlainRecord(existing) ? existing : {};
+		} else if (typeof arg.stringValue === "string") {
+			const continuing = rawPath !== undefined && this.#openStringPaths.has(rawPath) && typeof existing === "string";
+			nextValue = continuing ? existing + arg.stringValue : arg.stringValue;
+			if (rawPath !== undefined) {
+				if (arg.willContinue === true) {
+					this.#openStringPaths.add(rawPath);
+				} else {
+					this.#openStringPaths.delete(rawPath);
+				}
+			}
+		} else if (typeof arg.numberValue === "number") {
+			nextValue = arg.numberValue;
+		} else if (typeof arg.boolValue === "boolean") {
+			nextValue = arg.boolValue;
+		} else if ("nullValue" in arg && arg.nullValue !== undefined) {
+			nextValue = null;
+		} else {
+			if (rawPath !== undefined) {
+				this.#openStringPaths.delete(rawPath);
+			}
+			nextValue = existing !== undefined ? existing : "";
+		}
+
+		if (last.kind === "member") {
+			setRecordMember(curr, last.key, nextValue);
+		} else {
+			curr[last.index] = nextValue;
+		}
+
+		return clonedRoot;
+	}
+
+	#emitDelta(
+		rawPath: string | undefined,
+		segments: readonly GooglePartialArgPathSegment[],
+		containerHint: "array" | "object" | undefined,
+		arg: PartialArg,
+	): string {
+		let delta = "";
+		const hasValue =
+			typeof arg.stringValue === "string" ||
+			typeof arg.numberValue === "number" ||
+			typeof arg.boolValue === "boolean" ||
+			("nullValue" in arg && arg.nullValue !== undefined);
+
+		if (this.#openStringPath !== undefined) {
+			if (this.#openStringPath === rawPath && !containerHint && (typeof arg.stringValue === "string" || !hasValue)) {
+				if (typeof arg.stringValue === "string" && arg.stringValue.length > 0) {
+					delta += JSON.stringify(arg.stringValue).slice(1, -1);
+				}
+				if (!arg.willContinue) {
+					delta += '"';
+					this.#openStringPath = undefined;
+				}
+				return delta;
+			}
+			delta += '"';
+			this.#openStringPath = undefined;
+		}
+
+		if (!this.#started) {
+			delta += "{";
+			this.#stack.push({ kind: "object", hasEntries: false });
+			this.#started = true;
+		}
+
+		if (containerHint) {
+			let matchesOpenContainer = this.#stack.length >= segments.length + 1;
+			if (matchesOpenContainer) {
+				for (let d = 0; d < segments.length; d++) {
+					if (!samePathSegment(this.#stack[d + 1]?.segment, segments[d])) {
+						matchesOpenContainer = false;
+						break;
+					}
+				}
+			}
+			if (matchesOpenContainer) {
+				while (this.#stack.length > segments.length) {
+					const popped = this.#stack.pop()!;
+					delta += popped.kind === "array" ? "]" : "}";
+				}
+				return delta;
+			}
+		}
+
+		let commonDepth = 0;
+		const parentDepth = segments.length - 1;
+		while (
+			commonDepth < parentDepth &&
+			commonDepth + 1 < this.#stack.length &&
+			samePathSegment(this.#stack[commonDepth + 1]?.segment, segments[commonDepth])
+		) {
+			commonDepth++;
+		}
+		while (this.#stack.length - 1 > commonDepth) {
+			const popped = this.#stack.pop()!;
+			delta += popped.kind === "array" ? "]" : "}";
+		}
+
+		for (let d = commonDepth; d < parentDepth; d++) {
+			const seg = segments[d]!;
+			const nextSeg = segments[d + 1]!;
+			const parent = this.#stack[this.#stack.length - 1]!;
+			if (parent.hasEntries) delta += ",";
+			parent.hasEntries = true;
+			if (seg.kind === "member") {
+				delta += `${JSON.stringify(seg.key)}:`;
+			}
+			const childKind = nextSeg.kind === "element" ? "array" : "object";
+			delta += childKind === "array" ? "[" : "{";
+			this.#stack.push({ kind: childKind, segment: seg, hasEntries: false });
+		}
+
+		const last = segments[parentDepth]!;
+		const parent = this.#stack[this.#stack.length - 1]!;
+		if (parent.hasEntries) delta += ",";
+		parent.hasEntries = true;
+		if (last.kind === "member") {
+			delta += `${JSON.stringify(last.key)}:`;
+		}
+
+		if (containerHint === "array") {
+			delta += "[]";
+		} else if (containerHint === "object") {
+			delta += "{}";
+		} else if (typeof arg.stringValue === "string") {
+			if (arg.willContinue) {
+				delta += `"${JSON.stringify(arg.stringValue).slice(1, -1)}`;
+				this.#openStringPath = rawPath;
+			} else {
+				delta += JSON.stringify(arg.stringValue);
+			}
+		} else if (typeof arg.numberValue === "number") {
+			delta += String(arg.numberValue);
+		} else if (typeof arg.boolValue === "boolean") {
+			delta += String(arg.boolValue);
+		} else if ("nullValue" in arg && arg.nullValue !== undefined) {
+			delta += "null";
+		} else {
+			delta += '""';
+		}
+
+		return delta;
+	}
 }

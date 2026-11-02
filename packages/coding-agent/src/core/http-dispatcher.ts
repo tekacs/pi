@@ -15,6 +15,8 @@ export const HTTP_IDLE_TIMEOUT_CHOICES = [
 
 const originalGlobalFetch = globalThis.fetch;
 let installedGlobalFetch: typeof globalThis.fetch | undefined;
+let currentHttpIdleTimeoutMs = DEFAULT_HTTP_IDLE_TIMEOUT_MS;
+const MAX_BUN_HTTP_IDLE_TIMEOUT_SECONDS = 14_340;
 
 export function parseHttpIdleTimeoutMs(value: unknown): number | undefined {
 	if (typeof value === "string") {
@@ -83,6 +85,14 @@ export function configureHttpDispatcher(timeoutMs: number = DEFAULT_HTTP_IDLE_TI
 	if (normalizedTimeoutMs === undefined) {
 		throw new Error(`Invalid HTTP idle timeout: ${String(timeoutMs)}`);
 	}
+	currentHttpIdleTimeoutMs = normalizedTimeoutMs;
+	// Bun's built-in undici stub ignores EnvHttpProxyAgent options; its native HTTPThread
+	// reads BUN_CONFIG_HTTP_IDLE_TIMEOUT (in seconds, 0 = disabled, max 14340) on first fetch.
+	const bunTimeoutSeconds =
+		normalizedTimeoutMs === 0
+			? 0
+			: Math.min(MAX_BUN_HTTP_IDLE_TIMEOUT_SECONDS, Math.max(1, Math.ceil(normalizedTimeoutMs / 1000)));
+	process.env.BUN_CONFIG_HTTP_IDLE_TIMEOUT = String(bunTimeoutSeconds);
 	const dispatcher = withUndiciErrorListener(
 		new undici.EnvHttpProxyAgent({
 			allowH2: false,
@@ -107,7 +117,22 @@ export function configureHttpDispatcher(timeoutMs: number = DEFAULT_HTTP_IDLE_TI
 			? globalThis.fetch === originalGlobalFetch
 			: globalThis.fetch === installedGlobalFetch;
 	if (shouldInstallGlobals) {
-		undici.install?.();
-		installedGlobalFetch = globalThis.fetch;
+		if ("Bun" in globalThis && typeof undici.install !== "function") {
+			const bunFetch = ((
+				input: Parameters<typeof globalThis.fetch>[0],
+				init?: Parameters<typeof globalThis.fetch>[1],
+			) => {
+				if (currentHttpIdleTimeoutMs === 0) {
+					return originalGlobalFetch(input, { ...init, timeout: false } as Parameters<typeof globalThis.fetch>[1]);
+				}
+				return originalGlobalFetch(input, init);
+			}) as typeof globalThis.fetch;
+			Object.assign(bunFetch, originalGlobalFetch);
+			globalThis.fetch = bunFetch;
+			installedGlobalFetch = globalThis.fetch;
+		} else {
+			undici.install?.();
+			installedGlobalFetch = globalThis.fetch;
+		}
 	}
 }
