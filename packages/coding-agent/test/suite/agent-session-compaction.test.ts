@@ -712,6 +712,55 @@ describe("AgentSession compaction characterization", () => {
 		expect(harness.faux.state.callCount).toBe(4);
 	});
 
+	it("aborts the active run when auto-compaction is cancelled mid-turn instead of sending an uncompacted continuation", async () => {
+		const largeTool: AgentTool = {
+			name: "large_result",
+			label: "Large result",
+			description: "Returns enough content to cross the compaction threshold",
+			parameters: Type.Object({}),
+			execute: async () => ({
+				content: [{ type: "text", text: `large-tool-result:${"x".repeat(6800)}` }],
+				details: {},
+			}),
+		};
+		let markCompactionStarted = () => {};
+		const compactionStarted = new Promise<void>((resolve) => {
+			markCompactionStarted = resolve;
+		});
+		const harness = await createHarness({
+			models: [{ id: "faux-1", contextWindow: 2600, maxTokens: 100 }],
+			settings: { compaction: { enabled: true, reserveTokens: 400, keepRecentTokens: 1750 } },
+			tools: [largeTool],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async (event) => {
+						markCompactionStarted();
+						await new Promise<void>((resolve) => {
+							event.signal.addEventListener("abort", () => resolve(), { once: true });
+						});
+						return { cancel: true };
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([
+			fauxAssistantMessage(`old-history:${"a".repeat(800)}`),
+			fauxAssistantMessage(`recent-history:${"b".repeat(800)}`),
+			fauxAssistantMessage(fauxToolCall("large_result", {}), { stopReason: "toolUse" }),
+			fauxAssistantMessage("must not be called after abortCompaction"),
+		]);
+
+		await harness.session.prompt("seed old history");
+		await harness.session.prompt("seed recent history");
+		const promptPromise = harness.session.prompt("run the large tool");
+		await compactionStarted;
+		harness.session.abortCompaction();
+		await promptPromise;
+
+		expect(harness.faux.state.callCount).toBe(3);
+	});
+
 	it("does not compact after a terminating tool result", async () => {
 		const terminatingTool: AgentTool = {
 			name: "terminate_with_large_result",
