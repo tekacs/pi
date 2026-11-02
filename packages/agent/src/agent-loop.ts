@@ -193,6 +193,7 @@ async function runLoop(
 			let preparedMessages: AgentMessage[] = [];
 			if (lastCompletedTurn) {
 				const nextTurnSnapshot = await config.prepareNextTurn?.(lastCompletedTurn);
+				if (signal?.aborted) break;
 				if (nextTurnSnapshot) {
 					currentContext = nextTurnSnapshot.context ?? currentContext;
 					preparedMessages = nextTurnSnapshot.messages ?? [];
@@ -314,6 +315,8 @@ async function runLoop(
 				explicitContinuation = false;
 			}
 		}
+
+		if (signal?.aborted) break;
 
 		// Agent would stop here. Check for follow-up messages.
 		const followUpMessages = (await config.getFollowUpMessages?.()) || [];

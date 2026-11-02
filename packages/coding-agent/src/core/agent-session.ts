@@ -3176,8 +3176,13 @@ export class AgentSession {
 	 * Cancel in-progress compaction (manual or auto).
 	 */
 	abortCompaction(): void {
+		const abortingAutoCompaction = this._autoCompactionAbortController !== undefined;
 		this._compactionAbortController?.abort();
 		this._autoCompactionAbortController?.abort();
+		if (abortingAutoCompaction && this._isAgentRunActive) {
+			this._agentRunAbortRequested = true;
+			this.agent.abort();
+		}
 	}
 
 	/**
