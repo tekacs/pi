@@ -72,8 +72,35 @@ interface ImportedMessage {
 	content: Record<string, unknown>[];
 }
 
+type AssistantBlock = Extract<Message, { role: "assistant" }>["content"][number];
+type ThinkingBlock = Extract<AssistantBlock, { type: "thinking" }>;
+
+/**
+ * Reasoning replays natively only when Anthropic signed it for the model being
+ * resumed. Any other reasoning (another provider or model, or an interrupted
+ * unsigned fragment) stays readable but is labelled as reasoning: as bare reply
+ * text it teaches the model to narrate its thinking inside replies.
+ */
+function reasoning(
+	message: Extract<Message, { role: "assistant" }>,
+	block: ThinkingBlock,
+	model: string | undefined,
+): Record<string, unknown>[] {
+	const native = model !== undefined && message.api === CLAUDE_AGENT_SDK_API && message.model === model;
+	const signature = block.thinkingSignature;
+	if (native && signature && block.redacted) return [{ type: "redacted_thinking", data: signature }];
+	if (native && signature && block.thinking) return [{ type: "thinking", thinking: block.thinking, signature }];
+	if (block.redacted || !block.thinking) return [];
+	return [{ type: "text", text: `[Earlier reasoning, not part of that reply]\n${block.thinking}` }];
+}
+
 /** Reconstruct records, never execute historical calls or manufacture reasoning signatures. */
-export function importHistory(history: readonly Message[], parent: string | null = null): SessionStoreEntry[] {
+export function importHistory(
+	history: readonly Message[],
+	parent: string | null = null,
+	/** Model being resumed; only its own signed reasoning replays natively. */
+	model?: string,
+): SessionStoreEntry[] {
 	const messages: ImportedMessage[] = [];
 	const calls = new Map<string, { name: string; id: string }>();
 	const ids = new Set<string>();
@@ -108,9 +135,8 @@ export function importHistory(history: readonly Message[], parent: string | null
 			const content: ImportedMessage["content"] = [];
 			for (const block of message.content) {
 				if (block.type === "text") content.push({ type: "text", text: block.text });
-				else if (block.type === "thinking") {
-					if (!block.redacted && block.thinking) content.push({ type: "text", text: block.thinking });
-				} else {
+				else if (block.type === "thinking") content.push(...reasoning(message, block, model));
+				else {
 					const normalized = /^[a-zA-Z0-9_-]{1,64}$/.test(block.id)
 						? block.id
 						: `pi_${createHash("sha256").update(block.id).digest("hex").slice(0, 60)}`;

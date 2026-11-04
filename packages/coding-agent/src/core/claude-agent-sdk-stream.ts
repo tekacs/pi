@@ -302,7 +302,7 @@ async function startSdkInvocation(
 	const store = new ClaudeStore(options.nativeRoot ?? memory);
 	const prefix = new ClaudePrefix([]);
 	const { checkpoint, count, imported } = selectHistory(store, history, prefix);
-	let seed = importHistory(imported, checkpoint?.cursor);
+	let seed = importHistory(imported, checkpoint?.cursor, model.id);
 	let cursor = seed.at(-1)?.uuid ?? checkpoint?.cursor;
 	const continues =
 		imported.length === 0 &&
@@ -335,7 +335,7 @@ async function startSdkInvocation(
 		} catch (error) {
 			if (options.signal?.aborted) throw error;
 			// Pre-inference only: no historical effects execute and no failed query is retried.
-			seed = importHistory(history.slice(0, count));
+			seed = importHistory(history.slice(0, count), null, model.id);
 			cursor = seed.at(-1)?.uuid;
 			continuation = seed.length ? store.stage(seed) : { sessionStore: store };
 		}

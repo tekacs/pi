@@ -82,7 +82,7 @@ describe("structured conversation reconstruction", () => {
 			type: "assistant",
 			message: {
 				content: [
-					{ type: "text", text: "visible foreign thought" },
+					{ type: "text", text: "[Earlier reasoning, not part of that reply]\nvisible foreign thought" },
 					{ type: "text", text: "before tool" },
 					{ type: "tool_use", id, name: "mcp__pi__old_tool", input: { value: 7 } },
 				],
@@ -166,6 +166,32 @@ describe("structured conversation reconstruction", () => {
 		expect(selected.checkpoint?.cursor).toBe("cursor");
 		expect(selected.imported).toEqual(suffix);
 		expect(selected.count).toBe(5);
+	});
+
+	it("replays the resumed model's own signed reasoning natively and never as reply text", () => {
+		const native = assistant(
+			[
+				{ type: "thinking", thinking: "own signed thought", thinkingSignature: "sig-opus" },
+				{ type: "thinking", thinking: "", thinkingSignature: "opaque-opus", redacted: true },
+				{ type: "text", text: "the reply" },
+			],
+			true,
+		);
+		const content = (records: ReturnType<typeof importHistory>) =>
+			(records[1].message as { content: Record<string, unknown>[] }).content;
+		expect(content(importHistory([user, native], null, "opus"))).toEqual([
+			{ type: "thinking", thinking: "own signed thought", signature: "sig-opus" },
+			{ type: "redacted_thinking", data: "opaque-opus" },
+			{ type: "text", text: "the reply" },
+		]);
+		// Signatures are model-bound: switching to another Claude model labels rather than replays.
+		const switched = content(importHistory([user, native], null, "claude-fable-5-1"));
+		expect(switched).toEqual([
+			{ type: "text", text: "[Earlier reasoning, not part of that reply]\nown signed thought" },
+			{ type: "text", text: "the reply" },
+		]);
+		expect(JSON.stringify(switched)).not.toContain("sig-opus");
+		expect(JSON.stringify(switched)).not.toContain("opaque-opus");
 	});
 
 	it("retains interrupted content without its signature and includes it in the fingerprint", async () => {
