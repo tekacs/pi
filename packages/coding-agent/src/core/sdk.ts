@@ -22,6 +22,7 @@ import { createToolNameMatcher } from "./mcp-servers.ts";
 import { convertToLlm } from "./messages.ts";
 import { findInitialModel } from "./model-resolver.ts";
 import { ModelRuntime } from "./model-runtime.ts";
+import { guardNetwork } from "./network-liveness.ts";
 import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
@@ -421,7 +422,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			messages: existingSession.messages,
 		},
 		convertToLlm: convertToLlmWithBlockImages,
-		streamFn: async (model, context, options) => {
+		// Every model request, native harness or direct provider, settles if its network path vanishes.
+		streamFn: guardNetwork(async (model, context, options) => {
 			modelRuntime.assertPurpose(model, options?.purpose);
 			// Auxiliary summary requests retain their own affinity. Native harnesses receive
 			// the same optional hint, without replacing their session or transport identity.
@@ -506,7 +508,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
 			}
 			return modelRuntime.streamSimple(model, context, requestOptions);
-		},
+		}),
 		onPayload: transformProviderPayload,
 		onResponse: handleProviderResponse,
 		onProviderStreamEvent: handleProviderStreamEvent,
