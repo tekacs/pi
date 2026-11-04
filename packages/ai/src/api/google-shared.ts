@@ -223,12 +223,16 @@ export function requiresToolCallId(modelId: string): boolean {
 }
 
 function getGeminiMajorVersion(modelId: string): number | undefined {
-	const match = modelId.toLowerCase().match(/^gemini(?:-live)?-(\d+)/);
+	const match = modelId.toLowerCase().match(/(?:^|\/)gemini(?:-live)?-(\d+)/);
 	if (!match) return undefined;
 	return Number.parseInt(match[1], 10);
 }
 
 function supportsMultimodalFunctionResponse(modelId: string): boolean {
+	const lower = modelId.toLowerCase();
+	if (lower.includes("gemini-3") || lower.includes("gemini-4")) {
+		return true;
+	}
 	const geminiMajorVersion = getGeminiMajorVersion(modelId);
 	if (geminiMajorVersion !== undefined) {
 		return geminiMajorVersion >= 3;
