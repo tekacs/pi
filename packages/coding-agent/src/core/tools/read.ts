@@ -280,11 +280,11 @@ export function createReadToolDefinition(
 									resizeOptions: ctx?.model?.inputLimits?.images?.resize ?? fallbackResizeOptions,
 								});
 								if (!processed.ok) {
-									let textNote = `Read image file [${mimeType}]\n${processed.message}`;
+									let textNote = `Read image file [${mimeType}]: ${path}\n${processed.message}`;
 									if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
 									content = [{ type: "text", text: textNote }];
 								} else {
-									let textNote = `Read image file [${processed.mimeType}]`;
+									let textNote = `Read image file [${processed.mimeType}]: ${path}`;
 									if (processed.hints.length > 0) textNote += `\n${processed.hints.join("\n")}`;
 									if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;
 									content = [

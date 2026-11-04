@@ -638,7 +638,7 @@ describe("codemode options and store", () => {
 		);
 		expect(result.isError).toBe(false);
 		expect(checkSavedImages(resultText(result))).toBe(
-			"==> text 1/2 <==\nhello\n==> text 2/2 <==\nRead image file [image/png]\n<saved>\n<image>",
+			"==> text 1/2 <==\nhello\n==> text 2/2 <==\nRead image file [image/png]: pixel.png\n<saved>\n<image>",
 		);
 		expect(result.content.at(-1)).toEqual({ type: "image", data: TINY_PNG_BASE64, mimeType: "image/png" });
 	});
