@@ -197,9 +197,9 @@ describe("real Pi provider transitions into Claude", () => {
 		settled(cold.session);
 		expect(endpoint.requests).toHaveLength(7);
 		const recovered = JSON.stringify(endpoint.requests[6].messages);
-		expect(recovered).toContain("Native private reasoning.");
-		expect(recovered).not.toContain("native-signature");
-		expect(recovered).not.toContain("native-opaque-reasoning");
+		// Recovery stages the model's own signed reasoning as thinking; it never becomes reply text.
+		expect(recovered).not.toMatch(/"type":"text","text":"[^"]*Native private reasoning/);
+		expect(recovered).toContain("[Earlier reasoning, not part of that reply]\\nVisible foreign reasoning.");
 		expect(recovered).toContain("Foreign turn before loss");
 		expect(effects).toBe(4);
 	}, 60_000);
