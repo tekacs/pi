@@ -246,8 +246,8 @@ describe("Claude conversation recovery", () => {
 			settled(recovered.session);
 			const input = JSON.stringify(endpoint.requests[1].messages);
 			expect(input).toContain("Durable native response.");
-			expect(input).toContain("Readable native reasoning.");
-			expect(input).not.toContain("native-secret");
+			// The model's own signed reasoning is staged as thinking, never as reply text.
+			expect(input).not.toMatch(/"type":"text","text":"[^"]*Readable native reasoning/);
 			await recovered.session.prompt("Continue again.");
 			settled(recovered.session);
 			expect(endpoint.requests).toHaveLength(3);
