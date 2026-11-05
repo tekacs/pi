@@ -4,12 +4,18 @@
 
 ### Added
 
+- Added optional `Usage.entryPrompt` reporting the first request's prompt token split, so cache-hit analysis stays meaningful for providers whose billing usage aggregates an internal request loop.
+- Added optional `Usage.contextTokens` reporting for providers whose billing usage aggregates multiple internal requests while only the final request occupies the active model context.
 - Anthropic requests with a `sessionId` (and `cacheRetention` not `"none"`) now use message threads (`message-threads-2026-08-12` beta): the server continues from the previous reply and pi sends only the new messages instead of the whole conversation. When anything earlier in the request changed, or the server can't continue the thread, the full request is sent. Token counts and prompt caching are unchanged. On by default only for the `anthropic` provider on `api.anthropic.com`; set `compat.supportsMessageThreads` to change that, for example for gateways that forward the `thread` field. Call `cleanupSessionResources(sessionId)` when a session ends to free the per-session state ([#11545](https://github.com/earendil-works/pi/pull/11545))
 - Added `StreamOptions.disableContinuation`, which keeps a request from using or replacing server-side continuation state such as Anthropic message threads. Set it on requests that repeat an earlier one, such as cache warming ([#11545](https://github.com/earendil-works/pi/pull/11545))
 - Added `@earendil-works/pi-ai/lazy-oauth` (`registerLazyOAuthFlows()`) and `@earendil-works/pi-ai/lazy-bedrock-provider` (`registerLazyBedrockProvider()`, built on the new `setBedrockProviderLoader()`) for Node bundles that split at dynamic imports: the OAuth login flows and Bedrock load through literal dynamic imports, so the bundler keeps them inside the bundle as chunks that load on first use, instead of through the variable-specifier imports that load pi-ai's own files at runtime. Nothing changes without calling them.
 
 ### Fixed
 
+- Fixed GPT-5.6 OpenAI Responses requests to place an explicit breakpoint after the stable system prefix while retaining OpenAI's managed rolling breakpoint, and to omit deprecated `prompt_cache_retention` for explicit-cache models.
+- Fixed explicit `Authorization` headers on Anthropic-compatible providers also sending stored `x-api-key` credentials.
+- Fixed Bedrock error normalization to ignore stream-like `$response.body` objects, so validation errors surface the actual message instead of a JSON dump of HTTP/2 stream internals.
+- Fixed OpenAI Responses reasoning summaries to remove empty `<!-- -->` placeholders while preserving their status headings.
 - Fixed OpenCode Go Claude Haiku 5.5 failing with a 400 (`Invalid signature in thinking block ... bound to a different conversation`) after the tool list, system prompt, or earlier history changed, which left the session failing on every retry. OpenCode Go and Zen Claude 5.5 models, Opus 5, and Fable 5.1 now use per-message effort and send `thinking.block_binding: drop_block`, like the Anthropic provider ([#10954](https://github.com/earendil-works/pi/issues/10954))
 - Fixed Anthropic non-strict tool schemas dropping root `$defs` and `definitions`, which left property `$ref`s pointing at nothing. Claude then produced wrong arguments for such tools (common in MCP servers), for example a JSON string instead of an object, and some Anthropic-compatible gateways rejected the request outright ([#9557](https://github.com/earendil-works/pi/issues/9557))
 - Fixed OpenRouter rejecting requests with a 400 (`This endpoint's maximum context length is ...`) for models whose output limit is close to the context window, such as DeepSeek flash. OpenRouter counts the input with its own tokenizer, which can be several percent higher than the provider's count, and pi left only 4,096 tokens spare. pi then treated the 400 as a context overflow and compacted the session, even at around 20% of the window. The default output limit now leaves 15% of the estimated input unused, and near a full window at most 32,768 output tokens are requested ([#10497](https://github.com/earendil-works/pi/issues/10497))
@@ -266,10 +272,6 @@
 - Fixed context overflow detection for Z.AI CN endpoint `Prompt exceeds max length` errors ([#10208](https://github.com/earendil-works/pi/issues/10208))
 - Fixed Anthropic requests failing when a `strict: "prefer"` tool schema uses keywords Anthropic strict tool use rejects, such as `minimum`/`maximum`; such tools are now sent non-strict ([#9953](https://github.com/earendil-works/pi/issues/9953))
 - Fixed provider retries firing immediately when a `Retry-After` header contains an unparseable date; they now use exponential backoff ([#9571](https://github.com/earendil-works/pi/issues/9571))
-
-### Fixed
-
-- Fixed GPT-5.6 OpenAI Responses requests to place an explicit breakpoint after the stable system prefix while retaining OpenAI's managed rolling breakpoint, and to omit deprecated `prompt_cache_retention` for explicit-cache models.
 
 ## [0.99.1] - 2026-09-29
 
@@ -654,16 +656,11 @@
 - Added `ModelsStoreEntry.etag` so persisted provider catalogs can carry the remote ETag validator for conditional refreshes.
 - Added `ANTHROPIC_AUTH_TOKEN` bearer authentication for Anthropic-compatible gateways ([#5871](https://github.com/earendil-works/pi/issues/5871))
 - Added Claude Opus 5 support for Anthropic and Amazon Bedrock with adaptive thinking, inference profiles, prompt caching, and preserved AWS validation messages ([#7081](https://github.com/earendil-works/pi/pull/7081) by [@unexge](https://github.com/unexge), [#7083](https://github.com/earendil-works/pi/pull/7083) by [@davidbrai](https://github.com/davidbrai)).
-- Added optional `Usage.entryPrompt` reporting the first request's prompt token split, so cache-hit analysis stays meaningful for providers whose billing usage aggregates an internal request loop.
 
 ### Changed
 
 - Changed Radius OAuth device authorization, token exchange, and refresh requests to use the configured gateway directly.
 - Changed `ModelsError` messages to append the underlying cause, so auth failures such as `OAuth refresh failed for openai-codex` report the provider response instead of a bare wrapper message.
-
-### Fixed
-
-- Fixed explicit `Authorization` headers on Anthropic-compatible providers also sending stored `x-api-key` credentials.
 
 ## [0.82.0] - 2026-07-24
 
@@ -677,7 +674,6 @@
 - Added OpenRouter OAuth PKCE login that mints a user-controlled API key for chat and image providers ([#6927](https://github.com/earendil-works/pi/pull/6927) by [@rsaryev](https://github.com/rsaryev)).
 - Added `Tool.constrainedSampling` with strict JSON Schema (`prefer`/`require`) and OpenAI Lark/regex grammar variants, enforcing provider-side constrained tool sampling across OpenAI, Anthropic, Amazon Bedrock, Google Gemini, and Mistral. See [Constrained Sampling for Tools](README.md#constrained-sampling-for-tools).
 - Added `supportsGrammarTools` and `supportsStrictTools` compatibility flags, expanded `supportsStrictMode` to Responses and Bedrock models, and generated model capability metadata to gate constrained sampling.
-- Added optional `Usage.contextTokens` reporting for providers whose billing usage aggregates multiple internal requests while only the final request occupies the active model context.
 
 ### Changed
 
@@ -692,8 +688,6 @@
 - Fixed OpenAI Codex WebSocket sessions to retry once without a missing previous-response continuation after `previous_response_not_found` errors ([#6955](https://github.com/earendil-works/pi/pull/6955) by [@davidbrai](https://github.com/davidbrai)).
 - Fixed OpenAI and Anthropic provider retry waits to honor abort signals and configured delay limits ([#6980](https://github.com/earendil-works/pi/pull/6980) by [@petrroll](https://github.com/petrroll)).
 - Fixed OpenRouter Anthropic cache breakpoints to advance through tool results and enabled cache control for `~anthropic/*-latest` aliases ([#6941](https://github.com/earendil-works/pi/pull/6941) by [@mteam88](https://github.com/mteam88)).
-- Fixed Bedrock error normalization to ignore stream-like `$response.body` objects, so validation errors surface the actual message instead of a JSON dump of HTTP/2 stream internals.
-- Fixed OpenAI Responses reasoning summaries to remove empty `<!-- -->` placeholders while preserving their status headings.
 
 ## [0.81.1] - 2026-07-21
 
