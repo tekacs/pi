@@ -126,6 +126,52 @@ function buildTree(entries: Array<SessionEntry>): SessionTreeNode[] {
 }
 
 describe("TreeSelectorComponent", () => {
+	test.each(["default", "no-tools", "all"] as const)(
+		"hidden notices remain inspectable only in all mode (%s)",
+		(mode) => {
+			const entries: SessionEntry[] = [
+				userMessage("user", null, "My request"),
+				{
+					type: "custom_message",
+					id: "visible",
+					parentId: "user",
+					timestamp: new Date().toISOString(),
+					customType: "test.notice",
+					content: "Visible notice",
+					display: true,
+				},
+				{
+					type: "custom_message",
+					id: "hidden",
+					parentId: "visible",
+					timestamp: new Date().toISOString(),
+					customType: "test.internal",
+					content: "Hidden payload",
+					display: false,
+				},
+			];
+			const selector = new TreeSelectorComponent(
+				buildTree(entries),
+				"hidden",
+				24,
+				() => {},
+				() => {},
+				undefined,
+				undefined,
+				mode,
+			);
+			const rendered = selector.getTreeList().render(200).map(stripVTControlCharacters).join("\n");
+			expect(rendered).toContain("Visible notice");
+			if (mode === "all") {
+				expect(rendered).toContain("Hidden payload");
+				expect(selector.getTreeList().getSelectedNode()?.entry.id).toBe("hidden");
+			} else {
+				expect(rendered).not.toContain("Hidden payload");
+				expect(selector.getTreeList().getSelectedNode()?.entry.id).toBe("visible");
+			}
+		},
+	);
+
 	describe("initial selection with metadata entries", () => {
 		test("focuses nearest visible ancestor when currentLeafId is a model_change with sibling branch", () => {
 			// Tree structure:

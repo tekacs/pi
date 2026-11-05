@@ -4507,8 +4507,8 @@ export class AgentSession {
 				// User message: leaf = parent (null if root), text goes to editor
 				newLeafId = targetEntry.parentId;
 				editorText = contentText(targetEntry.message.content, "");
-			} else if (targetEntry.type === "custom_message") {
-				// Custom message: leaf = parent (null if root), text goes to editor
+			} else if (targetEntry.type === "custom_message" && targetEntry.display) {
+				// Visible custom messages may be recalled; hidden extension context is never editor input.
 				newLeafId = targetEntry.parentId;
 				editorText = contentText(targetEntry.content, "");
 			} else {
