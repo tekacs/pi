@@ -30,6 +30,7 @@
 
 ### Fixed
 
+- Updated the MCP SDK used by the Claude Agent SDK integration to 1.32.2 for security fixes.
 - Fixed the Cerebras default referencing a model no longer present in its generated catalog.
 - Fixed the footer cache hit rate and cache-miss notices on the Claude Agent SDK provider, which measured the summed internal request loop and so reported near-total hits through a cold cache while missing or inventing waste.
 - Fixed Claude Agent SDK per-bucket token costs to reconcile with the billed turn total instead of mixing model list pricing with the reported total.
