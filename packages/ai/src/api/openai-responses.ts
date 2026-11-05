@@ -349,8 +349,9 @@ function buildParams(
 		model: model.id,
 		input: messages,
 		stream: true,
-		prompt_cache_key:
-			sendPromptCacheKey ? clampOpenAIPromptCacheKey(options?.cacheKey ?? options?.sessionId) : undefined,
+		prompt_cache_key: sendPromptCacheKey
+			? clampOpenAIPromptCacheKey(options?.cacheKey ?? options?.sessionId)
+			: undefined,
 		prompt_cache_retention: omitUnsupportedFields ? undefined : getPromptCacheRetention(compat, cacheRetention),
 		prompt_cache_options: omitUnsupportedFields ? undefined : getPromptCacheOptions(compat, cacheRetention),
 		store: false,

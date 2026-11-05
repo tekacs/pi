@@ -41,6 +41,7 @@ const baseCompat: Omit<
 	supportsStrictMode: true,
 	supportsOpenAIGrammarTools: false,
 	supportsMidConvoSystemMessages: false,
+	supportsMidConvoEffort: false,
 	supportsMidConvoToolAdditions: false,
 	cacheControlFormat: "anthropic",
 	sendSessionAffinityHeaders: false,
