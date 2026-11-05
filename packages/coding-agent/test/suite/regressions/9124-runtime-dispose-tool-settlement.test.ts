@@ -69,7 +69,9 @@ describe("regression #9124: runtime disposal during tool execution", () => {
 				.filter((entry) => entry.type === "message")
 				.map((entry) => entry.message)
 				.filter((message) => message.role !== "system");
-			expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "assistant"]);
+			expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult"]);
+			// Cancellation settles the tool without submitting another provider request.
+			expect(harness.faux.state.callCount).toBe(1);
 			expect(messages[2]).toMatchObject({
 				role: "toolResult",
 				content: [{ type: "text", text: "Operation aborted" }],

@@ -14,7 +14,10 @@ import { ModelCostSchema } from "./model-schema.ts";
 import { openObject, stringLiteral, stringRecord } from "./schema-builders.ts";
 
 function sessionAffinityFormat(options?: Annotations<"openai" | "openai-nosession" | "openrouter" | "meta">) {
-	return union([stringLiteral("openai"), stringLiteral("openai-nosession"), stringLiteral("openrouter"), stringLiteral("meta")], options);
+	return union(
+		[stringLiteral("openai"), stringLiteral("openai-nosession"), stringLiteral("openrouter"), stringLiteral("meta")],
+		options,
+	);
 }
 
 export const SessionAffinityFormatSchema = sessionAffinityFormat({
@@ -417,7 +420,8 @@ const OpenAIResponsesCompatProperties = {
 	),
 	supportsExplicitPromptCacheMode: opt(
 		bool({
-			description: "Whether the model accepts GPT-5.6+ prompt_cache_options and content-block prompt_cache_breakpoint controls. Older OpenAI models reject them.",
+			description:
+				"Whether the model accepts GPT-5.6+ prompt_cache_options and content-block prompt_cache_breakpoint controls. Older OpenAI models reject them.",
 			default: false,
 		}),
 	),

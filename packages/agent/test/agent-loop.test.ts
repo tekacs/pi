@@ -472,7 +472,7 @@ describe("agentLoop with AgentMessage", () => {
 
 	it("should forward provider-managed tool execution events without executing tools again", async () => {
 		let executions = 0;
-		const toolSchema = Type.Object({ value: Type.String() });
+		const toolSchema = obj({ value: str() });
 		const tool: AgentTool<typeof toolSchema> = {
 			name: "echo",
 			label: "Echo",

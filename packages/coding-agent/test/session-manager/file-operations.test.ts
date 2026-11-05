@@ -489,7 +489,11 @@ describe("SessionManager session file creation", () => {
 		const reopened = SessionManager.open(file, tempDir);
 		const secondId = reopened.appendMessage(assistantMsg("second answer"));
 		expect(reopened.getEntry(secondId)?.parentId).toBe(firstId);
-		expect(SessionManager.open(file, tempDir).getBranch().map((entry) => entry.id)).toEqual([firstId, secondId]);
+		expect(
+			SessionManager.open(file, tempDir)
+				.getBranch()
+				.map((entry) => entry.id),
+		).toEqual([firstId, secondId]);
 	});
 
 	it("does not keep an entry in memory when creating the file fails", () => {
