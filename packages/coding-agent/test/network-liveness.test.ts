@@ -2,7 +2,7 @@ import type { Api, AssistantMessage, Model, TranscriptContext } from "@earendil-
 import { isRetryableAssistantError } from "@earendil-works/pi-ai";
 import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AddressWatch, guardNetwork } from "../src/core/network-liveness.ts";
+import { AddressWatch, guardNetwork, internetAddress } from "../src/core/network-liveness.ts";
 
 const model = { id: "m", api: "openai-codex-responses", provider: "openai-codex" } as unknown as Model<Api>;
 const context = { messages: [] } as unknown as TranscriptContext;
@@ -57,8 +57,29 @@ afterEach(() => {
 });
 
 describe("network liveness guard", () => {
-	it("settles a request whose local address vanished as a retryable lost connection", async () => {
-		const net = addresses(["192.0.2.10", "192.0.2.20"]);
+	it("ignores link-local and loopback churn while an internet address stays up", async () => {
+		const net = addresses(["192.0.2.10", "fe80::1234", "febf::1", "169.254.1.2", "::1"]);
+		const watch = new AddressWatch(net.source, 60_000);
+		const lost = vi.fn();
+		const stop = watch.watch(lost);
+		net.set(["192.0.2.10"]);
+		watch.poll();
+		expect(lost).not.toHaveBeenCalled();
+		net.set([]);
+		watch.poll();
+		expect(lost).toHaveBeenCalledWith(["192.0.2.10"]);
+		stop();
+	});
+
+	it("recognizes the complete IPv6 link-local range without excluding global addresses", () => {
+		for (const address of ["fe80::1", "FE80::1%en0", "fe90::1", "feaf::1", "febf::1", "127.0.0.1", "::1"]) {
+			expect(internetAddress(address)).toBe(false);
+		}
+		for (const address of ["192.0.2.10", "2001:db8::1", "fd00::1"]) expect(internetAddress(address)).toBe(true);
+	});
+
+	it("settles a request when every starting address vanishes as a retryable lost connection", async () => {
+		const net = addresses(["192.0.2.20"]);
 		const watch = new AddressWatch(net.source, 60_000);
 		const stream = await guardNetwork(silentProvider({ honorAbort: true }), watch)(model, context, {});
 
@@ -69,6 +90,42 @@ describe("network liveness guard", () => {
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("192.0.2.20 was removed");
 		expect(isRetryableAssistantError(result)).toBe(true);
+	});
+
+	it("keeps concurrent provider requests alive through unrelated private IPv6 address churn", async () => {
+		const net = addresses(["192.0.2.10", "fd06:bd7e:6a9f::2"]);
+		const watch = new AddressWatch(net.source, 60_000);
+		const signals: AbortSignal[] = [];
+		const provider = (_model: Model<Api>, _context: unknown, options?: { signal?: AbortSignal }) => {
+			signals.push(options!.signal!);
+			return silentProvider({ honorAbort: true })(_model, _context, options);
+		};
+		const guarded = guardNetwork(provider, watch);
+		const first = await guarded(model, context, {});
+		net.set(["192.0.2.10", "fdf8:5fd8:6451::2"]);
+		watch.poll();
+		const second = await guarded(model, context, {});
+		net.set(["192.0.2.10", "fdc4:e5f3:8a00::2"]);
+		watch.poll();
+		expect(signals.map((signal) => signal.aborted)).toEqual([false, false]);
+
+		net.set([]);
+		watch.poll();
+		for (const stream of [first, second]) {
+			const result = await stream.result();
+			expect(result.stopReason).toBe("error");
+			expect(isRetryableAssistantError(result)).toBe(true);
+		}
+	});
+
+	it("does not infer a loss when no usable addresses existed at request start", () => {
+		const net = addresses([]);
+		const watch = new AddressWatch(net.source, 60_000);
+		const lost = vi.fn();
+		const stop = watch.watch(lost);
+		watch.poll();
+		expect(lost).not.toHaveBeenCalled();
+		stop();
 	});
 
 	it("keeps a user abort a user abort even if the network also changed", async () => {
