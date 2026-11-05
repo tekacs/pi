@@ -2,8 +2,31 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added explicit Claude Opus 5.5 selection to the Claude Agent SDK providers.
+- Added explicit Claude Fable 5.1 selection to the Claude Agent SDK providers while preserving the `fable` gateway alias on Fable 5.
+- Added atomic v2 context-projection frames, provider-exact hypothetical branch counting, and versioned projection capability checks for extension-owned context systems.
+- Added extension-owned context repair for manual and automatic compaction, with inspectable progress, cancellation, selected-branch rebuild, and overflow retry.
+- Added public AgentSession service factories for isolated in-process sessions, projection-boundary cache checkpoints, and stable OpenRouter session affinity.
+- Added `ctx.countContextTokens()` for non-persisted, provider-reported preflight of candidate messages or hypothetical session branches from extensions.
+- Added experimental Claude Agent SDK provider support that runs the SDK with Claude built-ins disabled and exposes pi's active tools through an in-process MCP server.
+- Added `pi.navigateTree()` for lifecycle-aware session navigation from idle external extension callbacks.
+
+### Changed
+
+- Updated the Claude Agent SDK to 0.3.302.
+- Extended `PI_CACHE_RETENTION=long` to Claude Agent SDK sessions by mapping it to Claude Code's one-hour prompt-cache TTL.
+
 ### Fixed
 
+- Fixed the Cerebras default referencing a model no longer present in its generated catalog.
+- Fixed the footer cache hit rate and cache-miss notices on the Claude Agent SDK provider, which measured the summed internal request loop and so reported near-total hits through a cold cache while missing or inventing waste.
+- Fixed Claude Agent SDK per-bucket token costs to reconcile with the billed turn total instead of mixing model list pricing with the reported total.
+- Disabled Claude Agent SDK native compaction so pi exclusively owns context summarization, routed SDK prompt-overflow termination through pi's compact-and-retry flow, streamed deduplicated inner-request usage into the live footer, separated active-context usage from aggregate SDK agent-loop usage, and reused the SDK process after compaction by clearing its native transcript before replay.
+- Fixed Claude Agent SDK thinking display to stream summarized reasoning instead of receiving empty signature-only thinking blocks.
+- Fixed Claude Agent SDK intermediate top-level and nested assistant text disappearing across message and tool-call boundaries.
+- Fixed Claude Agent SDK supersession to commit intermediate assistant segments to the live transcript and session history instead of deleting them when a later frame replaces the provider snapshot.
 - Fixed MCP tools loaded by `tool_search` being dropped on resume and `/reload` when an extension deactivates only its own tool at `session_start`, as pi-web-access and pi-subagents do in `toolActivation: "auto"` mode ([#11996](https://github.com/earendil-works/pi/issues/11996))
 - Fixed the standalone binary failing to resolve extension npm dependencies whose entry point is declared in `package.json` `main` or `exports` (for example `shiki`, `yaml`, `graceful-fs`), including imports made from inside other dependencies ([#12012](https://github.com/earendil-works/pi/issues/12012))
 - Fixed the find tool returning no results for patterns starting with `./`, such as `./src/*.ts` ([#12020](https://github.com/earendil-works/pi/issues/12020))
@@ -46,12 +69,6 @@
 
 ### Added
 
-- Added explicit Claude Opus 5.5 selection to the Claude Agent SDK providers.
-- Added explicit Claude Fable 5.1 selection to the Claude Agent SDK providers while preserving the `fable` gateway alias on Fable 5.
-- Added atomic v2 context-projection frames, provider-exact hypothetical branch counting, and versioned projection capability checks for extension-owned context systems.
-- Added extension-owned context repair for manual and automatic compaction, with inspectable progress, cancellation, selected-branch rebuild, and overflow retry.
-- Added public AgentSession service factories for isolated in-process sessions, projection-boundary cache checkpoints, and stable OpenRouter session affinity.
-- Added `ctx.countContextTokens()` for non-persisted, provider-reported preflight of candidate messages or hypothetical session branches from extensions.
 - `pi update` now lists each updated package with its npm version or git commit change, for example `npm:foo 1.2.0 -> 1.3.0`, and prints `Packages are already up to date` when nothing changed. When nothing changed but an update printed a warning, for example because npm left the old version installed after resolving stale registry metadata, it prints `No packages were updated, see the warnings above` instead; in offline mode it prints `Skipped package updates (offline mode)`. `PackageManager.update()` reports each changed package as a new `result` progress event whose `message` holds that line ([#11707](https://github.com/earendil-works/pi/pull/11707), [#11711](https://github.com/earendil-works/pi/pull/11711))
 - Anthropic sessions now use message threads: each request sends only the new messages and the server continues from the previous reply, falling back to the full request when the conversation changed (for example after compaction or a tool list change). On by default for the `anthropic` provider on `api.anthropic.com`; set `compat.supportsMessageThreads` in `models.json` to enable it for gateways that forward the `thread` field, or to turn it off. Cache warming does not touch the session's thread ([#11545](https://github.com/earendil-works/pi/pull/11545))
 - `pi.registerMarkdownTransformer()` takes an optional `{ messageTypes }` that selects the Markdown surfaces a transformer runs on. Besides user, assistant, and thinking Markdown, transformers can now opt into `custom` (custom messages and skill blocks), `summary` (branch and compaction summaries), and `changelog` (What's New, `/changelog`, the Extension Updates notice, and the Update Available note). Without options a transformer runs on user, assistant, and thinking Markdown as before. The built-in Mermaid renderer now also draws diagrams in expanded branch and compaction summaries
@@ -77,7 +94,6 @@
 
 ### Fixed
 
-- Fixed the Cerebras default referencing a model no longer present in its generated catalog.
 - Fixed the grep tool's `glob` matching from the folder pi was started in instead of from `path`: with `path: "repo"`, `glob: "migrations/main/*.js"` returned `No matches found` even though `repo/migrations/main/a.js` exists. Globs are now relative to `path`, the same form grep prints its results in, also when `path` is a symlink. A leading `./` (`./src/*.ts`) is ignored instead of matching nothing ([#11807](https://github.com/earendil-works/pi/issues/11807), [#10998](https://github.com/earendil-works/pi/issues/10998))
 - Fixed prompt template arguments dropping apostrophes and merging words: an apostrophe inside a word, as in `doesn't`, no longer opens a quote; a quote with no closing match is kept as text; and `\"` inside `"..."` (or `\'` inside `'...'`) gives a literal quote ([#11861](https://github.com/earendil-works/pi/issues/11861))
 - Fixed the bash tool reporting only `Command timed out` when the command had already exited but a background process it started kept writing to its output until the timeout. The error now also reports the shell's exit code and when it exited ([#11613](https://github.com/earendil-works/pi/issues/11613))
@@ -397,9 +413,6 @@
 
 ### Changed
 
-- Updated the Claude Agent SDK to 0.3.257 for Fable 5.1 support and corrected Fable pricing metadata.
-- Updated the Claude Agent SDK to 0.3.280 for Claude Opus 5.5 support.
-- Extended `PI_CACHE_RETENTION=long` to Claude Agent SDK sessions by mapping it to Claude Code's one-hour prompt-cache TTL.
 - Changed the `showHardwareCursor` setting to use only the terminal cursor instead of also drawing Pi's reverse-video cursor
 - Changed codemode tool declarations to show input constraints such as integer, minimum/maximum, length, pattern, and default as `@` tags on property comments, so scripts see them without the tool repeating them in descriptions ([#10707](https://github.com/earendil-works/pi/issues/10707))
 - Changed codemode declarations of MCP tools to spell out the result type (`content`, `structuredContent`, `isError`) instead of referring to `CallToolResult<T>`, which `describeTool()`, `searchTools()`, and `ALL_TOOLS` showed without defining it; the codemode description no longer includes the shared MCP types
@@ -1498,8 +1511,6 @@
 - Fixed unavailable scoped models being hidden from `/models`, allowing them to be removed without editing settings manually ([#6949](https://github.com/earendil-works/pi/issues/6949), [#7032](https://github.com/earendil-works/pi/pull/7032) by [@christianklotz](https://github.com/christianklotz)).
 - Fixed startup context file discovery to skip directories that match context file names such as `AGENTS.md`, which produced `EISDIR` warnings ([#7106](https://github.com/earendil-works/pi/pull/7106) by [@mrexodia](https://github.com/mrexodia)).
 - Fixed the llama.cpp extension to persist its model catalog, so llama.cpp models stay listed before the first successful refresh. See [llama.cpp](docs/llama-cpp.md) ([#7072](https://github.com/earendil-works/pi/pull/7072) by [@davidbrai](https://github.com/davidbrai)).
-- Fixed the footer cache hit rate and cache-miss notices on the Claude Agent SDK provider, which measured the summed internal request loop and so reported near-total hits through a cold cache while missing or inventing waste.
-- Fixed Claude Agent SDK per-bucket token costs to reconcile with the billed turn total instead of mixing model list pricing with the reported total.
 
 ## [0.82.0] - 2026-07-24
 
@@ -1517,8 +1528,6 @@
 - Added inherited OpenRouter OAuth PKCE login through `/login`, minting a user-controlled API key. See [OpenRouter](docs/providers.md#openrouter) ([#6927](https://github.com/earendil-works/pi/pull/6927) by [@rsaryev](https://github.com/rsaryev)).
 - Exposed `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and `PI_REASONING_LEVEL` to commands run by built-in and factory-created bash tools. See [Bash Tool Session Environment](docs/environment-variables.md#bash-tool-session-environment).
 - Added streaming `bash_execution_update` events for direct RPC bash commands, correlated with request IDs. See [RPC bash events](docs/rpc.md#bash_execution_update) ([#6971](https://github.com/earendil-works/pi/pull/6971) by [@ananthakumaran](https://github.com/ananthakumaran)).
-- Added experimental Claude Agent SDK provider support that runs the SDK with Claude built-ins disabled and exposes pi's active tools through an in-process MCP server.
-- Added `pi.navigateTree()` for lifecycle-aware session navigation from idle external extension callbacks.
 
 ### Changed
 
@@ -1543,10 +1552,6 @@
 - Updated the packaged `protobufjs` dependency to 7.6.5 to address GHSA-j3f2-48v5-ccww ([#7005](https://github.com/earendil-works/pi/issues/7005)).
 - Fixed `/copy` on Wayland to fall back to X11 or OSC 52 when `wl-copy` fails ([#7009](https://github.com/earendil-works/pi/pull/7009) by [@rkfshakti](https://github.com/rkfshakti)).
 - Fixed `/model` to reload updated `models.json` configuration when opening the model picker ([#6999](https://github.com/earendil-works/pi/issues/6999)).
-- Disabled Claude Agent SDK native compaction so pi exclusively owns context summarization, routed SDK prompt-overflow termination through pi's compact-and-retry flow, streamed deduplicated inner-request usage into the live footer, separated active-context usage from aggregate SDK agent-loop usage, and reused the SDK process after compaction by clearing its native transcript before replay.
-- Fixed Claude Agent SDK thinking display to stream summarized reasoning instead of receiving empty signature-only thinking blocks.
-- Fixed Claude Agent SDK intermediate top-level and nested assistant text disappearing across message and tool-call boundaries.
-- Fixed Claude Agent SDK supersession to commit intermediate assistant segments to the live transcript and session history instead of deleting them when a later frame replaces the provider snapshot.
 
 ## [0.81.1] - 2026-07-21
 

@@ -2,9 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added optional `Usage.entryPrompt` reporting the first request's prompt token split, so cache-hit analysis stays meaningful for providers whose billing usage aggregates an internal request loop.
+- Added optional `Usage.contextTokens` reporting for providers whose billing usage aggregates multiple internal requests while only the final request occupies the active model context.
+
 ### Changed
 
 - Anthropic message threads are now on by default for any provider whose baseUrl is on api.anthropic.com, not only the `anthropic` provider ([#11987](https://github.com/earendil-works/pi/issues/11987))
+
+### Fixed
+
+- Fixed GPT-5.6 OpenAI Responses requests to place an explicit breakpoint after the stable system prefix while retaining OpenAI's managed rolling breakpoint, and to omit deprecated `prompt_cache_retention` for explicit-cache models.
+- Fixed explicit `Authorization` headers on Anthropic-compatible providers also sending stored `x-api-key` credentials.
+- Fixed Bedrock error normalization to ignore stream-like `$response.body` objects, so validation errors surface the actual message instead of a JSON dump of HTTP/2 stream internals.
+- Fixed OpenAI Responses reasoning summaries to remove empty `<!-- -->` placeholders while preserving their status headings.
 
 ## [1.5.2] - 2026-11-10
 
@@ -304,10 +316,6 @@
 - Fixed context overflow detection for Z.AI CN endpoint `Prompt exceeds max length` errors ([#10208](https://github.com/earendil-works/pi/issues/10208))
 - Fixed Anthropic requests failing when a `strict: "prefer"` tool schema uses keywords Anthropic strict tool use rejects, such as `minimum`/`maximum`; such tools are now sent non-strict ([#9953](https://github.com/earendil-works/pi/issues/9953))
 - Fixed provider retries firing immediately when a `Retry-After` header contains an unparseable date; they now use exponential backoff ([#9571](https://github.com/earendil-works/pi/issues/9571))
-
-### Fixed
-
-- Fixed GPT-5.6 OpenAI Responses requests to place an explicit breakpoint after the stable system prefix while retaining OpenAI's managed rolling breakpoint, and to omit deprecated `prompt_cache_retention` for explicit-cache models.
 
 ## [0.99.1] - 2026-09-29
 
@@ -692,16 +700,11 @@
 - Added `ModelsStoreEntry.etag` so persisted provider catalogs can carry the remote ETag validator for conditional refreshes.
 - Added `ANTHROPIC_AUTH_TOKEN` bearer authentication for Anthropic-compatible gateways ([#5871](https://github.com/earendil-works/pi/issues/5871))
 - Added Claude Opus 5 support for Anthropic and Amazon Bedrock with adaptive thinking, inference profiles, prompt caching, and preserved AWS validation messages ([#7081](https://github.com/earendil-works/pi/pull/7081) by [@unexge](https://github.com/unexge), [#7083](https://github.com/earendil-works/pi/pull/7083) by [@davidbrai](https://github.com/davidbrai)).
-- Added optional `Usage.entryPrompt` reporting the first request's prompt token split, so cache-hit analysis stays meaningful for providers whose billing usage aggregates an internal request loop.
 
 ### Changed
 
 - Changed Radius OAuth device authorization, token exchange, and refresh requests to use the configured gateway directly.
 - Changed `ModelsError` messages to append the underlying cause, so auth failures such as `OAuth refresh failed for openai-codex` report the provider response instead of a bare wrapper message.
-
-### Fixed
-
-- Fixed explicit `Authorization` headers on Anthropic-compatible providers also sending stored `x-api-key` credentials.
 
 ## [0.82.0] - 2026-07-24
 
@@ -715,7 +718,6 @@
 - Added OpenRouter OAuth PKCE login that mints a user-controlled API key for chat and image providers ([#6927](https://github.com/earendil-works/pi/pull/6927) by [@rsaryev](https://github.com/rsaryev)).
 - Added `Tool.constrainedSampling` with strict JSON Schema (`prefer`/`require`) and OpenAI Lark/regex grammar variants, enforcing provider-side constrained tool sampling across OpenAI, Anthropic, Amazon Bedrock, Google Gemini, and Mistral. See [Constrained Sampling for Tools](README.md#constrained-sampling-for-tools).
 - Added `supportsGrammarTools` and `supportsStrictTools` compatibility flags, expanded `supportsStrictMode` to Responses and Bedrock models, and generated model capability metadata to gate constrained sampling.
-- Added optional `Usage.contextTokens` reporting for providers whose billing usage aggregates multiple internal requests while only the final request occupies the active model context.
 
 ### Changed
 
@@ -730,8 +732,6 @@
 - Fixed OpenAI Codex WebSocket sessions to retry once without a missing previous-response continuation after `previous_response_not_found` errors ([#6955](https://github.com/earendil-works/pi/pull/6955) by [@davidbrai](https://github.com/davidbrai)).
 - Fixed OpenAI and Anthropic provider retry waits to honor abort signals and configured delay limits ([#6980](https://github.com/earendil-works/pi/pull/6980) by [@petrroll](https://github.com/petrroll)).
 - Fixed OpenRouter Anthropic cache breakpoints to advance through tool results and enabled cache control for `~anthropic/*-latest` aliases ([#6941](https://github.com/earendil-works/pi/pull/6941) by [@mteam88](https://github.com/mteam88)).
-- Fixed Bedrock error normalization to ignore stream-like `$response.body` objects, so validation errors surface the actual message instead of a JSON dump of HTTP/2 stream internals.
-- Fixed OpenAI Responses reasoning summaries to remove empty `<!-- -->` placeholders while preserving their status headings.
 
 ## [0.81.1] - 2026-07-21
 
