@@ -8,8 +8,11 @@ import { AssistantMessageEventStream } from "@earendil-works/pi-ai/utils/event-s
  * (an unplugged adapter, a DHCP change) never receives data or a reset, and a
  * long-thinking model legitimately sends nothing for minutes, so idle timeouts
  * cannot tell the two apart. Address removal can: while a model request is in
- * flight, local addresses are polled, and a request whose starting addresses
- * lost one is aborted and reported as a retryable lost connection.
+ * flight, local addresses are polled. A request is aborted only when every
+ * starting address has disappeared. Losing an unrelated interface or temporary
+ * address does not establish that the provider's connection was lost.
+ * Detecting loss of one connection while other interfaces remain requires its
+ * actual socket address; this host-wide fallback cannot establish that.
  */
 const POLL_MS = 5_000;
 /** Bound on a provider that ignores the abort; the request then fails on our side. */
@@ -17,10 +20,20 @@ const ABORT_GRACE_MS = 10_000;
 
 export type AddressSource = () => ReadonlySet<string>;
 
+/** Link-local addresses churn independently of internet connectivity (AWDL, peer links). */
+export function internetAddress(address: string): boolean {
+	if (address.includes(":")) {
+		const first = Number.parseInt(address.split(":")[0], 16);
+		return address !== "::1" && address !== "::" && (first & 0xffc0) !== 0xfe80;
+	}
+	return !address.startsWith("127.") && !address.startsWith("169.254.") && address !== "0.0.0.0";
+}
+
 export function localAddresses(): ReadonlySet<string> {
 	const addresses = new Set<string>();
 	for (const entries of Object.values(networkInterfaces())) {
-		for (const entry of entries ?? []) if (!entry.internal) addresses.add(entry.address);
+		for (const entry of entries ?? [])
+			if (!entry.internal && internetAddress(entry.address)) addresses.add(entry.address);
 	}
 	return addresses;
 }
@@ -43,7 +56,7 @@ export class AddressWatch {
 	}
 
 	watch(lost: (removed: string[]) => void): () => void {
-		const watcher: Watcher = { started: this.addresses(), lost };
+		const watcher: Watcher = { started: new Set([...this.addresses()].filter(internetAddress)), lost };
 		this.watchers.add(watcher);
 		if (!this.timer) {
 			this.timer = setInterval(() => this.poll(), this.pollMs);
@@ -62,7 +75,7 @@ export class AddressWatch {
 		const current = this.addresses();
 		for (const watcher of [...this.watchers]) {
 			const removed = [...watcher.started].filter((address) => !current.has(address));
-			if (removed.length > 0) watcher.lost(removed);
+			if (removed.length > 0 && removed.length === watcher.started.size) watcher.lost(removed);
 		}
 	}
 }
@@ -100,8 +113,8 @@ function failedBeforeStart(model: Model<Api>, errorMessage: string): AssistantMe
 }
 
 /**
- * Wraps a stream function so a request whose local network address disappears is
- * aborted and settles as a retryable error instead of hanging or reading as a user abort.
+ * Wraps a stream function so loss of every starting local address aborts the
+ * request as a retryable error instead of hanging or reading as a user abort.
  */
 export function guardNetwork(streamFn: StreamFn, watch: AddressWatch = sharedWatch): StreamFn {
 	return async (model, context, options) => {

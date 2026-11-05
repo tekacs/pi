@@ -422,8 +422,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			messages: existingSession.messages,
 		},
 		convertToLlm: convertToLlmWithBlockImages,
-		// Every model request, native harness or direct provider, settles if its network path vanishes.
-		streamFn: guardNetwork(async (model, context, options) => {
+		streamFn: async (model, context, options) => {
 			modelRuntime.assertPurpose(model, options?.purpose);
 			// Auxiliary summary requests retain their own affinity. Native harnesses receive
 			// the same optional hint, without replacing their session or transport identity.
@@ -507,8 +506,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			if (options?.sessionId === sessionManager.getSessionId()) {
 				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
 			}
-			return modelRuntime.streamSimple(model, context, requestOptions);
-		}),
+			// Native harnesses execute tools and require pull-driven commit acknowledgements.
+			// Never put their streams through a background-prefetch wrapper.
+			return guardNetwork((model, context, options) => modelRuntime.streamSimple(model, context, options))(
+				model,
+				context,
+				requestOptions,
+			);
+		},
 		onPayload: transformProviderPayload,
 		onResponse: handleProviderResponse,
 		onProviderStreamEvent: handleProviderStreamEvent,
