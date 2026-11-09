@@ -73,10 +73,13 @@ const defaultReadOperations: ReadOperations = {
  * as /proc files) and other file types until EOF. Abort is left to the read tool, which stops consuming
  * the stream when its signal aborts; leaving its loop closes the stream.
  */
-async function* readLocalFileChunks(path: string): AsyncIterable<Uint8Array> {
+async function* readLocalFileChunks(path: string, { signal }: { signal?: AbortSignal }): AsyncIterable<Uint8Array> {
+	if (signal?.aborted) return;
 	const handle = await fsOpen(path, "r");
 	try {
+		if (signal?.aborted) return;
 		const stats = await handle.stat();
+		if (signal?.aborted) return;
 		const end = stats.isFile() && stats.size > 0 ? stats.size - 1 : undefined;
 		// No signal for the stream: one that aborts before the stream's iterator attaches makes the stream
 		// emit an 'error' no listener handles, which crashes the process (#11956).
@@ -217,6 +220,7 @@ async function selectLinesFromStream(
 		if (signal?.aborted) throw new Error("Operation aborted");
 		select(decoder.decode(chunk, { stream: true }));
 	}
+	if (signal?.aborted) throw new Error("Operation aborted");
 	select(decoder.decode());
 	if (line >= startLine && line < endLine) finishLine();
 	const truncation: TruncationResult = {
@@ -272,16 +276,19 @@ export function createReadToolDefinition(
 							await ops.access(absolutePath);
 							if (aborted) return;
 							const mimeType = ops.detectImageMimeType ? await ops.detectImageMimeType(absolutePath) : undefined;
+							if (aborted) return;
 							let content: (TextContent | ImageContent)[];
 							let details: ReadToolDetails | undefined;
 							const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
 							if (mimeType) {
 								// Read image as binary.
 								const buffer = await ops.readFile(absolutePath);
+								if (aborted) return;
 								const processed = await processImage(buffer, mimeType, {
 									autoResizeImages,
 									resizeOptions: ctx?.model?.inputLimits?.images?.resize ?? fallbackResizeOptions,
 								});
+								if (aborted) return;
 								if (!processed.ok) {
 									let textNote = `Read image file [${mimeType}]: ${path}\n${processed.message}`;
 									if (nonVisionImageNote) textNote += `\n${nonVisionImageNote}`;

@@ -833,6 +833,7 @@ async function buildSessionInfo(
 	fileStats?: Stats,
 ): Promise<SessionInfo | null> {
 	try {
+		signal?.throwIfAborted();
 		const stats = fileStats ?? (await stat(filePath));
 		let header: SessionHeader | null = null;
 		let messageCount = 0;
@@ -942,6 +943,7 @@ async function mapWithConcurrency<T, R>(
 	map: (item: T, index: number) => Promise<R>,
 	signal?: AbortSignal,
 ): Promise<R[]> {
+	signal?.throwIfAborted();
 	const results = new Array<R>(items.length);
 	let nextIndex = 0;
 	const worker = async (): Promise<void> => {
@@ -949,9 +951,11 @@ async function mapWithConcurrency<T, R>(
 			signal?.throwIfAborted();
 			const index = nextIndex++;
 			results[index] = await map(items[index]!, index);
+			signal?.throwIfAborted();
 		}
 	};
 	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+	signal?.throwIfAborted();
 	return results;
 }
 
