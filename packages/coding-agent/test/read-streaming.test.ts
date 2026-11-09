@@ -290,4 +290,82 @@ describe("read tool streaming", () => {
 		expect(closed).toBe(true);
 		expect(chunksRead).toBe(3);
 	});
+
+	it("aborts local file reads at any async boundary without uncaught errors", async () => {
+		const path = join(tempDir, "aborted-local.txt");
+		writeFileSync(
+			path,
+			lines(30_000, (i) => `line ${i}`),
+		);
+		const tool = createReadToolDefinition(tempDir);
+		const uncaught: unknown[] = [];
+		const onUncaught = (error: unknown) => {
+			uncaught.push(error);
+		};
+		process.on("uncaughtException", onUncaught);
+		process.on("unhandledRejection", onUncaught);
+		try {
+			for (let ticks = 0; ticks <= 20; ticks++) {
+				const controller = new AbortController();
+				const execution = tool.execute(
+					"call",
+					{ path, offset: 220, limit: 80 },
+					controller.signal,
+					undefined,
+					undefined as never,
+				);
+				void (async () => {
+					for (let i = 0; i < ticks; i++) {
+						await new Promise<void>((resolve) => setImmediate(resolve));
+					}
+					controller.abort();
+				})();
+				try {
+					await execution;
+				} catch (error) {
+					expect((error as Error).message).toBe("Operation aborted");
+				}
+			}
+
+			const midReadController = new AbortController();
+			decodeHook.run = () => {
+				decodeHook.run = undefined;
+				midReadController.abort();
+			};
+			await expect(
+				tool.execute("call", { path }, midReadController.signal, undefined, undefined as never),
+			).rejects.toThrow("Operation aborted");
+
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			expect(uncaught).toEqual([]);
+		} finally {
+			decodeHook.run = undefined;
+			process.off("uncaughtException", onUncaught);
+			process.off("unhandledRejection", onUncaught);
+		}
+
+		const detectAbortController = new AbortController();
+		let openedAfterAbort = false;
+		const abortDuringMimeOps: ReadOperations = {
+			access: async () => {},
+			detectImageMimeType: async () => {
+				detectAbortController.abort();
+				return undefined;
+			},
+			readFile: async () => {
+				openedAfterAbort = true;
+				return Buffer.alloc(0);
+			},
+			async *createReadStream() {
+				openedAfterAbort = true;
+				yield Buffer.alloc(0);
+			},
+		};
+		const customTool = createReadToolDefinition(tempDir, { operations: abortDuringMimeOps });
+		await expect(
+			customTool.execute("call", { path }, detectAbortController.signal, undefined, undefined as never),
+		).rejects.toThrow("Operation aborted");
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(openedAfterAbort).toBe(false);
+	});
 });

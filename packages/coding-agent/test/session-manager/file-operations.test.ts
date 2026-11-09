@@ -354,6 +354,45 @@ describe("SessionManager custom flat session directory", () => {
 		await expect(listing).rejects.toMatchObject({ name: "AbortError" });
 		await expect(SessionManager.listAll(undefined, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
 	});
+
+	it("aborts session listing with non-session JSONL files without uncaught stream errors", async () => {
+		writeFileSync(
+			join(tempDir, "non-session.jsonl"),
+			`${JSON.stringify({ type: "event", payload: "x".repeat(200_000) })}\n`,
+		);
+		createPersistedSession(projectA, "from A");
+		createPersistedSession(projectB, "from B");
+
+		const uncaught: unknown[] = [];
+		const onUncaught = (error: unknown) => {
+			uncaught.push(error);
+		};
+		process.on("uncaughtException", onUncaught);
+		process.on("unhandledRejection", onUncaught);
+		try {
+			for (let ticks = 0; ticks <= 15; ticks++) {
+				const controller = new AbortController();
+				const listing = SessionManager.listAll(tempDir, undefined, controller.signal);
+				void (async () => {
+					for (let i = 0; i < ticks; i++) {
+						await new Promise<void>((resolve) => setImmediate(resolve));
+					}
+					controller.abort();
+				})();
+				try {
+					await listing;
+				} catch (error) {
+					expect(error).toMatchObject({ name: "AbortError" });
+				}
+			}
+
+			await new Promise((resolve) => setTimeout(resolve, 30));
+			expect(uncaught).toEqual([]);
+		} finally {
+			process.off("uncaughtException", onUncaught);
+			process.off("unhandledRejection", onUncaught);
+		}
+	});
 });
 
 describe("SessionManager.setSessionFile with corrupted files", () => {

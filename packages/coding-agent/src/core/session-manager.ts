@@ -16,7 +16,6 @@ import { randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
-	createReadStream,
 	existsSync,
 	fsyncSync,
 	mkdirSync,
@@ -27,9 +26,8 @@ import {
 	statSync,
 	writeFileSync,
 } from "fs";
-import { readdir, stat } from "fs/promises";
+import { open, readdir, stat } from "fs/promises";
 import { basename, dirname, join, resolve } from "path";
-import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, pathsEqual, resolvePath } from "../utils/paths.ts";
@@ -827,12 +825,50 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined 
 	return Number.isNaN(t) ? undefined : t;
 }
 
+const SESSION_STREAM_BUFFER_SIZE = 64 * 1024;
+
+async function* readSessionEntries(filePath: string, signal?: AbortSignal): AsyncIterable<FileEntry> {
+	signal?.throwIfAborted();
+	const handle = await open(filePath, "r");
+	try {
+		const decoder = new StringDecoder("utf8");
+		const buffer = Buffer.allocUnsafe(SESSION_STREAM_BUFFER_SIZE);
+		let pending = "";
+
+		while (true) {
+			signal?.throwIfAborted();
+			const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+			signal?.throwIfAborted();
+			if (bytesRead === 0) break;
+
+			pending += decoder.write(buffer.subarray(0, bytesRead));
+			let lineStart = 0;
+			let newlineIndex = pending.indexOf("\n", lineStart);
+			while (newlineIndex !== -1) {
+				const entry = parseSessionEntryLine(pending.slice(lineStart, newlineIndex));
+				if (entry) yield entry;
+				lineStart = newlineIndex + 1;
+				newlineIndex = pending.indexOf("\n", lineStart);
+			}
+			pending = lineStart > 0 ? pending.slice(lineStart) : pending;
+		}
+
+		signal?.throwIfAborted();
+		pending += decoder.end();
+		const finalEntry = parseSessionEntryLine(pending);
+		if (finalEntry) yield finalEntry;
+	} finally {
+		await handle.close();
+	}
+}
+
 async function buildSessionInfo(
 	filePath: string,
 	signal?: AbortSignal,
 	fileStats?: Stats,
 ): Promise<SessionInfo | null> {
 	try {
+		signal?.throwIfAborted();
 		const stats = fileStats ?? (await stat(filePath));
 		let header: SessionHeader | null = null;
 		let messageCount = 0;
@@ -841,15 +877,7 @@ async function buildSessionInfo(
 		let name: string | undefined;
 		let lastActivityTime: number | undefined;
 
-		const rl = createInterface({
-			input: createReadStream(filePath, { encoding: "utf8", signal }),
-			crlfDelay: Infinity,
-		});
-
-		for await (const line of rl) {
-			const entry = parseSessionEntryLine(line);
-			if (!entry) continue;
-
+		for await (const entry of readSessionEntries(filePath, signal)) {
 			if (!header) {
 				if (entry.type !== "session") return null;
 				header = entry;
@@ -935,6 +963,7 @@ async function mapWithConcurrency<T, R>(
 	map: (item: T, index: number) => Promise<R>,
 	signal?: AbortSignal,
 ): Promise<R[]> {
+	signal?.throwIfAborted();
 	const results = new Array<R>(items.length);
 	let nextIndex = 0;
 	const worker = async (): Promise<void> => {
@@ -942,9 +971,11 @@ async function mapWithConcurrency<T, R>(
 			signal?.throwIfAborted();
 			const index = nextIndex++;
 			results[index] = await map(items[index]!, index);
+			signal?.throwIfAborted();
 		}
 	};
 	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+	signal?.throwIfAborted();
 	return results;
 }
 
