@@ -31,11 +31,11 @@ describe("Claude Agent SDK thinking", () => {
 		]);
 	});
 
-	it.each(["fable", "claude-fable-5-1"])("keeps always-on thinking enabled for %s", (id) => {
+	it.each(["fable", "claude-fable-5-1", "claude-fable-5-2"])("keeps always-on thinking enabled for %s", (id) => {
 		expect(getSupportedThinkingLevels(model(id))).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
 	});
 
-	it.each(["fable", "claude-fable-5-1"])("advertises Fable's 128K output limit for %s", (id) => {
+	it.each(["fable", "claude-fable-5-1", "claude-fable-5-2"])("advertises Fable's 128K output limit for %s", (id) => {
 		expect(model(id).maxTokens).toBe(128000);
 	});
 
@@ -46,6 +46,17 @@ describe("Claude Agent SDK thinking", () => {
 			cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
 		});
 	});
+
+	it.each(["minimal", "low", "medium", "high", "xhigh", "max"] as const)(
+		"maps Fable 5.2 %s effort without disabling adaptive thinking",
+		(level) => {
+			expect(resolveSdkThinking(model("claude-fable-5-2"), level)).toEqual({
+				thinking: undefined,
+				effort: level === "minimal" ? "low" : level,
+				extraArgs: { "thinking-display": "summarized" },
+			});
+		},
+	);
 
 	it("does not advertise unsupported high tiers for Haiku or pinned older models", () => {
 		expect(getSupportedThinkingLevels(model("haiku"))).toEqual(["off", "minimal", "low", "medium", "high"]);

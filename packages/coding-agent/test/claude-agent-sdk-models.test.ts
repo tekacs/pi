@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CLAUDE_AGENT_SDK_MODELS, pricedAs } from "../src/core/claude-agent-sdk-models.ts";
+import { CLAUDE_AGENT_SDK_MODELS, pricedAs, sdkProviders } from "../src/core/claude-agent-sdk-models.ts";
 
 describe("Claude Agent SDK models", () => {
 	it("exposes Fable 5.1 explicitly while keeping the Fable 5 gateway alias", () => {
@@ -17,6 +17,28 @@ describe("Claude Agent SDK models", () => {
 			thinkingLevelMap: { off: null, minimal: "low", xhigh: "xhigh", max: "max" },
 			cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
 		});
+	});
+
+	it("exposes Fable 5.2 on both SDK providers with its own prices", () => {
+		for (const provider of sdkProviders()) {
+			const fable = provider.getModels().find((model) => model.id === "claude-fable-5-2");
+			expect(fable).toMatchObject({
+				provider: provider.id,
+				name: "Claude Fable 5.2",
+				contextWindow: 1_000_000,
+				maxTokens: 128_000,
+				thinkingLevelMap: { off: null, minimal: "low", xhigh: "xhigh", max: "max" },
+				cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 },
+			});
+		}
+	});
+
+	it("prices the Fable alias at the concrete version served", () => {
+		const alias = CLAUDE_AGENT_SDK_MODELS.find((model) => model.id === "fable")!;
+		const cost = { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10 };
+		for (const id of ["claude-fable-5-2", "claude-fable-5-2-20261109", "claude-fable-5-2[1m]"])
+			expect(pricedAs(alias, id).cost).toEqual(cost);
+		expect(pricedAs(alias, "claude-fable-5-1").cost.cacheRead).toBe(0.25);
 	});
 
 	it("exposes Claude Opus 5.5 with its own pricing and effort levels", () => {

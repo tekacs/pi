@@ -40,6 +40,13 @@ remain externally managed; their supplier must renew them.
 
 ## Select a model
 
+The Claude Agent SDK providers include the pinned `claude-fable-5-2` model as well
+as the `fable` alias resolved by Claude Code. Fable 5.2 has a 1M-token context
+window, a 128K-token output limit, and always-on adaptive thinking. Select its
+thinking depth with `/thinking`; `minimal` maps to Claude's `low` effort.
+Reported costs use the concrete model Claude Code served, including when an
+alias was selected.
+
 Run `/model` to search available models. The picker shows models whose providers have usable authentication. Press `Ctrl+S` on a model to save it as the default for new sessions.
 
 Run `/thinking` to select the thinking level for the current model. Press `Ctrl+S` there to save the startup level. Pi limits the choices to levels supported by the selected model.
