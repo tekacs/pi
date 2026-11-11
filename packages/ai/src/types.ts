@@ -892,7 +892,15 @@ export type AssistantMessageEvent =
 	| { type: "toolcall_end"; contentIndex: number; toolCall: ToolCall; partial: AssistantMessage }
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
 	| { type: "tool_execution_update"; toolCallId: string; toolName: string; args: unknown; partialResult: unknown }
-	| { type: "tool_execution_end"; toolCallId: string; toolName: string; result: unknown; isError: boolean }
+	| {
+			type: "tool_execution_end";
+			toolCallId: string;
+			toolName: string;
+			result: unknown;
+			isError: boolean;
+			/** Milliseconds execute() took, measured with a monotonic clock; absent when unknown or not executed. */
+			durationMs?: number;
+	  }
 	| {
 			type: "assistant_message_commit";
 			message: AssistantMessage | ToolResultMessage;

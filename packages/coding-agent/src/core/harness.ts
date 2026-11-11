@@ -143,6 +143,7 @@ export async function runAgentTool(
 
 	let result: AgentToolResult<unknown>;
 	let isError = false;
+	let durationMs: number | undefined;
 	let preparedArgs: unknown;
 	try {
 		preparedArgs = tool.prepareArguments ? tool.prepareArguments(rawArgs) : rawArgs;
@@ -159,6 +160,7 @@ export async function runAgentTool(
 			isError = true;
 		} else {
 			let acceptingUpdates = true;
+			const startedAt = performance.now();
 			try {
 				result = await tool.execute(callId, preparedArgs as never, options.signal, (partialResult) => {
 					if (!acceptingUpdates) return;
@@ -174,6 +176,7 @@ export async function runAgentTool(
 				result = errorResult(error instanceof Error ? error.message : String(error));
 				isError = true;
 			} finally {
+				durationMs = Math.round(performance.now() - startedAt);
 				acceptingUpdates = false;
 			}
 
@@ -206,7 +209,14 @@ export async function runAgentTool(
 
 	// Execution settlement is independent of transcript durability. In particular,
 	// cancellation closes commit receipts but must still retire the live tool.
-	options.stream.push({ type: "tool_execution_end", toolCallId: callId, toolName: tool.name, result, isError });
+	options.stream.push({
+		type: "tool_execution_end",
+		toolCallId: callId,
+		toolName: tool.name,
+		result,
+		isError,
+		...(durationMs === undefined ? {} : { durationMs }),
+	});
 	await commit({
 		role: "toolResult",
 		toolCallId: callId,
@@ -216,6 +226,7 @@ export async function runAgentTool(
 		usage: result.usage,
 		...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
 		isError,
+		...(durationMs === undefined ? {} : { durationMs }),
 		timestamp: Date.now(),
 	});
 	return { result, isError };

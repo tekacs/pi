@@ -88,6 +88,54 @@ async function host(probe: AgentTool, run: (options: AgentToolRunOptions) => Pro
 }
 
 describe("canonical harness execution", () => {
+	it.each(["success", "throw", "cancelled", "blocked", "invalid", "pre-aborted", "after-hook"] as const)(
+		"records only execute time in completion and durable history: %s",
+		async (outcome) => {
+			let clock = 100;
+			const monotonic = vi.spyOn(performance, "now").mockImplementation(() => clock);
+			const abort = new AbortController();
+			const ran = !["blocked", "invalid", "pre-aborted"].includes(outcome);
+			const probe = tool(async () => {
+				clock += 25;
+				if (outcome === "cancelled") abort.abort();
+				if (outcome === "throw" || outcome === "cancelled") throw new Error("execution failed");
+				return result;
+			});
+			const execute = vi.spyOn(probe, "execute");
+			const state = await host(probe, async (options) => {
+				if (outcome === "pre-aborted") abort.abort();
+				await runAgentTool(probe, outcome === "invalid" ? null : {}, {
+					...options,
+					signal: abort.signal,
+					beforeToolCall: async () => {
+						clock += 100;
+						return outcome === "blocked" ? { block: true, reason: "blocked" } : undefined;
+					},
+					afterToolCall: async () => {
+						clock += 200;
+						if (outcome === "after-hook") throw new Error("hook failed");
+					},
+				});
+			});
+			const completions: Array<number | undefined> = [];
+			state.session.subscribe((event) => {
+				if (event.type === "tool_execution_end") completions.push(event.durationMs);
+			});
+			try {
+				await state.session.prompt("run");
+				const duration = ran ? 25 : undefined;
+				expect(execute).toHaveBeenCalledTimes(ran ? 1 : 0);
+				expect(completions).toEqual([duration]);
+				const saved = state.reload().find((message) => message.role === "toolResult");
+				expect(saved).toMatchObject({ role: "toolResult", isError: outcome !== "success" });
+				if (saved?.role !== "toolResult") throw new Error("missing durable tool result");
+				expect(saved.durationMs).toBe(duration);
+			} finally {
+				monotonic.mockRestore();
+			}
+		},
+	);
+
 	it("persists original calls before effects and outcomes before native delivery, without changing v3", async () => {
 		let effects = 0;
 		let delivered = false;

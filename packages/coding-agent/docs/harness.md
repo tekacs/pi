@@ -6,6 +6,8 @@ Pi owns canonical assistant and tool-result messages. An embedded harness owns i
 
 The integration extends the fork's existing committed-message path. A harness commits an original-ID tool call before executing it and commits its result before delivering that result to the native runtime. Acknowledgement follows awaited host persistence. Committed calls are not executable calls in the outer agent loop. Completed outcomes can be reused; unresolved or conflicting call identities cannot authorize another execution.
 
+Pi measures each harness tool's `execute()` with a monotonic clock, excluding argument preparation, hooks and persistence. Its completion event and canonical tool result carry the same `durationMs`, including when execution throws or is cancelled. Calls rejected before execution and native-only outcomes have no duration; replay does not invent one.
+
 Acknowledgement lifetime and cancellation belong to `HarnessOutput`, not the generic EventStream. Registered harnesses construct `HarnessOutput(signal)` when using `runTool`; consumers acknowledge committed messages after persistence. Abandoning a commit, advancing without acknowledgement, closing the output, or cancellation rejects its receipt. Ordinary provider streams retain their existing behavior.
 
 SessionManager supports opt-in durable message append. A failed durable append does not publish a reusable entry and fences subsequent appends until recovery. Ordinary append behavior, session format v3, parsing, migration and navigation are unchanged. AgentSession applies the durability barrier to harness commits. Harnesses receive existing read-only session identity and entry information; they do not install checkpoint indexes or journal record types in SessionManager.
