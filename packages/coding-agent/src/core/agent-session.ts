@@ -88,6 +88,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { getLatestChangedProjectionIndex } from "./context-projection.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -871,14 +872,45 @@ export class AgentSession {
 		return this._nestedToolCalls.execute(parentToolCallId, name, args, options);
 	}
 
+	/**
+	 * Effective context baseline reported by an extension (such as Posture context repair),
+	 * plus estimated trailing messages added since that baseline. Cleared when its basis leaves
+	 * the branch or when a newer valid assistant response supersedes it.
+	 */
+	private _resolveEffectiveContextTokens(
+		branch: SessionEntry[],
+		activeMessages: AgentMessage[],
+	): { tokens: number; source: string; exact: boolean } | undefined {
+		const effective = this._effectiveContext;
+		if (!effective) return undefined;
+		const basisIsOnBranch = branch.some((entry) => entry.id === effective.basisLeafId);
+		if (!basisIsOnBranch || activeMessages.length < effective.basisMessageCount) {
+			this._effectiveContext = undefined;
+			return undefined;
+		}
+		const trailing = activeMessages.slice(effective.basisMessageCount);
+		const newerProviderUsage = trailing.some(
+			(message) =>
+				message.role === "assistant" &&
+				message.stopReason !== "aborted" &&
+				message.stopReason !== "error" &&
+				calculateContextTokens(message.usage) > 0,
+		);
+		if (newerProviderUsage) {
+			this._effectiveContext = undefined;
+			return undefined;
+		}
+		const tokens = effective.tokens + trailing.reduce((total, message) => total + estimateTokens(message), 0);
+		return { tokens, source: effective.source, exact: trailing.length === 0 };
+	}
+
 	/** Whether `projection`, the current session projection, exceeds the compaction threshold of `model`. */
 	private _exceedsCompactionThreshold(model: Model<any>, projection: SessionProjection): boolean {
 		if (model.contextWindow <= 0) return false;
-		return shouldCompact(
-			estimateProjectedContextTokens(projection, this.sessionManager.getBranch()).tokens,
-			model.contextWindow,
-			this.settingsManager.getCompactionSettings(this.model),
-		);
+		const branch = this.sessionManager.getBranch();
+		const effective = this._resolveEffectiveContextTokens(branch, projection.messages);
+		const contextTokens = effective ? effective.tokens : estimateProjectedContextTokens(projection, branch).tokens;
+		return shouldCompact(contextTokens, model.contextWindow, this.settingsManager.getCompactionSettings(this.model));
 	}
 
 	private async _compactBeforeNextAssistantResponse(context: AgentContext): Promise<AgentContext> {
@@ -3360,6 +3392,8 @@ export class AgentSession {
 			);
 		const branch = this.sessionManager.getBranch();
 		const assistantIndex = assistantEntryId ? branch.findIndex((entry) => entry.id === assistantEntryId) : -1;
+		const latestChangedProjectionIndex = getLatestChangedProjectionIndex(branch);
+		const hasPostAssistantChangedProjection = assistantIndex >= 0 && latestChangedProjectionIndex > assistantIndex;
 		const entriesAfterAssistant = assistantIndex >= 0 ? branch.slice(assistantIndex + 1) : [];
 		const hasPostAssistantContextEdit = entriesAfterAssistant.some((entry) => entry.type === "context_edit");
 		const latestAssistantEdit = entriesAfterAssistant
@@ -3370,15 +3404,20 @@ export class AgentSession {
 		const assistantRetainedForExplicitRecovery =
 			assistantEntryId === undefined ||
 			(!entriesAfterAssistant.some((entry) => entry.type === "compaction") &&
+				!hasPostAssistantChangedProjection &&
 				latestAssistantEdit?.replacement !== null);
-		const assistantUsageMatchesProjection = assistantIsProjected && !hasPostAssistantContextEdit;
+		const assistantUsageMatchesProjection =
+			assistantIsProjected && !hasPostAssistantContextEdit && !hasPostAssistantChangedProjection;
 		const explicitOverflow = assistantMessage.stopReason === "error" && isContextOverflow(assistantMessage);
 		const contextOverflow =
 			sameModel &&
 			((explicitOverflow && assistantRetainedForExplicitRecovery) ||
 				(assistantUsageMatchesProjection && isContextOverflow(assistantMessage, contextWindow)));
 		const recoverableLength =
-			sameModel && assistantIsProjected && isRecoverableLength(assistantMessage, messageModel.maxTokens);
+			sameModel &&
+			assistantIsProjected &&
+			!hasPostAssistantChangedProjection &&
+			isRecoverableLength(assistantMessage, messageModel.maxTokens);
 		if (contextOverflow || recoverableLength) {
 			const willRetry = assistantMessage.stopReason !== "stop";
 
@@ -3424,9 +3463,12 @@ export class AgentSession {
 		// responses can still compact and do not reset context accounting.
 		let contextTokens: number;
 		const projection = currentProjection;
+		const effective = this._resolveEffectiveContextTokens(branch, projection.messages);
 		const hasContextEdits = projection.entries.some((entry) => entry.sourceEntry.type === "context_edit");
 		const directContextTokens = assistantMessage.usage ? calculateContextTokens(assistantMessage.usage) : 0;
-		if (hasContextEdits) {
+		if (effective) {
+			contextTokens = effective.tokens;
+		} else if (hasContextEdits || hasPostAssistantChangedProjection) {
 			contextTokens = estimateProjectedContextTokens(projection, branch).tokens;
 		} else if (assistantMessage.stopReason === "error" || directContextTokens === 0) {
 			const messages = this.agent.state.messages;
@@ -3434,9 +3476,9 @@ export class AgentSession {
 			// Without provider usage, estimate.tokens is the pure message-size estimate.
 			// Only usage-backed estimates need the stale pre-compaction check.
 			if (estimate.lastUsageIndex !== null) {
-				// Verify the usage source is post-compaction. Kept pre-compaction messages
-				// have stale usage reflecting the old (larger) context and would falsely
-				// trigger compaction right after one just finished.
+				// Verify the usage source is post-compaction and post-projection. Kept messages from
+				// before compaction or a changed projection frame have stale usage reflecting the old
+				// (larger) context and would falsely trigger compaction right after one just finished.
 				const usageMsg = messages[estimate.lastUsageIndex];
 				if (
 					compactionEntry &&
@@ -3444,6 +3486,17 @@ export class AgentSession {
 					(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
 				) {
 					return false;
+				}
+				if (latestChangedProjectionIndex >= 0 && usageMsg.role === "assistant") {
+					const usageEntryId = this._findPersistedMessageEntryId(usageMsg as AssistantMessage);
+					const usageEntryIndex = usageEntryId ? branch.findIndex((entry) => entry.id === usageEntryId) : -1;
+					if (usageEntryIndex >= 0 && usageEntryIndex < latestChangedProjectionIndex) {
+						contextTokens = estimateProjectedContextTokens(projection, branch).tokens;
+						if (shouldCompact(contextTokens, contextWindow, settings)) {
+							return await this._runAutoCompaction("threshold", false);
+						}
+						return false;
+					}
 				}
 			}
 			contextTokens = estimate.tokens;
@@ -4747,35 +4800,17 @@ export class AgentSession {
 			providerCurrent && providerEstimate.lastUsageIndex !== null ? providerEstimate.usageTokens : null;
 		const providerPercent = providerTokens === null ? null : (providerTokens / contextWindow) * 100;
 
-		const effective = this._effectiveContext;
+		const effective = this._resolveEffectiveContextTokens(branch, activeMessages);
 		if (effective) {
-			const basisIsOnBranch = branch.some((entry) => entry.id === effective.basisLeafId);
-			if (!basisIsOnBranch || activeMessages.length < effective.basisMessageCount) {
-				this._effectiveContext = undefined;
-			} else {
-				const trailing = activeMessages.slice(effective.basisMessageCount);
-				const newerProviderUsage = trailing.some(
-					(message) =>
-						message.role === "assistant" &&
-						message.stopReason !== "aborted" &&
-						message.stopReason !== "error" &&
-						calculateContextTokens(message.usage) > 0,
-				);
-				if (!newerProviderUsage) {
-					const tokens =
-						effective.tokens + trailing.reduce((total, message) => total + estimateTokens(message), 0);
-					return {
-						tokens,
-						contextWindow,
-						percent: (tokens / contextWindow) * 100,
-						source: effective.source,
-						exact: trailing.length === 0,
-						providerTokens,
-						providerPercent,
-					};
-				}
-				this._effectiveContext = undefined;
-			}
+			return {
+				tokens: effective.tokens,
+				contextWindow,
+				percent: (effective.tokens / contextWindow) * 100,
+				source: effective.source,
+				exact: effective.exact,
+				providerTokens,
+				providerPercent,
+			};
 		}
 
 		if (latestCompaction && !providerCurrent) {

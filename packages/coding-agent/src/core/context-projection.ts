@@ -50,6 +50,64 @@ export function isProjectionEntry(entry: SessionEntry): entry is CustomEntry<Con
 	return entry.type === "custom" && entry.customType === PROJECTION_TYPE;
 }
 
+/**
+ * Index of the newest accepted `pi.context-projection` frame in `entries`, or -1 when none
+ * applies or when every latest frame duplicates its predecessor's fingerprint/directives.
+ */
+export function getLatestChangedProjectionIndex(entries: SessionEntry[]): number {
+	const history = new Map<string, ProjectionVersion[]>();
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index];
+		const data = readFrame(entry);
+		if (!data || !isProjectionEntry(entry)) continue;
+		const versions = history.get(data.key) ?? [];
+		versions.push({ entry, data, index });
+		history.set(data.key, versions);
+	}
+	if (history.size === 0) return -1;
+
+	const positions = new Map(entries.map((entry, index) => [entry.id, index]));
+	const claimed = new Set<string>();
+	let latestIndex = -1;
+	const latestFrames = [...history.values()]
+		.map((versions) => versions.at(-1)!)
+		.sort((left, right) => right.index - left.index);
+
+	for (const frame of latestFrames) {
+		const versions = history.get(frame.data.key) ?? [];
+		const previous = versions.at(-2);
+		const changed = !previous || signature(previous.data) !== signature(frame.data);
+		const previousEffective =
+			previous?.data.directives.some(
+				(directive) =>
+					directive.replacement !== null &&
+					(directive.sourceEntryIds.some((id) => positions.has(id)) ||
+						(directive.anchorEntryId !== undefined && positions.has(directive.anchorEntryId))),
+			) ?? false;
+		const found = frame.data.directives.flatMap((directive) =>
+			directive.replacement ? directive.sourceEntryIds.filter((id) => positions.has(id)) : [],
+		);
+		if (found.some((id) => claimed.has(id))) {
+			if (changed && previousEffective) latestIndex = Math.max(latestIndex, frame.index);
+			continue;
+		}
+		const effective = frame.data.directives.some(
+			(directive) =>
+				directive.replacement !== null &&
+				(directive.sourceEntryIds.some((id) => positions.has(id)) ||
+					(directive.anchorEntryId !== undefined && positions.has(directive.anchorEntryId))),
+		);
+		if (!effective) {
+			if (changed && previousEffective) latestIndex = Math.max(latestIndex, frame.index);
+			continue;
+		}
+		for (const id of found) claimed.add(id);
+		if (changed) latestIndex = Math.max(latestIndex, frame.index);
+	}
+
+	return latestIndex;
+}
+
 interface ResolvedDirective {
 	key: string;
 	sourceEntryIds: string[];

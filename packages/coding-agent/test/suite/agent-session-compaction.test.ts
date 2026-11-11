@@ -1363,4 +1363,54 @@ describe("AgentSession compaction characterization", () => {
 		expect(belowThresholdSpy).not.toHaveBeenCalled();
 		expect(disabledSpy).not.toHaveBeenCalled();
 	});
+
+	it("does not re-trigger threshold compaction after a projection frame or reported effective context reduces usage", async () => {
+		const harness = await createHarness({
+			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 20 } },
+			models: [{ id: "faux-1", contextWindow: 100, maxTokens: 100 }],
+		});
+		harnesses.push(harness);
+		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals & {
+			_reportEffectiveContext(usage: { tokens: number; source: string }): void;
+			_exceedsCompactionThreshold(model: unknown, projection: unknown): boolean;
+		};
+		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
+
+		const now = Date.now();
+		const userId = harness.sessionManager.appendMessage({
+			role: "user",
+			content: [{ type: "text", text: "large history ".repeat(40) }],
+			timestamp: now - 2,
+		});
+		const highUsageAssistant = createAssistant(harness, {
+			stopReason: "stop",
+			totalTokens: 95,
+			timestamp: now - 1,
+		});
+		harness.sessionManager.appendMessage(highUsageAssistant);
+		harness.sessionManager.appendCustomEntry(PROJECTION_TYPE, {
+			version: 2,
+			key: "posture:context",
+			generation: 1,
+			fingerprint: "repaired-1",
+			directives: [
+				{
+					key: "fold",
+					sourceEntryIds: [userId],
+					replacement: { customType: "posture-fold", content: "tiny summary", display: true },
+				},
+			],
+		});
+		harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+		sessionInternals._reportEffectiveContext({ tokens: 25, source: "posture/estimate" });
+
+		await sessionInternals._checkCompaction(highUsageAssistant, false);
+		expect(runAutoCompactionSpy).not.toHaveBeenCalled();
+		expect(
+			sessionInternals._exceedsCompactionThreshold(
+				harness.session.model,
+				harness.sessionManager.buildSessionProjection(),
+			),
+		).toBe(false);
+	});
 });

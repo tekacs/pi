@@ -24,6 +24,7 @@ import type {
 	Usage,
 } from "@earendil-works/pi-ai/compat";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
+import { getLatestChangedProjectionIndex } from "../context-projection.ts";
 import { convertToLlm } from "../messages.ts";
 import {
 	buildSessionProjection,
@@ -223,7 +224,12 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
 	};
 }
 
-/** Estimate projected context without trusting usage captured before a later edit or compaction. */
+/**
+ * Estimate projected context without trusting usage captured before a later context edit,
+ * compaction, or effective `pi.context-projection` frame. Omitting a failed/aborted/zero-usage
+ * assistant attempt or its paired tool results never changes the projected prefix of an earlier
+ * valid assistant response, so recovery/retry omissions do not discard that usage baseline.
+ */
 export function estimateProjectedContextTokens(
 	projection: SessionProjection,
 	branchEntries: SessionEntry[],
@@ -241,14 +247,26 @@ export function estimateProjectedContextTokens(
 			projectedMessageIndex = nextMessageIndex;
 		}
 
-		const usageEntryIndex = usageEntryId ? branchEntries.findIndex((entry) => entry.id === usageEntryId) : -1;
-		let latestInvalidatingEntryIndex = -1;
-		for (let i = branchEntries.length - 1; i >= 0; i--) {
+		const positions = new Map(branchEntries.map((entry, index) => [entry.id, index]));
+		const usageEntryIndex = usageEntryId === undefined ? -1 : (positions.get(usageEntryId) ?? -1);
+		let latestInvalidatingEntryIndex = getLatestChangedProjectionIndex(branchEntries);
+		for (let i = branchEntries.length - 1; i > latestInvalidatingEntryIndex; i--) {
 			const entry = branchEntries[i];
-			if (entry.type === "context_edit" || entry.type === "compaction") {
+			if (entry.type === "compaction") {
 				latestInvalidatingEntryIndex = i;
 				break;
 			}
+			if (entry.type !== "context_edit") continue;
+			const targetIndex = positions.get(entry.targetId);
+			if (entry.replacement === null && targetIndex !== undefined && targetIndex > usageEntryIndex) {
+				const target = branchEntries[targetIndex];
+				if (target?.type === "message") {
+					if (target.message.role === "assistant" && getAssistantUsage(target.message) === undefined) continue;
+					if (target.message.role === "toolResult") continue;
+				}
+			}
+			latestInvalidatingEntryIndex = i;
+			break;
 		}
 		if (usageEntryIndex > latestInvalidatingEntryIndex) return estimate;
 	}

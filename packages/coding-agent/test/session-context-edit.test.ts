@@ -5,6 +5,7 @@ import {
 	estimateProjectedContextTokens,
 	prepareCompaction,
 } from "../src/core/compaction/index.ts";
+import { PROJECTION_TYPE } from "../src/core/context-projection.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 
 function assistant(text: string): AssistantMessage {
@@ -360,5 +361,62 @@ describe("session context edits", () => {
 		expect(preparation).toBeDefined();
 		expect(JSON.stringify(preparation?.messagesToSummarize)).not.toContain("OMIT-ME");
 		expect(JSON.stringify(preparation?.turnPrefixMessages)).not.toContain("OMIT-ME");
+	});
+
+	it("invalidates pre-projection assistant usage when a pi.context-projection frame changes context", () => {
+		const session = SessionManager.inMemory();
+		const largeUserId = session.appendMessage({
+			role: "user",
+			content: "large history ".repeat(2_000),
+			timestamp: Date.now(),
+		});
+		const response = assistant("small answer");
+		response.usage = { ...response.usage, input: 480_000, totalTokens: 480_001 };
+		session.appendMessage(response);
+		session.appendCustomEntry(PROJECTION_TYPE, {
+			version: 2,
+			key: "posture:context",
+			generation: 1,
+			fingerprint: "folded-1",
+			directives: [
+				{
+					key: "fold",
+					sourceEntryIds: [largeUserId],
+					replacement: { customType: "posture-fold", content: "folded summary", display: true },
+				},
+			],
+		});
+
+		const estimate = estimateProjectedContextTokens(session.buildSessionProjection(), session.getBranch());
+		expect(estimate.usageTokens).toBe(0);
+		expect(estimate.tokens).toBeLessThan(100);
+	});
+
+	it("retains valid assistant usage across later failed-attempt retry omissions", () => {
+		const session = SessionManager.inMemory();
+		session.appendMessage({ role: "user", content: "prompt", timestamp: Date.now() });
+		const settled = assistant("settled answer");
+		settled.content = [
+			{
+				type: "thinking",
+				thinking: "summary",
+				thinkingSignature: "x".repeat(400_000),
+			},
+			{ type: "text", text: "settled answer" },
+		];
+		settled.usage = { ...settled.usage, input: 10_000, output: 100, totalTokens: 10_100 };
+		session.appendMessage(settled);
+		session.appendMessage({ role: "user", content: "next prompt", timestamp: Date.now() });
+
+		const failedAttempt = assistant("");
+		failedAttempt.stopReason = "error";
+		failedAttempt.errorMessage = "Network connection lost";
+		failedAttempt.usage = { ...failedAttempt.usage, input: 0, output: 0, totalTokens: 0 };
+		const failedId = session.appendMessage(failedAttempt);
+		session.appendContextEdit(failedId, null);
+
+		const estimate = estimateProjectedContextTokens(session.buildSessionProjection(), session.getBranch());
+		expect(estimate.usageTokens).toBe(10_100);
+		expect(estimate.tokens).toBe(10_103);
 	});
 });
