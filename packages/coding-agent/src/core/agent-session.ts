@@ -1162,6 +1162,7 @@ export class AgentSession {
 	}
 
 	private _commitBoundaryDrafts(drafts: SessionBoundaryDraft[]): void {
+		if (drafts.length === 0) return;
 		const appended = this._applyBoundaryDrafts(this.sessionManager, drafts);
 		this._refreshFinalizedContext();
 		for (const entry of appended) this._emit({ type: "entry_appended", entry });

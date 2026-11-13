@@ -186,17 +186,26 @@ describe("createAgentSession stream options", () => {
 		};
 	}
 
-	it("schedules cache warming after a completed session request", async () => {
-		const fixture = await createCacheWarmingSession();
+	it("schedules cache warming after a completed session request, including re-projected custom messages", async () => {
+		let customEntryId = "";
+		const fixture = await createCacheWarmingSession((manager) => {
+			customEntryId = manager.appendCustomMessageEntry("extension-note", "stable context", false, { v: 1 });
+		});
 		try {
 			await fixture.session.prompt("test");
 			expect(fixture.session.cacheWarmingStatus?.nextWarmAt).toBeGreaterThan(Date.now());
 
-			// Equivalent shallow copies remain current, but removing the request prefix does not.
+			// Re-projecting finalized context recreates CustomMessage instances with identical fields.
+			fixture.session.refreshContext();
+			expect(fixture.session.cacheWarmingStatus?.nextWarmAt).toBeGreaterThan(Date.now());
+
+			// Equivalent shallow copies remain current, while mutating or removing the prefix invalidates warming.
 			fixture.session.agent.state.messages = [...fixture.session.agent.state.messages];
 			fixture.session.agent.state.model = { ...fixture.session.agent.state.model };
 			expect(fixture.session.cacheWarmingStatus?.nextWarmAt).toBeGreaterThan(Date.now());
-			fixture.session.agent.state.messages = fixture.session.agent.state.messages.slice(1);
+
+			fixture.session.sessionManager.appendContextEdit(customEntryId, { content: "mutated context" });
+			fixture.session.refreshContext();
 			expect(fixture.session.cacheWarmingStatus?.reason).toBe("conversation context changed");
 		} finally {
 			fixture.dispose();
