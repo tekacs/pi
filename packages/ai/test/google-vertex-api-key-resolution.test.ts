@@ -239,4 +239,65 @@ describe("google-vertex api key resolution", () => {
 			},
 		});
 	});
+
+	it("sends X-Vertex-Ai-Session-Id from cacheKey or sessionId unless cacheRetention is none", async () => {
+		await streamGoogleVertex(model, context, {
+			project: "test-project",
+			location: "global",
+			sessionId: "session-123",
+		}).result();
+
+		await streamGoogleVertex(model, context, {
+			apiKey: "AIzaSyExampleRealisticLookingApiKey123456",
+			sessionId: "session-123",
+			cacheKey: "cache-override-456",
+		}).result();
+
+		await streamGoogleVertex(model, context, {
+			project: "test-project",
+			location: "global",
+			sessionId: "session-disabled",
+			cacheRetention: "none",
+		}).result();
+
+		await streamGoogleVertex(model, context, {
+			project: "test-project",
+			location: "global",
+			sessionId: "session-env-disabled",
+			env: { PI_CACHE_RETENTION: "none" },
+		}).result();
+
+		await streamGoogleVertex(model, context, {
+			project: "test-project",
+			location: "global",
+			sessionId: "session-default",
+			headers: { "x-vertex-ai-session-id": "explicit-header-id" },
+		}).result();
+
+		expect(googleGenAiMock.constructorCalls).toHaveLength(5);
+		expect(googleGenAiMock.constructorCalls[0]?.httpOptions).toEqual({
+			headers: {
+				"User-Agent": PI_USER_AGENT,
+				"X-Vertex-Ai-Session-Id": "session-123",
+			},
+		});
+		expect(googleGenAiMock.constructorCalls[1]?.httpOptions).toEqual({
+			headers: {
+				"User-Agent": PI_USER_AGENT,
+				"X-Vertex-Ai-Session-Id": "cache-override-456",
+			},
+		});
+		expect(googleGenAiMock.constructorCalls[2]?.httpOptions).toEqual({
+			headers: { "User-Agent": PI_USER_AGENT },
+		});
+		expect(googleGenAiMock.constructorCalls[3]?.httpOptions).toEqual({
+			headers: { "User-Agent": PI_USER_AGENT },
+		});
+		expect(googleGenAiMock.constructorCalls[4]?.httpOptions).toEqual({
+			headers: {
+				"User-Agent": PI_USER_AGENT,
+				"x-vertex-ai-session-id": "explicit-header-id",
+			},
+		});
+	});
 });

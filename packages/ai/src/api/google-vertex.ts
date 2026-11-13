@@ -100,9 +100,10 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 				throw new Error("Custom fetch is not supported by the Google Vertex adapter");
 			}
 			const apiKey = resolveApiKey(options);
+			const sessionAffinityId = resolveSessionAffinityId(options);
 			// Create the client using either a Vertex API key, if provided, or ADC with project and location
 			const client = apiKey
-				? createClientWithApiKey(model, apiKey, options?.headers, options?.identity)
+				? createClientWithApiKey(model, apiKey, options?.headers, options?.identity, sessionAffinityId)
 				: createClient(
 						model,
 						resolveProject(options),
@@ -110,6 +111,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						options?.headers,
 						options?.env,
 						options?.identity,
+						sessionAffinityId,
 					);
 			const currentTools = getCurrentTools(normalizedContext.messages);
 			let params = buildParams(model, normalizedContext, options);
@@ -456,6 +458,7 @@ function createClient(
 	optionsHeaders?: ProviderHeaders,
 	env?: ProviderEnv,
 	identity?: ClientIdentity,
+	sessionAffinityId?: string,
 ): GoogleGenAI {
 	const googleAuthOptions = buildGoogleAuthOptions(env);
 	return createGoogleGenAI({
@@ -464,7 +467,7 @@ function createClient(
 		location,
 		apiVersion: API_VERSION,
 		...(googleAuthOptions ? { googleAuthOptions } : {}),
-		httpOptions: buildHttpOptions(model, optionsHeaders, identity),
+		httpOptions: buildHttpOptions(model, optionsHeaders, identity, sessionAffinityId),
 	});
 }
 
@@ -473,19 +476,30 @@ function createClientWithApiKey(
 	apiKey: string,
 	optionsHeaders?: ProviderHeaders,
 	identity?: ClientIdentity,
+	sessionAffinityId?: string,
 ): GoogleGenAI {
 	return createGoogleGenAI({
 		vertexai: true,
 		apiKey,
 		apiVersion: API_VERSION,
-		httpOptions: buildHttpOptions(model, optionsHeaders, identity),
+		httpOptions: buildHttpOptions(model, optionsHeaders, identity, sessionAffinityId),
 	});
+}
+
+function resolveSessionAffinityId(options?: GoogleVertexOptions): string | undefined {
+	const retention = options?.cacheRetention ?? getProviderEnvValue("PI_CACHE_RETENTION", options?.env);
+	if (retention === "none") {
+		return undefined;
+	}
+	const sessionId = (options?.cacheKey ?? options?.sessionId)?.trim();
+	return sessionId ? sessionId : undefined;
 }
 
 function buildHttpOptions(
 	model: Model<"google-vertex">,
 	optionsHeaders?: ProviderHeaders,
 	identity?: ClientIdentity,
+	sessionAffinityId?: string,
 ): HttpOptions | undefined {
 	const httpOptions: HttpOptions = {};
 	const baseUrl = resolveCustomBaseUrl(model.baseUrl);
@@ -497,7 +511,13 @@ function buildHttpOptions(
 		}
 	}
 
-	const headers = providerHeadersToRecord(getIdentityHeaders(model, identity), model.headers, optionsHeaders);
+	const sessionHeaders = sessionAffinityId ? { "X-Vertex-Ai-Session-Id": sessionAffinityId } : undefined;
+	const headers = providerHeadersToRecord(
+		getIdentityHeaders(model, identity),
+		sessionHeaders,
+		model.headers,
+		optionsHeaders,
+	);
 	if (headers) {
 		httpOptions.headers = headers;
 	}
