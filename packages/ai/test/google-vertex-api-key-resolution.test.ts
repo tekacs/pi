@@ -2,12 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const googleGenAiMock = vi.hoisted(() => ({
 	constructorCalls: [] as Array<Record<string, unknown>>,
+	nextUsageMetadata: undefined as Record<string, unknown> | undefined,
 }));
 
 vi.mock("@google/genai", () => {
 	class GoogleGenAI {
 		models = {
 			generateContentStream: async function* () {
+				const usageMetadata = googleGenAiMock.nextUsageMetadata ?? {
+					promptTokenCount: 1,
+					candidatesTokenCount: 1,
+					totalTokenCount: 2,
+				};
+				googleGenAiMock.nextUsageMetadata = undefined;
 				yield {
 					responseId: "vertex-response-id",
 					candidates: [
@@ -16,11 +23,7 @@ vi.mock("@google/genai", () => {
 							finishReason: "STOP",
 						},
 					],
-					usageMetadata: {
-						promptTokenCount: 1,
-						candidatesTokenCount: 1,
-						totalTokenCount: 2,
-					},
+					usageMetadata,
 				};
 			},
 		};
@@ -32,6 +35,16 @@ vi.mock("@google/genai", () => {
 
 	return {
 		GoogleGenAI,
+		FinishReason: {
+			STOP: "STOP",
+			MAX_TOKENS: "MAX_TOKENS",
+		},
+		FunctionCallingConfigMode: {
+			AUTO: "AUTO",
+			ANY: "ANY",
+			NONE: "NONE",
+			VALIDATED: "VALIDATED",
+		},
 		ResourceScope: {
 			COLLECTION: "COLLECTION",
 		},
@@ -299,5 +312,46 @@ describe("google-vertex api key resolution", () => {
 				"x-vertex-ai-session-id": "explicit-header-id",
 			},
 		});
+	});
+
+	it("scales usage cost from Vertex trafficType and marks serviceTier", async () => {
+		const pricedModel: Model<"google-vertex"> = {
+			...model,
+			cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+		};
+
+		googleGenAiMock.nextUsageMetadata = {
+			promptTokenCount: 1_000_000,
+			cachedContentTokenCount: 500_000,
+			candidatesTokenCount: 100_000,
+			totalTokenCount: 1_100_000,
+			trafficType: "ON_DEMAND_PRIORITY",
+		};
+		const priority = await streamGoogleVertex(pricedModel, context, {
+			project: "test-project",
+			location: "global",
+		}).result();
+		expect(priority.usage.serviceTier).toBe("priority");
+		expect(priority.usage.cost).toEqual({
+			input: 1.8,
+			output: 1.8,
+			cacheRead: 0.09,
+			cacheWrite: 0,
+			total: 3.69,
+			totalFromProvider: false,
+		});
+
+		googleGenAiMock.nextUsageMetadata = {
+			promptTokenCount: 1_000_000,
+			candidatesTokenCount: 100_000,
+			totalTokenCount: 1_100_000,
+			trafficType: "ON_DEMAND_FLEX",
+		};
+		const flex = await streamGoogleVertex(pricedModel, context, {
+			project: "test-project",
+			location: "global",
+		}).result();
+		expect(flex.usage.serviceTier).toBe("flex");
+		expect(flex.usage.cost.total).toBe(1.5);
 	});
 });

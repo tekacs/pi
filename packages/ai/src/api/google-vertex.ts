@@ -32,6 +32,7 @@ import { getSystemMessageText } from "../utils/text.ts";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "../utils/transcript.ts";
 import type { GoogleApiThinkingLevel, ResolvedGoogleThinkingLevel } from "./google-shared.ts";
 import {
+	applyGoogleServiceTierPricing,
 	convertMessages,
 	convertTools,
 	createGoogleGenAI,
@@ -367,6 +368,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						},
 					};
 					calculateCost(model, output.usage);
+					applyGoogleServiceTierPricing(output.usage, chunk.usageMetadata, params.config);
 				}
 			}
 

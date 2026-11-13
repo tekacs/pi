@@ -503,6 +503,8 @@ export interface Usage {
 	 * single request and the top-level buckets already describe it.
 	 */
 	entryPrompt?: { input: number; cacheRead: number; cacheWrite: number };
+	/** Effective provider service tier applied to catalog cost calculation (for example "priority" or "flex"). */
+	serviceTier?: string;
 	totalTokens: number;
 	cost: {
 		/** Catalog-derived input cost. */

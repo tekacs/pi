@@ -23,6 +23,7 @@ import type {
 	ThinkingLevel,
 	Tool,
 	TranscriptContext,
+	Usage,
 } from "../types.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
@@ -1033,4 +1034,50 @@ export class GooglePartialArgsStream {
 
 		return delta;
 	}
+}
+
+function scaleGoogleCost(value: number, multiplier: number): number {
+	return Math.round(value * multiplier * 1e12) / 1e12;
+}
+
+/**
+ * Scale catalog-derived usage cost for Google Priority (1.8x) and Flex (0.5x) PayGo tiers.
+ * Vertex reports the served tier in usageMetadata.trafficType; AI Studio omits trafficType
+ * and follows config.serviceTier. Marks usage.serviceTier so extensions do not re-apply it.
+ */
+export function applyGoogleServiceTierPricing(usage: Usage, usageMetadata: unknown, requestConfig?: unknown): void {
+	const trafficType =
+		usageMetadata && typeof usageMetadata === "object"
+			? (usageMetadata as { trafficType?: unknown }).trafficType
+			: undefined;
+	let multiplier = 1;
+	let tier: string | undefined;
+	if (trafficType === "ON_DEMAND_PRIORITY") {
+		multiplier = 1.8;
+		tier = "priority";
+	} else if (trafficType === "ON_DEMAND_FLEX") {
+		multiplier = 0.5;
+		tier = "flex";
+	} else if (trafficType === "ON_DEMAND") {
+		tier = "standard";
+	} else if (
+		requestConfig &&
+		typeof requestConfig === "object" &&
+		(requestConfig as { serviceTier?: unknown }).serviceTier === "priority"
+	) {
+		multiplier = 1.8;
+		tier = "priority";
+	}
+	if (tier) {
+		usage.serviceTier = tier;
+	}
+	if (multiplier === 1) return;
+	usage.cost = {
+		...usage.cost,
+		input: scaleGoogleCost(usage.cost.input, multiplier),
+		output: scaleGoogleCost(usage.cost.output, multiplier),
+		cacheRead: scaleGoogleCost(usage.cost.cacheRead, multiplier),
+		cacheWrite: scaleGoogleCost(usage.cost.cacheWrite, multiplier),
+		total: scaleGoogleCost(usage.cost.total, multiplier),
+	};
 }
