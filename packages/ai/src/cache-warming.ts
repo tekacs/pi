@@ -36,6 +36,12 @@ export const CACHE_WARMING_MAX_IDLE_AGE_MS = 30 * 60_000;
 /** A refresh is sent only when it is expected to save at least this many dollars. */
 export const CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS = 0.05;
 
+/** Minimum prompt size where a small residual cache hit still indicates the bulk prefix was evicted. */
+export const CACHE_WARMING_EVICTION_PROMPT_TOKENS = 200_000;
+
+/** Minimum fraction of a large prompt that a refresh must read from cache to keep warming. */
+export const CACHE_WARMING_MINIMUM_LARGE_HIT_RATIO = 0.2;
+
 /**
  * Chance that a real request arrives before the cache entry expires while the agent sits idle. Measured from our own
  * usage; per-session estimates were not better than this constant.
@@ -77,6 +83,18 @@ export function isCacheWarmingReplayable(model: Model<Api>, options: SimpleStrea
  */
 export function getCacheWarmingRequestOptions<T extends SimpleStreamOptions>(options: T, signal: AbortSignal): T {
 	return { ...options, maxTokens: 1, disableContinuation: true, maxRetries: 0, signal };
+}
+
+/**
+ * Whether a completed refresh read enough of its prompt from cache to justify scheduling another refresh.
+ * Zero cache reads always indicate a cold miss; on large prompts (>= 200k tokens), reading under 20% from
+ * cache indicates the bulk entry was evicted while tolerating partial prefix hits on smaller prompts.
+ */
+export function didCacheWarmHit(usage: Pick<Usage, "input" | "cacheRead" | "cacheWrite">): boolean {
+	if (!(usage.cacheRead > 0)) return false;
+	const promptTokens = Math.max(0, usage.input) + usage.cacheRead + Math.max(0, usage.cacheWrite);
+	if (promptTokens < CACHE_WARMING_EVICTION_PROMPT_TOKENS) return true;
+	return usage.cacheRead >= promptTokens * CACHE_WARMING_MINIMUM_LARGE_HIT_RATIO;
 }
 
 /** Decide whether refreshing the cache entry of a `promptTokens`-token request pays for itself in `phase`. */

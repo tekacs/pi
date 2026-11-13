@@ -6,6 +6,7 @@ import {
 	type CacheWarmingAction,
 	type CacheWarmingDecision,
 	type Context,
+	didCacheWarmHit,
 	evaluateCacheWarming,
 	getCacheWarmingDelayMs,
 	getCacheWarmingRequestOptions,
@@ -272,6 +273,10 @@ export class CacheWarmer {
 					extensionOverride ? "extension override" : undefined,
 				);
 				this.onWarmed?.(entry);
+				if (!didCacheWarmHit(message.usage)) {
+					this.stop("prompt cache entry was evicted", { decision, extensionOverride });
+					return;
+				}
 			}
 		} catch {
 			// Cache warming is best-effort and must not affect the active agent run.

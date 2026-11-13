@@ -314,6 +314,51 @@ describe("cache warming", () => {
 		failed.warmer.cancel();
 	});
 
+	it("stops after an uncached or evicted refresh while tolerating partial prefix hits", async () => {
+		vi.useFakeTimers();
+		const coldMiss = fakeRuntime({
+			result: async (model) => ({
+				...response(model),
+				usage: { ...warmUsage, input: 100_000, cacheRead: 0, totalTokens: 100_001 },
+			}),
+		});
+		coldMiss.warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(coldMiss.calls).toHaveLength(1);
+		expect(coldMiss.appendUsage).toHaveBeenCalledTimes(1);
+		expect(coldMiss.warmer.status).toMatchObject({ state: "inactive", reason: "prompt cache entry was evicted" });
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(coldMiss.calls).toHaveLength(1);
+
+		const largeEvicted = fakeRuntime({
+			branch: branchWithPrompt(500_000),
+			result: async (model) => ({
+				...response(model),
+				usage: { ...warmUsage, input: 458_000, cacheRead: 42_000, totalTokens: 500_001 },
+			}),
+		});
+		largeEvicted.warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(largeEvicted.calls).toHaveLength(1);
+		expect(largeEvicted.warmer.status).toMatchObject({ state: "inactive", reason: "prompt cache entry was evicted" });
+
+		// Partial hits on <200k prompts or >=20% hits on large prompts keep warming without false positives.
+		const partialHit = fakeRuntime({
+			branch: branchWithPrompt(90_000),
+			result: async (model) => ({
+				...response(model),
+				usage: { ...warmUsage, input: 54_000, cacheRead: 36_000, totalTokens: 90_001 },
+			}),
+		});
+		partialHit.warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(partialHit.calls).toHaveLength(1);
+		expect(partialHit.warmer.status.state).toBe("scheduled");
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(partialHit.calls).toHaveLength(2);
+		partialHit.warmer.cancel();
+	});
+
 	it("formats status and usage entries", () => {
 		const decision: CacheWarmingDecision = {
 			phase: "idle",
