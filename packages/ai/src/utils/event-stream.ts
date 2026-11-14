@@ -94,9 +94,18 @@ export class EventStream<T, R = T> implements AsyncIterable<T> {
  * the message already has one or its `timestamp` predates the stream. A stream that forwards a response which started
  * elsewhere, such as a deferred result fetched later, therefore leaves it untimed.
  */
+interface TrackedItemTiming {
+	startedAt: number;
+	delayMs: number;
+	endedAt?: number;
+}
+
 export class AssistantMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
 	readonly #startedAt = Date.now();
 	readonly #startedAtMonotonic = performance.now();
+	#firstContentAtMonotonic?: number;
+	#lastBoundaryAtMonotonic = this.#startedAtMonotonic;
+	readonly #itemTimings = new Map<number, TrackedItemTiming>();
 
 	constructor() {
 		super(
@@ -113,8 +122,29 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 	}
 
 	override push(event: AssistantMessageEvent): void {
-		if (event.type === "done") this.#time(event.message);
-		else if (event.type === "error") this.#time(event.error);
+		if (!this.done) {
+			switch (event.type) {
+				case "text_start":
+				case "text_delta":
+				case "thinking_start":
+				case "thinking_delta":
+				case "toolcall_start":
+				case "toolcall_delta":
+					this.#recordItemStart(event.contentIndex);
+					break;
+				case "text_end":
+				case "thinking_end":
+				case "toolcall_end":
+					this.#recordItemEnd(event.contentIndex);
+					break;
+				case "done":
+					this.#time(event.message);
+					break;
+				case "error":
+					this.#time(event.error);
+					break;
+			}
+		}
 		super.push(event);
 	}
 
@@ -123,9 +153,58 @@ export class AssistantMessageEventStream extends EventStream<AssistantMessageEve
 		super.end(result);
 	}
 
+	#recordItemStart(contentIndex: number): void {
+		const now = performance.now();
+		if (this.#firstContentAtMonotonic === undefined) {
+			this.#firstContentAtMonotonic = now;
+		}
+		if (!this.#itemTimings.has(contentIndex)) {
+			this.#itemTimings.set(contentIndex, {
+				startedAt: now,
+				delayMs: Math.max(0, Math.round(now - this.#lastBoundaryAtMonotonic)),
+			});
+		}
+	}
+
+	#recordItemEnd(contentIndex: number): void {
+		const now = performance.now();
+		if (this.#firstContentAtMonotonic === undefined) {
+			this.#firstContentAtMonotonic = now;
+		}
+		let entry = this.#itemTimings.get(contentIndex);
+		if (!entry) {
+			entry = {
+				startedAt: now,
+				delayMs: Math.max(0, Math.round(now - this.#lastBoundaryAtMonotonic)),
+				endedAt: now,
+			};
+			this.#itemTimings.set(contentIndex, entry);
+		} else if (entry.endedAt === undefined) {
+			entry.endedAt = now;
+		}
+		if (now > this.#lastBoundaryAtMonotonic) {
+			this.#lastBoundaryAtMonotonic = now;
+		}
+	}
+
 	#time(message: AssistantMessage): void {
 		if (this.done || message.durationMs !== undefined || message.timestamp < this.#startedAt) return;
-		message.durationMs = Math.max(0, Math.round(performance.now() - this.#startedAtMonotonic));
+		const finishedAt = performance.now();
+		message.durationMs = Math.max(0, Math.round(finishedAt - this.#startedAtMonotonic));
+		if (this.#firstContentAtMonotonic !== undefined && message.ttftMs === undefined) {
+			message.ttftMs = Math.max(0, Math.round(this.#firstContentAtMonotonic - this.#startedAtMonotonic));
+		}
+		if (this.#itemTimings.size > 0 && message.contentTimings === undefined && message.content.length > 0) {
+			message.contentTimings = message.content.map((_block, index) => {
+				const item = this.#itemTimings.get(index);
+				if (!item) return { delayMs: 0, durationMs: 0 };
+				const endedAt = item.endedAt ?? finishedAt;
+				return {
+					delayMs: item.delayMs,
+					durationMs: Math.max(0, Math.round(endedAt - item.startedAt)),
+				};
+			});
+		}
 	}
 }
 

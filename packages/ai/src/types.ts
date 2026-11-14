@@ -664,6 +664,23 @@ export interface AssistantMessage {
 	 * for deferred results fetched later.
 	 */
 	durationMs?: number;
+	/**
+	 * Milliseconds from stream creation until the first content item started arriving, measured with a monotonic
+	 * clock. Absent when no content events arrived or when the response was not timed by the stream.
+	 */
+	ttftMs?: number;
+	/**
+	 * Per-item arrival and streaming durations aligned by index with `content`. `contentTimings[0].delayMs` equals
+	 * `ttftMs`; subsequent `delayMs` values measure the gap from the preceding item's completion until that item started.
+	 */
+	contentTimings?: ContentItemTiming[];
+}
+
+export interface ContentItemTiming {
+	/** Milliseconds from request start (for item 0) or previous item completion until this item started arriving. */
+	delayMs: number;
+	/** Milliseconds from when this item started arriving until it completed (or stream settlement if truncated). */
+	durationMs: number;
 }
 
 /** A tool call that another tool made while it ran, for example from a codemode script. */

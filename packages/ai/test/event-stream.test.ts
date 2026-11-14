@@ -166,4 +166,59 @@ describe("AssistantMessageEventStream timing", () => {
 		stream.push({ type: "done", reason: "stop", message: late });
 		expect(late.durationMs).toBeUndefined();
 	});
+
+	it("records ttftMs and per-item delayMs/durationMs across thinking, text, and toolCall items", async () => {
+		const stream = new AssistantMessageEventStream();
+		const partial = message(Date.now());
+		stream.push({ type: "start", partial });
+
+		await sleep(25);
+		partial.content.push({ type: "thinking", thinking: "plan" });
+		stream.push({ type: "thinking_start", contentIndex: 0, partial });
+		await sleep(20);
+		stream.push({ type: "thinking_delta", contentIndex: 0, delta: "plan", partial });
+		stream.push({ type: "thinking_end", contentIndex: 0, content: "plan", partial });
+
+		await sleep(18);
+		partial.content.push({ type: "text", text: "answer" });
+		stream.push({ type: "text_start", contentIndex: 1, partial });
+		await sleep(15);
+		stream.push({ type: "text_end", contentIndex: 1, content: "answer", partial });
+
+		await sleep(12);
+		const call = { type: "toolCall" as const, id: "c1", name: "bash", arguments: { command: "true" } };
+		partial.content.push(call);
+		stream.push({ type: "toolcall_start", contentIndex: 2, partial });
+		stream.push({ type: "toolcall_end", contentIndex: 2, toolCall: call, partial });
+
+		stream.push({ type: "done", reason: "toolUse", message: partial });
+		const result = await stream.result();
+
+		expect(result.ttftMs).toBeGreaterThanOrEqual(18);
+		expect(result.contentTimings).toHaveLength(3);
+		expect(result.contentTimings?.[0]?.delayMs).toBe(result.ttftMs);
+		expect(result.contentTimings?.[0]?.durationMs).toBeGreaterThanOrEqual(14);
+		expect(result.contentTimings?.[1]?.delayMs).toBeGreaterThanOrEqual(12);
+		expect(result.contentTimings?.[1]?.durationMs).toBeGreaterThanOrEqual(10);
+		expect(result.contentTimings?.[2]?.delayMs).toBeGreaterThanOrEqual(8);
+		expect(result.content).toEqual([{ type: "thinking", thinking: "plan" }, { type: "text", text: "answer" }, call]);
+
+		// Forwarding stream preserves inner ttftMs and contentTimings.
+		const outer = new AssistantMessageEventStream();
+		await sleep(20);
+		outer.push({ type: "done", reason: "toolUse", message: result });
+		expect(result.ttftMs).toBe(result.contentTimings?.[0]?.delayMs);
+
+		// Unclosed block on error closes its durationMs at stream settlement.
+		const abortedStream = new AssistantMessageEventStream();
+		const failed = { ...message(Date.now()), stopReason: "aborted" as const };
+		await sleep(15);
+		failed.content.push({ type: "thinking", thinking: "partial" });
+		abortedStream.push({ type: "thinking_start", contentIndex: 0, partial: failed });
+		await sleep(15);
+		abortedStream.push({ type: "error", reason: "aborted", error: failed });
+		expect(failed.ttftMs).toBeGreaterThanOrEqual(10);
+		expect(failed.contentTimings?.[0]?.delayMs).toBe(failed.ttftMs);
+		expect(failed.contentTimings?.[0]?.durationMs).toBeGreaterThanOrEqual(10);
+	});
 });
