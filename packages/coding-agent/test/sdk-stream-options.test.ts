@@ -149,12 +149,26 @@ describe("createAgentSession stream options", () => {
 		}
 	}
 
-	async function createCacheWarmingSession(populate?: (manager: SessionManager, model: Model<Api>) => void) {
+	async function createCacheWarmingSession(
+		populate?: (manager: SessionManager, model: Model<Api>) => void,
+		extensionFactory?: ExtensionFactory,
+		streamOverride?: (callIndex: number, model: Model<Api>) => AssistantMessage,
+	) {
 		const model: Model<Api> = {
 			...createModel("anthropic-messages"),
 			cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
 			promptCache: { short: 300 },
 		};
+		const settingsManager = SettingsManager.inMemory({ cacheWarming: "idle" });
+		const resourceLoader = extensionFactory
+			? new DefaultResourceLoader({
+					cwd,
+					agentDir,
+					settingsManager,
+					extensionFactories: [extensionFactory],
+				})
+			: undefined;
+		await resourceLoader?.reload();
 		const authStorage = AuthStorage.create(join(agentDir, "auth.json"));
 		await authStorage.modify(model.provider, async () => ({ type: "api_key", key: "test-api-key" }));
 		const modelRegistry = await createModelRegistry(authStorage, join(agentDir, "models.json"));
@@ -163,6 +177,11 @@ describe("createAgentSession stream options", () => {
 			api: model.api,
 			streamSimple: () => {
 				providerCalls++;
+				if (streamOverride) {
+					const stream = createAssistantMessageEventStream();
+					stream.end(streamOverride(providerCalls, model));
+					return stream;
+				}
 				return createDoneStream(model.api, 100_000);
 			},
 		});
@@ -173,8 +192,9 @@ describe("createAgentSession stream options", () => {
 			agentDir,
 			model,
 			modelRuntime: getModelRuntime(modelRegistry),
-			settingsManager: SettingsManager.inMemory({ cacheWarming: "idle" }),
+			settingsManager,
 			sessionManager,
+			...(resourceLoader ? { resourceLoader } : {}),
 		});
 		return {
 			session,
@@ -207,6 +227,74 @@ describe("createAgentSession stream options", () => {
 			fixture.session.sessionManager.appendContextEdit(customEntryId, { content: "mutated context" });
 			fixture.session.refreshContext();
 			expect(fixture.session.cacheWarmingStatus?.reason).toBe("conversation context changed");
+		} finally {
+			fixture.dispose();
+		}
+	});
+
+	it("keeps cache warming scheduled after async extension custom messages and mid-run context projections", async () => {
+		let olderEntryIds: string[] = [];
+		const fixture = await createCacheWarmingSession(
+			(manager, model) => {
+				const u1 = manager.appendMessage({ role: "user", content: "old turn", timestamp: Date.now() - 10_000 });
+				const a1 = manager.appendMessage({
+					...createDoneMessage(model.api, 50_000),
+					timestamp: Date.now() - 9_000,
+				});
+				olderEntryIds = [u1, a1];
+			},
+			(pi) => {
+				pi.on("before_agent_start", async () => ({
+					message: { customType: "status-note", content: "status update", display: false },
+				}));
+				pi.on("message_end", async () => {
+					await new Promise((resolve) => setTimeout(resolve, 15));
+				});
+				pi.registerTool({
+					name: "fold_history",
+					label: "Fold History",
+					description: "Project earlier entries into one summary frame",
+					parameters: { type: "object", properties: {} } as any,
+					execute: async () => {
+						pi.appendEntry("pi.context-projection", {
+							version: 2,
+							key: "test:projection",
+							generation: 1,
+							fingerprint: "fp-1",
+							directives: [
+								{
+									sourceEntryIds: olderEntryIds,
+									replacement: { customType: "summary-note", content: "folded summary", display: false },
+								},
+							],
+						});
+						return { content: [{ type: "text", text: "projected" }], details: {} };
+					},
+				});
+			},
+			(callIndex, model) => {
+				if (callIndex === 1) {
+					return {
+						...createDoneMessage(model.api, 100_000),
+						content: [{ type: "toolCall", id: "call-1", name: "fold_history", arguments: {} }],
+						stopReason: "toolUse",
+					};
+				}
+				return createDoneMessage(model.api, 100_000);
+			},
+		);
+		try {
+			await fixture.session.prompt("next turn");
+			expect(fixture.providerCalls()).toBe(2);
+			expect(fixture.session.cacheWarmingStatus?.state).toBe("scheduled");
+			expect(fixture.session.cacheWarmingStatus?.nextWarmAt).toBeGreaterThan(Date.now());
+
+			await fixture.session.sendCustomMessage(
+				{ customType: "wake-note", content: "background task settled", display: false },
+				{ triggerTurn: true },
+			);
+			expect(fixture.providerCalls()).toBe(3);
+			expect(fixture.session.cacheWarmingStatus?.state).toBe("scheduled");
 		} finally {
 			fixture.dispose();
 		}

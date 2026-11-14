@@ -48,10 +48,11 @@ export const CACHE_WARMING_MINIMUM_LARGE_HIT_RATIO = 0.2;
  */
 export const CACHE_WARMING_IDLE_CONTINUATION_PROBABILITY = 0.15;
 
-/** Refresh at 90% of the TTL while preserving at least ten seconds of margin. */
+/** Refresh at 90% of the TTL while preserving enough margin for large-context prefill latency. */
 export function getCacheWarmingDelayMs(ttlMs: number): number | undefined {
 	if (ttlMs <= 10_000) return undefined;
-	return Math.max(1, Math.floor(Math.min(ttlMs * 0.9, ttlMs - 10_000)));
+	const marginMs = ttlMs >= 90_000 ? 25_000 : 10_000;
+	return Math.max(1, Math.floor(Math.min(ttlMs * 0.9, ttlMs - marginMs)));
 }
 
 /**

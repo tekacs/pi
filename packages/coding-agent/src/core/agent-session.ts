@@ -1303,6 +1303,7 @@ export class AgentSession {
 					event.message.display,
 					event.message.details,
 					inputId,
+					event.message.timestamp,
 				);
 			} else if (
 				event.message.role === "system" ||
@@ -2641,6 +2642,8 @@ export class AgentSession {
 			appMessage.content,
 			appMessage.display,
 			appMessage.details,
+			appMessage.inputId,
+			appMessage.timestamp,
 		);
 		this._refreshFinalizedContext();
 		this._emit({ type: "message_start", message: appMessage });

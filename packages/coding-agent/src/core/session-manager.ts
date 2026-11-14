@@ -1419,7 +1419,14 @@ export class SessionManager {
 		display: boolean,
 		details?: T,
 		inputId?: string,
+		timestamp?: number | string,
 	): string {
+		const entryTimestamp =
+			typeof timestamp === "number" && Number.isFinite(timestamp)
+				? new Date(timestamp).toISOString()
+				: typeof timestamp === "string" && timestamp.length > 0
+					? timestamp
+					: new Date().toISOString();
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
 			...(inputId ? { inputId } : {}),
@@ -1429,7 +1436,7 @@ export class SessionManager {
 			details,
 			id: generateId(this.byId),
 			parentId: this.leafId,
-			timestamp: new Date().toISOString(),
+			timestamp: entryTimestamp,
 		};
 		this._appendEntry(entry, inputId !== undefined);
 		return entry.id;

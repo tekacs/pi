@@ -373,10 +373,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Warm only requests for the selected model. Requests a virtual selection routed, or that an
 	// extension redirected, may not be repeated by the next request, so warming them could be wasted.
 	const cacheContextIsCurrent = (requestModel: Model<any>) => {
-		const messages = agent.state.messages;
+		const messages =
+			sessionManager.getEntryCount() > 0 ? sessionManager.buildSessionProjection().messages : agent.state.messages;
 		return () => {
 			const currentModel = agent.state.model;
-			const currentMessages = agent.state.messages;
+			const currentMessages =
+				agent.state.isStreaming && sessionManager.getEntryCount() > 0
+					? sessionManager.buildSessionProjection().messages
+					: agent.state.messages;
 			return (
 				currentModel.provider === requestModel.provider &&
 				currentModel.id === requestModel.id &&

@@ -11,7 +11,7 @@ import {
 	type Usage,
 } from "@earendil-works/pi-ai";
 import { getBuiltinModel } from "@earendil-works/pi-ai/providers/all";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import {
 	CacheWarmer,
@@ -121,7 +121,11 @@ function request(model: Model<Api> = adaptiveModel, options: ModelsSimpleStreamO
 
 const current = () => true;
 
-afterEach(() => vi.useRealTimers());
+beforeEach(() => vi.stubEnv("PI_CACHE_RETENTION", "short"));
+afterEach(() => {
+	vi.unstubAllEnvs();
+	vi.useRealTimers();
+});
 
 describe("cache warming", () => {
 	it("derives eligibility and timing from retention and provider behavior", () => {
@@ -133,9 +137,12 @@ describe("cache warming", () => {
 			getPromptCacheTtlMs(openaiModel, { cacheRetention: "long" }),
 			getPromptCacheTtlMs(unknownModel, undefined),
 		]).toEqual([300_000, 3_600_000, undefined, 3_600_000, 86_400_000, undefined]);
-		expect([getCacheWarmingDelayMs(300_000), getCacheWarmingDelayMs(60_000), getCacheWarmingDelayMs(10_000)]).toEqual(
-			[270_000, 50_000, undefined],
-		);
+		expect([
+			getCacheWarmingDelayMs(300_000),
+			getCacheWarmingDelayMs(110_000),
+			getCacheWarmingDelayMs(60_000),
+			getCacheWarmingDelayMs(10_000),
+		]).toEqual([270_000, 85_000, 50_000, undefined]);
 		expect([
 			isCacheWarmingReplayable(budgetModel, { reasoning: "medium" }),
 			isCacheWarmingReplayable(budgetModel, undefined),
