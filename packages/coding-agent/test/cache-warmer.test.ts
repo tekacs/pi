@@ -321,8 +321,35 @@ describe("cache warming", () => {
 		failed.warmer.cancel();
 	});
 
-	it("stops after an uncached or evicted refresh while tolerating partial prefix hits", async () => {
+	it("keeps warming when a single miss re-populates the cache and stops after two consecutive misses", async () => {
 		vi.useFakeTimers();
+		// A single miss just paid to re-populate the cache; a hit on the next refresh resets the miss streak.
+		let recoveryAttempt = 0;
+		const recovered = fakeRuntime({
+			result: async (model) => {
+				recoveryAttempt++;
+				const isMiss = recoveryAttempt === 1 || recoveryAttempt === 3;
+				return {
+					...response(model),
+					usage: isMiss
+						? { ...warmUsage, input: 100_000, cacheRead: 0, totalTokens: 100_001 }
+						: { ...warmUsage, input: 0, cacheRead: 100_000, totalTokens: 100_001 },
+				};
+			},
+		});
+		recovered.warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(recovered.calls).toHaveLength(1);
+		expect(recovered.warmer.status.state).toBe("scheduled");
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(recovered.calls).toHaveLength(2);
+		expect(recovered.warmer.status.state).toBe("scheduled");
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(recovered.calls).toHaveLength(3);
+		expect(recovered.warmer.status.state).toBe("scheduled");
+		recovered.warmer.cancel();
+
+		// Two consecutive cold misses prove the cache is not sticking and stop warming.
 		const coldMiss = fakeRuntime({
 			result: async (model) => ({
 				...response(model),
@@ -332,10 +359,13 @@ describe("cache warming", () => {
 		coldMiss.warmer.start(request(), current);
 		await vi.advanceTimersByTimeAsync(270_000);
 		expect(coldMiss.calls).toHaveLength(1);
-		expect(coldMiss.appendUsage).toHaveBeenCalledTimes(1);
+		expect(coldMiss.warmer.status.state).toBe("scheduled");
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(coldMiss.calls).toHaveLength(2);
+		expect(coldMiss.appendUsage).toHaveBeenCalledTimes(2);
 		expect(coldMiss.warmer.status).toMatchObject({ state: "inactive", reason: "prompt cache entry was evicted" });
 		await vi.advanceTimersByTimeAsync(270_000);
-		expect(coldMiss.calls).toHaveLength(1);
+		expect(coldMiss.calls).toHaveLength(2);
 
 		const largeEvicted = fakeRuntime({
 			branch: branchWithPrompt(500_000),
@@ -346,7 +376,9 @@ describe("cache warming", () => {
 		});
 		largeEvicted.warmer.start(request(), current);
 		await vi.advanceTimersByTimeAsync(270_000);
-		expect(largeEvicted.calls).toHaveLength(1);
+		expect(largeEvicted.warmer.status.state).toBe("scheduled");
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(largeEvicted.calls).toHaveLength(2);
 		expect(largeEvicted.warmer.status).toMatchObject({ state: "inactive", reason: "prompt cache entry was evicted" });
 
 		// Partial hits on <200k prompts or >=20% hits on large prompts keep warming without false positives.

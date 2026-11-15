@@ -42,6 +42,9 @@ export const CACHE_WARMING_EVICTION_PROMPT_TOKENS = 200_000;
 /** Minimum fraction of a large prompt that a refresh must read from cache to keep warming. */
 export const CACHE_WARMING_MINIMUM_LARGE_HIT_RATIO = 0.2;
 
+/** Consecutive refreshes that miss the cache before warming gives up (one miss re-populates the cache; two proves it is not sticking). */
+export const CACHE_WARMING_MISS_LIMIT = 2;
+
 /**
  * Chance that a real request arrives before the cache entry expires while the agent sits idle. Measured from our own
  * usage; per-session estimates were not better than this constant.

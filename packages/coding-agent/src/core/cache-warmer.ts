@@ -3,6 +3,7 @@ import {
 	CACHE_WARMING_MAX_AGE_MS,
 	CACHE_WARMING_MAX_IDLE_AGE_MS,
 	CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS,
+	CACHE_WARMING_MISS_LIMIT,
 	type CacheWarmingAction,
 	type CacheWarmingDecision,
 	type Context,
@@ -79,6 +80,7 @@ interface ActiveRun extends CacheWarmRequest {
 	nextWarmAt: number;
 	/** Set while a refresh that an extension forced is in flight. */
 	extensionOverride: boolean;
+	consecutiveMisses: number;
 	timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -168,6 +170,7 @@ export class CacheWarmer {
 			phase: "streaming",
 			nextWarmAt: 0,
 			extensionOverride: false,
+			consecutiveMisses: 0,
 		};
 		this.schedule(this.run);
 	}
@@ -273,9 +276,14 @@ export class CacheWarmer {
 					extensionOverride ? "extension override" : undefined,
 				);
 				this.onWarmed?.(entry);
-				if (!didCacheWarmHit(message.usage)) {
-					this.stop("prompt cache entry was evicted", { decision, extensionOverride });
-					return;
+				if (didCacheWarmHit(message.usage)) {
+					run.consecutiveMisses = 0;
+				} else {
+					run.consecutiveMisses++;
+					if (run.consecutiveMisses >= CACHE_WARMING_MISS_LIMIT) {
+						this.stop("prompt cache entry was evicted", { decision, extensionOverride });
+						return;
+					}
 				}
 			}
 		} catch {
