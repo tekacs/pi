@@ -505,12 +505,14 @@ function ansiCodeLength(str: string, pos: number): number {
 
 	const next = str[pos + 1];
 
-	// CSI sequence: ESC [ ... m/G/K/H/J
+	// ECMA-48 CSI sequence: ESC [ <param/intermediate 0x20..=0x3F>* <final 0x40..=0x7E>.
+	// Stop immediately at the first final byte (including `{`, `}`, letters, etc.) and reject
+	// control/non-ASCII bytes so malformed CSI never swallows following prose into column math.
 	if (next === "[") {
 		for (let j = pos + 2; j < str.length; j++) {
 			const c = str.charCodeAt(j);
-			// m, G, K, H, J
-			if (c === 0x6d || c === 0x47 || c === 0x4b || c === 0x48 || c === 0x4a) return j + 1 - pos;
+			if (c >= 0x40 && c <= 0x7e) return j + 1 - pos;
+			if (c < 0x20 || c > 0x3f) return 0;
 		}
 		return 0;
 	}

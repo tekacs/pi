@@ -14,6 +14,7 @@ import type {
 	TranscriptContext,
 } from "../types.ts";
 import { combineAbortSignals } from "../utils/abort-signals.ts";
+import { OutputAnsiNormalizer } from "../utils/ansi-sgr.ts";
 import {
 	normalizeProviderError,
 	ProviderFailureError,
@@ -590,15 +591,28 @@ async function consumeChatStream(
 	// Stream state per Mistral tool call, kept off the content blocks so it never reaches partials.
 	const toolCallsByKey = new Map<string | number, { contentIndex: number; arguments: ToolCallArgumentsStream }>();
 
+	let currentTextNormalizer: OutputAnsiNormalizer | null = null;
 	const finishCurrentBlock = (block?: typeof currentBlock) => {
 		if (!block) return;
 		if (block.type === "text") {
+			const tail = currentTextNormalizer?.flush() ?? "";
+			if (tail.length > 0) {
+				block.text += tail;
+				stream.push({
+					type: "text_delta",
+					contentIndex: blockIndex(),
+					delta: tail,
+					partial: output,
+				});
+			}
 			stream.push({
 				type: "text_end",
 				contentIndex: blockIndex(),
 				content: block.text,
 				partial: output,
 			});
+			currentTextNormalizer?.reset();
+			currentTextNormalizer = null;
 			return;
 		}
 		if (block.type === "thinking") {
@@ -656,16 +670,20 @@ async function consumeChatStream(
 					if (!currentBlock || currentBlock.type !== "text") {
 						finishCurrentBlock(currentBlock);
 						currentBlock = { type: "text", text: "" };
+						currentTextNormalizer = new OutputAnsiNormalizer();
 						output.content.push(currentBlock);
 						stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
 					}
-					currentBlock.text += textDelta;
-					stream.push({
-						type: "text_delta",
-						contentIndex: blockIndex(),
-						delta: textDelta,
-						partial: output,
-					});
+					const normalizedDelta = currentTextNormalizer!.push(textDelta);
+					if (normalizedDelta.length > 0) {
+						currentBlock.text += normalizedDelta;
+						stream.push({
+							type: "text_delta",
+							contentIndex: blockIndex(),
+							delta: normalizedDelta,
+							partial: output,
+						});
+					}
 					continue;
 				}
 
@@ -698,16 +716,20 @@ async function consumeChatStream(
 					if (!currentBlock || currentBlock.type !== "text") {
 						finishCurrentBlock(currentBlock);
 						currentBlock = { type: "text", text: "" };
+						currentTextNormalizer = new OutputAnsiNormalizer();
 						output.content.push(currentBlock);
 						stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
 					}
-					currentBlock.text += textDelta;
-					stream.push({
-						type: "text_delta",
-						contentIndex: blockIndex(),
-						delta: textDelta,
-						partial: output,
-					});
+					const normalizedDelta = currentTextNormalizer!.push(textDelta);
+					if (normalizedDelta.length > 0) {
+						currentBlock.text += normalizedDelta;
+						stream.push({
+							type: "text_delta",
+							contentIndex: blockIndex(),
+							delta: normalizedDelta,
+							partial: output,
+						});
+					}
 				}
 			}
 		}

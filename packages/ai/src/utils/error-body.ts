@@ -56,6 +56,17 @@ export class ProviderFailureError extends Error implements ProviderFailure {
 	}
 }
 
+/** Retryable transport error thrown when an active provider response stream stops yielding data. */
+export class StreamStalledError extends ProviderFailureError {
+	readonly timeoutMs: number;
+
+	constructor(timeoutMs: number, message = `Stream stalled after ${timeoutMs}ms without receiving data`) {
+		super(message, { code: "stream_stalled", type: "stream_stalled" });
+		this.name = "StreamStalledError";
+		this.timeoutMs = timeoutMs;
+	}
+}
+
 /** Set the display and machine-readable failure together, without persisting raw SDK objects. */
 export function setProviderError(
 	output: Pick<AssistantMessage, "errorMessage" | "failure">,

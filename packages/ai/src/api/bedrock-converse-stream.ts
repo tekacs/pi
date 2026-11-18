@@ -48,6 +48,7 @@ import type {
 	Tool,
 	ToolResultMessage,
 } from "../types.ts";
+import { OutputAnsiNormalizer } from "../utils/ansi-sgr.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { normalizeProviderError, ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
@@ -126,6 +127,7 @@ export interface BedrockOptions extends StreamOptions {
 type OpenBlock = {
 	readonly contentIndex: number;
 	readonly arguments?: ToolCallArgumentsStream;
+	readonly ansiNormalizer?: OutputAnsiNormalizer;
 	/** Encrypted reasoning deltas, joined into `thinkingSignature` when the block ends. */
 	redactedChunks?: Uint8Array[];
 };
@@ -677,14 +679,17 @@ function handleContentBlockDelta(
 		// If no text block exists yet, create one, as `handleContentBlockStart` is not sent for text blocks
 		if (!open) {
 			output.content.push({ type: "text", text: "" });
-			open = { contentIndex: output.content.length - 1 };
+			open = { contentIndex: output.content.length - 1, ansiNormalizer: new OutputAnsiNormalizer() };
 			openBlocks.set(contentBlockIndex, open);
 			block = output.content[open.contentIndex];
 			stream.push({ type: "text_start", contentIndex: open.contentIndex, partial: output });
 		}
 		if (block?.type === "text") {
-			block.text += delta.text;
-			stream.push({ type: "text_delta", contentIndex: open.contentIndex, delta: delta.text, partial: output });
+			const normalized = open.ansiNormalizer ? open.ansiNormalizer.push(delta.text) : delta.text;
+			if (normalized.length > 0) {
+				block.text += normalized;
+				stream.push({ type: "text_delta", contentIndex: open.contentIndex, delta: normalized, partial: output });
+			}
 		}
 	} else if (delta?.toolUse && block?.type === "toolCall" && open?.arguments !== undefined) {
 		block.arguments = open.arguments.append(delta.toolUse.input || "");
@@ -755,7 +760,14 @@ function flushRedactedContent(open: OpenBlock, output: AssistantMessage): void {
 
 /** Ends the stream state of blocks a stream settled without stopping. */
 function flushOpenBlocks(openBlocks: OpenBlocks, output: AssistantMessage): void {
-	for (const open of openBlocks.values()) flushRedactedContent(open, output);
+	for (const open of openBlocks.values()) {
+		const block = output.content[open.contentIndex];
+		if (block?.type === "text" && open.ansiNormalizer) {
+			block.text += open.ansiNormalizer.flush();
+			open.ansiNormalizer.reset();
+		}
+		flushRedactedContent(open, output);
+	}
 	openBlocks.clear();
 }
 
@@ -791,9 +803,16 @@ function handleContentBlockStop(
 	const block = output.content[index]!;
 
 	switch (block.type) {
-		case "text":
+		case "text": {
+			const tail = open.ansiNormalizer?.flush() ?? "";
+			if (tail.length > 0) {
+				block.text += tail;
+				stream.push({ type: "text_delta", contentIndex: index, delta: tail, partial: output });
+			}
 			stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
+			open.ansiNormalizer?.reset();
 			break;
+		}
 		case "thinking":
 			flushRedactedContent(open, output);
 			stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: output });

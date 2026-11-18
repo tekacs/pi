@@ -33,7 +33,15 @@ export * from "./models-store.ts";
 export * from "./providers/faux.ts";
 export * from "./session-resources.ts";
 export * from "./types.ts";
+export {
+	isGoogleFamilyModel,
+	normalizeAssistantHistoryAnsi,
+	normalizeOutputAnsi,
+	OutputAnsiNormalizer,
+	type OutputAnsiNormalizerOptions,
+} from "./utils/ansi-sgr.ts";
 export * from "./utils/diagnostics.ts";
+export { StreamStalledError } from "./utils/error-body.ts";
 export * from "./utils/event-stream.ts";
 export * from "./utils/identity.ts";
 export * from "./utils/json-parse.ts";

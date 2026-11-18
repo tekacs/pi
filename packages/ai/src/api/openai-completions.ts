@@ -36,6 +36,7 @@ import type {
 	ToolResultMessage,
 } from "../types.ts";
 import { CACHE_CHECKPOINT } from "../types.ts";
+import { isGoogleFamilyModel, OutputAnsiNormalizer } from "../utils/ansi-sgr.ts";
 import { normalizeProviderError, ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
@@ -439,18 +440,32 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				property,
 				buffer: { input: "", started: false, closed: false },
 			});
+			const healBareSgr = isGoogleFamilyModel(model);
+			let textAnsiNormalizer: OutputAnsiNormalizer | null = null;
 			const finishBlock = (block: StreamingBlock) => {
 				const contentIndex = getContentIndex(block);
 				if (contentIndex === -1) {
 					return;
 				}
 				if (block.type === "text") {
+					const tail = textAnsiNormalizer?.flush() ?? "";
+					if (tail.length > 0) {
+						block.text += tail;
+						stream.push({
+							type: "text_delta",
+							contentIndex,
+							delta: tail,
+							partial: output,
+						});
+					}
 					stream.push({
 						type: "text_end",
 						contentIndex,
 						content: block.text,
 						partial: output,
 					});
+					textAnsiNormalizer?.reset();
+					textAnsiNormalizer = null;
 				} else if (block.type === "thinking") {
 					applyStreamedReasoningDetails(block);
 					stream.push({
@@ -486,6 +501,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			const ensureTextBlock = () => {
 				if (!textBlock) {
 					textBlock = { type: "text", text: "" };
+					textAnsiNormalizer = new OutputAnsiNormalizer({ healBareSgr });
 					blocks.push(textBlock);
 					stream.push({ type: "text_start", contentIndex: getContentIndex(textBlock), partial: output });
 				}
@@ -654,13 +670,16 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 						choice.delta.content.length > 0
 					) {
 						const block = ensureTextBlock();
-						block.text += choice.delta.content;
-						stream.push({
-							type: "text_delta",
-							contentIndex: getContentIndex(block),
-							delta: choice.delta.content,
-							partial: output,
-						});
+						const normalizedText = textAnsiNormalizer!.push(choice.delta.content);
+						if (normalizedText.length > 0) {
+							block.text += normalizedText;
+							stream.push({
+								type: "text_delta",
+								contentIndex: getContentIndex(block),
+								delta: normalizedText,
+								partial: output,
+							});
+						}
 					}
 
 					if (choice?.delta?.tool_calls) {

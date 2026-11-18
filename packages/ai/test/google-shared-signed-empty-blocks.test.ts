@@ -124,7 +124,7 @@ describe("google-shared convertMessages — signed empty blocks", () => {
 		expect(JSON.stringify(modelTurn)).not.toContain(VALID_SIG);
 	});
 
-	it("strips ANSI SGR and broken <0x1B>/space-prefixed SGR remnants from replayed Google history", () => {
+	it("replays assistant SGR as printable \\e[...m while stripping bare broken SGR remnants in Google history", () => {
 		const model = makeModel();
 		const contents = convertMessages(
 			model,
@@ -138,7 +138,50 @@ describe("google-shared convertMessages — signed empty blocks", () => {
 			),
 		);
 		const modelTurn = contents.find((c) => c.role === "model");
-		expect(modelTurn?.parts?.[0]?.text).toBe("Clean and Broken and  SpaceBroken ");
+		expect(modelTurn?.parts?.[0]?.text).toBe(
+			"\\e[1;38;2;134;239;172mClean\\e[0m and \\e[1;38;2;245;205;120mBroken\\e[0m and  SpaceBroken ",
+		);
+	});
+
+	it("strips raw ESC from tool results while preserving literal \\x1b[...] source code", () => {
+		const model = makeModel();
+		const now = Date.now();
+		const contents = convertMessages(
+			model,
+			normalizeContext({
+				messages: [
+					{ role: "user", content: "run", timestamp: now },
+					{
+						role: "assistant",
+						content: [{ type: "toolCall", id: "call_1", name: "bash", arguments: { command: "echo" } }],
+						api: model.api,
+						provider: model.provider,
+						model: model.id,
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: "toolUse",
+						timestamp: now,
+					},
+					{
+						role: "toolResult",
+						toolCallId: "call_1",
+						toolName: "bash",
+						content: [{ type: "text", text: '\u001b[31mFAIL\u001b[0m const s = "\\x1b[4m";' }],
+						isError: false,
+						timestamp: now,
+					},
+				],
+			}),
+		);
+		const toolTurn = contents.find((c) => c.parts?.some((p) => p.functionResponse));
+		const output = (toolTurn?.parts?.[0]?.functionResponse?.response as { output?: string } | undefined)?.output;
+		expect(output).toBe('FAIL const s = "\\x1b[4m";');
 	});
 
 	it("normalizes SentencePiece ESC+space+[ and malformed SGR prefixes in streamed Google output", () => {

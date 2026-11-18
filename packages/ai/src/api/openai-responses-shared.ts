@@ -30,6 +30,7 @@ import {
 	type TranscriptContext,
 	type Usage,
 } from "../types.ts";
+import { isGoogleFamilyModel, normalizeOutputAnsi, OutputAnsiNormalizer } from "../utils/ansi-sgr.ts";
 import { ProviderFailureError } from "../utils/error-body.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
@@ -530,7 +531,7 @@ type ToolCallInput =
 
 type ResponsesOutputSlot =
 	| { type: "thinking"; block: ThinkingContent; contentIndex: number; summaryPartCount: number }
-	| { type: "text"; block: TextContent; contentIndex: number }
+	| { type: "text"; block: TextContent; contentIndex: number; ansiNormalizer: OutputAnsiNormalizer }
 	| { type: "toolCall"; block: ToolCall; contentIndex: number; input: ToolCallInput };
 
 type ToolCallOutputSlot = Extract<ResponsesOutputSlot, { type: "toolCall" }>;
@@ -543,6 +544,7 @@ export async function processResponsesStream<TApi extends Api>(
 	options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
 	let sawTerminalResponseEvent = false;
+	const healBareSgr = isGoogleFamilyModel(model);
 	const outputSlots = new Map<number, ResponsesOutputSlot>();
 	// Tool calls whose output_item.done has not arrived yet.
 	const unfinishedToolCalls = new Set<ToolCall>();
@@ -586,7 +588,12 @@ export async function processResponsesStream<TApi extends Api>(
 			applyMessagePhaseStopReason(item);
 			const block: TextContent = { type: "text", text: "" };
 			output.content.push(block);
-			const slot = { type: "text", block, contentIndex: output.content.length - 1 } satisfies ResponsesOutputSlot;
+			const slot = {
+				type: "text",
+				block,
+				contentIndex: output.content.length - 1,
+				ansiNormalizer: new OutputAnsiNormalizer({ healBareSgr }),
+			} satisfies ResponsesOutputSlot;
 			outputSlots.set(outputIndex, slot);
 			stream.push({ type: "text_start", contentIndex: slot.contentIndex, partial: output });
 			return slot;
@@ -745,23 +752,29 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.output_text.delta") {
 			const slot = getSlot(event.output_index, "text");
 			if (!slot) continue;
-			slot.block.text += event.delta;
-			stream.push({
-				type: "text_delta",
-				contentIndex: slot.contentIndex,
-				delta: event.delta,
-				partial: output,
-			});
+			const normalized = slot.ansiNormalizer.push(event.delta);
+			if (normalized.length > 0) {
+				slot.block.text += normalized;
+				stream.push({
+					type: "text_delta",
+					contentIndex: slot.contentIndex,
+					delta: normalized,
+					partial: output,
+				});
+			}
 		} else if (event.type === "response.refusal.delta") {
 			const slot = getSlot(event.output_index, "text");
 			if (!slot) continue;
-			slot.block.text += event.delta;
-			stream.push({
-				type: "text_delta",
-				contentIndex: slot.contentIndex,
-				delta: event.delta,
-				partial: output,
-			});
+			const normalized = slot.ansiNormalizer.push(event.delta);
+			if (normalized.length > 0) {
+				slot.block.text += normalized;
+				stream.push({
+					type: "text_delta",
+					contentIndex: slot.contentIndex,
+					delta: normalized,
+					partial: output,
+				});
+			}
 		} else if (event.type === "response.function_call_arguments.delta") {
 			const slot = getSlot(event.output_index, "toolCall");
 			if (slot?.input.kind !== "json") continue;
@@ -802,7 +815,19 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 				outputSlots.delete(event.output_index);
 			} else if (item.type === "message" && slot?.type === "text") {
-				slot.block.text = item.content?.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("") || "";
+				const tail = slot.ansiNormalizer.flush();
+				if (tail.length > 0) {
+					slot.block.text += tail;
+					stream.push({
+						type: "text_delta",
+						contentIndex: slot.contentIndex,
+						delta: tail,
+						partial: output,
+					});
+				}
+				const rawFinalText =
+					item.content?.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("") || "";
+				slot.block.text = normalizeOutputAnsi(rawFinalText, { healBareSgr });
 				slot.block.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
 				stream.push({
 					type: "text_end",
@@ -810,6 +835,7 @@ export async function processResponsesStream<TApi extends Api>(
 					content: slot.block.text,
 					partial: output,
 				});
+				slot.ansiNormalizer.reset();
 				outputSlots.delete(event.output_index);
 			} else if (item.type === "function_call" && slot?.type === "toolCall" && slot.input.kind === "json") {
 				if (item.arguments) slot.input.arguments.replace(item.arguments);

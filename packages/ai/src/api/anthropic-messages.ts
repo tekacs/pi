@@ -37,6 +37,7 @@ import type {
 	ToolResultMessage,
 } from "../types.ts";
 import { CACHE_CHECKPOINT } from "../types.ts";
+import { OutputAnsiNormalizer } from "../utils/ansi-sgr.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { normalizeProviderError, ProviderFailureError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
@@ -946,7 +947,10 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			stream.push({ type: "start", partial: output });
 
 			// Stream state per Anthropic block index, kept off the content blocks so it never reaches partials.
-			const openBlocks = new Map<number, { contentIndex: number; arguments?: ToolCallArgumentsStream }>();
+			const openBlocks = new Map<
+				number,
+				{ contentIndex: number; arguments?: ToolCallArgumentsStream; ansiNormalizer?: OutputAnsiNormalizer }
+			>();
 			const openBlock = (anthropicIndex: number) => {
 				const open = openBlocks.get(anthropicIndex);
 				return open === undefined ? undefined : { ...open, block: output.content[open.contentIndex]! };
@@ -986,8 +990,10 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 						continue;
 					}
 					if (event.content_block.type === "text") {
-						output.content.push({ type: "text", text: event.content_block.text ?? "" });
-						openBlocks.set(event.index, { contentIndex: output.content.length - 1 });
+						const ansiNormalizer = new OutputAnsiNormalizer();
+						const initialText = event.content_block.text ? ansiNormalizer.push(event.content_block.text) : "";
+						output.content.push({ type: "text", text: initialText });
+						openBlocks.set(event.index, { contentIndex: output.content.length - 1, ansiNormalizer });
 						stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
 					} else if (event.content_block.type === "thinking") {
 						output.content.push({
@@ -1025,13 +1031,18 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					const open = openBlock(event.index);
 					if (event.delta.type === "text_delta") {
 						if (open?.block.type === "text") {
-							open.block.text += event.delta.text;
-							stream.push({
-								type: "text_delta",
-								contentIndex: open.contentIndex,
-								delta: event.delta.text,
-								partial: output,
-							});
+							const normalized = open.ansiNormalizer
+								? open.ansiNormalizer.push(event.delta.text)
+								: event.delta.text;
+							if (normalized.length > 0) {
+								open.block.text += normalized;
+								stream.push({
+									type: "text_delta",
+									contentIndex: open.contentIndex,
+									delta: normalized,
+									partial: output,
+								});
+							}
 						}
 					} else if (event.delta.type === "thinking_delta") {
 						if (open?.block.type === "thinking") {
@@ -1065,12 +1076,23 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					if (open) {
 						const { block, contentIndex: index } = open;
 						if (block.type === "text") {
+							const tail = open.ansiNormalizer?.flush() ?? "";
+							if (tail.length > 0) {
+								block.text += tail;
+								stream.push({
+									type: "text_delta",
+									contentIndex: index,
+									delta: tail,
+									partial: output,
+								});
+							}
 							stream.push({
 								type: "text_end",
 								contentIndex: index,
 								content: block.text,
 								partial: output,
 							});
+							open.ansiNormalizer?.reset();
 						} else if (block.type === "thinking") {
 							stream.push({
 								type: "thinking_end",

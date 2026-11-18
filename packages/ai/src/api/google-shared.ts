@@ -25,6 +25,7 @@ import type {
 	TranscriptContext,
 	Usage,
 } from "../types.ts";
+import { normalizeOutputAnsi, OutputAnsiNormalizer } from "../utils/ansi-sgr.ts";
 import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { collapseSystemMessages, withoutInitialSystemMessage } from "../utils/transcript.ts";
@@ -181,25 +182,32 @@ const base64SignaturePattern = /^[A-Za-z0-9+/]+={0,2}$/;
 // Google's Gemini API input preprocessor replaces raw ESC (0x1B) bytes in replayed
 // conversation history and tool outputs with ASCII spaces (0x20), leaving broken
 // "[1;38;2;...m" skeletons in context that the model then imitates on later turns.
+// Assistant SGR sequences are already normalized to printable `\e[...m` in transformMessages,
+// so this strips only raw ESC/CSI control bytes, `<0x1B>` remnants, and bare broken SGR
+// skeletons while preserving printable `\e[...m` and literal `\x1b[...]` in code/tool output.
 const googleHistoryAnsiPattern =
-	/(?:\u001b+(?:<0x1[bB]>| )*|\u009b|<0x1[bB]>|\\x1[bB]|\\u001[bB])\[[0-9;:]*[A-Za-z]|(?<=^|[\s(])\[(?:0|[12](?:;[0-9;:]+)?|[34]8;2;[0-9;]+)m/gm;
+	/(?:\u001b+(?:<0x1[bB]>| )*|\u009b|<0x1[bB]>)\[[0-9;:]*[A-Za-z]|(?<=^|[\s(])\[(?:0|[12](?:;[0-9;:]+)?|[34]8;2;[0-9;]+)m/gm;
 
 function sanitizeGoogleHistoryText(text: string): string {
 	return sanitizeSurrogates(text).replace(googleHistoryAnsiPattern, "");
 }
 
-const googleSplitEscPrefixPattern = /^(?:<0x1[bB]>|\u001b| )+(?=\[[0-9;:]*m)/;
-const googleMalformedAnsiOutputPattern =
-	/(?:\u001b+(?:<0x1[bB]>| )*|<0x1[bB]>|\\x1[bB]|\\u001[bB])\[(?=[0-9;:]*m)|(?<=^|[\s(])\[(?=(?:0|[12](?:;[0-9;:]+)?|[34]8;2;[0-9;]+)m)/gm;
+export { OutputAnsiNormalizer };
 
 /**
- * Normalize Gemini streamed text when SentencePiece detokenizes `<0x1B>` + `▁[`
- * as `\x1b [` (ESC + space + `[`) or when the model emits `<0x1B>[`, `\x1b\x1b[`,
- * or bare SGR brackets after input-preprocessor stripping.
+ * Normalize Google/Gemini text output: translates printable `\e[...m` outside code
+ * fences and inline backticks to `\x1b[...m` and heals malformed raw-ESC / SentencePiece
+ * SGR glitches without doubling `<ESC><ESC>[`.
+ *
+ * Streaming callers should prefer a per-block {@link OutputAnsiNormalizer} so sequences
+ * and code fences split across chunks are buffered cleanly.
  */
 export function normalizeGoogleOutputAnsi(delta: string, previousText = ""): string {
-	const joined = previousText.endsWith("\u001b") ? delta.replace(googleSplitEscPrefixPattern, "") : delta;
-	return joined.replace(googleMalformedAnsiOutputPattern, "\u001b[");
+	if (previousText.endsWith("\u001b")) {
+		const normalized = normalizeOutputAnsi(`\u001b${delta}`, { healBareSgr: true });
+		return normalized.startsWith("\u001b") ? normalized.slice(1) : normalized;
+	}
+	return normalizeOutputAnsi(delta, { healBareSgr: true });
 }
 
 function isValidThoughtSignature(signature: string | undefined): boolean {

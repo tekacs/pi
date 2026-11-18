@@ -8,6 +8,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import { normalizeAssistantHistoryAnsi } from "../utils/ansi-sgr.ts";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
@@ -138,10 +139,13 @@ export function transformMessages<TApi extends Api>(
 				}
 
 				if (block.type === "text") {
-					if (isSameModel) return block;
+					const normalizedText = normalizeAssistantHistoryAnsi(block.text);
+					if (isSameModel) {
+						return normalizedText === block.text ? block : { ...block, text: normalizedText };
+					}
 					return {
 						type: "text" as const,
-						text: block.text,
+						text: normalizedText,
 					};
 				}
 

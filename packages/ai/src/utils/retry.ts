@@ -104,6 +104,7 @@ const TRANSIENT_CODES = new Set([
 	"modeltimeoutexception",
 	"modelnotreadyexception",
 	"modelstreamerrorexception",
+	"stream_stalled",
 	"econnreset",
 	"econnrefused",
 	"etimedout",
@@ -139,6 +140,7 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"upstream.?request.?failed",
 	"upstream_stream_read_error",
 	"stream was interrupted",
+	"stream stalled",
 	"http/?2 stream failed",
 
 	// Network, proxy, and fetch transport failures. This includes OpenAI Codex

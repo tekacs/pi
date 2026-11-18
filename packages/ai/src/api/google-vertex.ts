@@ -22,7 +22,9 @@ import type {
 	ToolCall,
 	TranscriptContext,
 } from "../types.ts";
-import { ProviderFailureError, setProviderError } from "../utils/error-body.ts";
+import { type CombinedAbortSignal, combineAbortSignals } from "../utils/abort-signals.ts";
+import { OutputAnsiNormalizer } from "../utils/ansi-sgr.ts";
+import { ProviderFailureError, StreamStalledError, setProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
@@ -40,7 +42,6 @@ import {
 	getDisabledGoogleThinkingConfig,
 	isThinkingPart,
 	mapStopReason,
-	normalizeGoogleOutputAnsi,
 	resolveGoogleFunctionCallingMode,
 	resolveGoogleThinkingLevel,
 	retainThoughtSignature,
@@ -52,6 +53,11 @@ import {
 } from "./google-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
+export { StreamStalledError };
+
+/** Default per-chunk idle watchdog for Google Vertex SSE streams (60 seconds). */
+export const DEFAULT_VERTEX_STREAM_STALL_TIMEOUT_MS = 60_000;
+
 export interface GoogleVertexOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "any";
 	thinking?: {
@@ -61,6 +67,13 @@ export interface GoogleVertexOptions extends StreamOptions {
 	};
 	project?: string;
 	location?: string;
+	/**
+	 * Per-chunk idle watchdog timeout in milliseconds after HTTP response headers are received.
+	 * If no SSE frame arrives within this window, the stalled fetch is aborted with a retryable
+	 * {@link StreamStalledError}. Set to `0` to disable. Defaults to
+	 * `PI_VERTEX_STREAM_STALL_TIMEOUT_MS` or {@link DEFAULT_VERTEX_STREAM_STALL_TIMEOUT_MS} (60s).
+	 */
+	streamStallTimeoutMs?: number;
 }
 
 const API_VERSION = "v1";
@@ -96,7 +109,17 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			timestamp: Date.now(),
 		};
 
+		const stallController = new AbortController();
+		let combinedSignal: CombinedAbortSignal = {
+			signal: options?.signal,
+			cleanup: () => {},
+		};
+
 		try {
+			const streamStallTimeoutMs = resolveStreamStallTimeoutMs(options);
+			if (streamStallTimeoutMs > 0) {
+				combinedSignal = combineAbortSignals([options?.signal, stallController.signal]);
+			}
 			if (options?.fetch && options.fetch !== globalThis.fetch) {
 				throw new Error("Custom fetch is not supported by the Google Vertex adapter");
 			}
@@ -115,7 +138,9 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						sessionAffinityId,
 					);
 			const currentTools = getCurrentTools(normalizedContext.messages);
-			let params = buildParams(model, normalizedContext, options);
+			const paramsOptions =
+				combinedSignal.signal === options?.signal ? options : { ...options, signal: combinedSignal.signal };
+			let params = buildParams(model, normalizedContext, paramsOptions);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as GenerateContentParameters;
@@ -124,6 +149,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 
 			stream.push({ type: "start", partial: output });
 			let currentBlock: TextContent | ThinkingContent | null = null;
+			let currentTextNormalizer: OutputAnsiNormalizer | null = null;
 			let openToolCall: {
 				toolCall: ToolCall;
 				contentIndex: number;
@@ -135,12 +161,24 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			const closeCurrentBlock = () => {
 				if (!currentBlock) return;
 				if (currentBlock.type === "text") {
+					const tail = currentTextNormalizer?.flush() ?? "";
+					if (tail.length > 0) {
+						currentBlock.text += tail;
+						stream.push({
+							type: "text_delta",
+							contentIndex: blockIndex(),
+							delta: tail,
+							partial: output,
+						});
+					}
 					stream.push({
 						type: "text_end",
 						contentIndex: blockIndex(),
 						content: currentBlock.text,
 						partial: output,
 					});
+					currentTextNormalizer?.reset();
+					currentTextNormalizer = null;
 				} else {
 					stream.push({
 						type: "thinking_end",
@@ -167,7 +205,12 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 				}
 				stream.push({ type: "toolcall_end", contentIndex, toolCall, partial: output });
 			};
-			for await (const chunk of googleStream) {
+			for await (const chunk of iterateWithIdleWatchdog(
+				googleStream,
+				streamStallTimeoutMs,
+				(stallError) => stallController.abort(stallError),
+				options?.signal,
+			)) {
 				await options?.onProviderStreamEvent?.(chunk, model);
 				// Vertex uses the same @google/genai GenerateContentResponse type as Gemini.
 				// responseId is documented there as an output-only identifier for each response.
@@ -182,29 +225,14 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 								(isThinking && currentBlock.type !== "thinking") ||
 								(!isThinking && currentBlock.type !== "text")
 							) {
-								if (currentBlock) {
-									if (currentBlock.type === "text") {
-										stream.push({
-											type: "text_end",
-											contentIndex: blocks.length - 1,
-											content: currentBlock.text,
-											partial: output,
-										});
-									} else {
-										stream.push({
-											type: "thinking_end",
-											contentIndex: blockIndex(),
-											content: currentBlock.thinking,
-											partial: output,
-										});
-									}
-								}
+								closeCurrentBlock();
 								if (isThinking) {
 									currentBlock = { type: "thinking", thinking: "", thinkingSignature: undefined };
 									output.content.push(currentBlock);
 									stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
 								} else {
 									currentBlock = { type: "text", text: "" };
+									currentTextNormalizer = new OutputAnsiNormalizer({ healBareSgr: true });
 									output.content.push(currentBlock);
 									stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
 								}
@@ -222,18 +250,20 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 									partial: output,
 								});
 							} else {
-								const normalizedText = normalizeGoogleOutputAnsi(part.text, currentBlock.text);
-								currentBlock.text += normalizedText;
+								const normalizedText = currentTextNormalizer!.push(part.text);
 								currentBlock.textSignature = retainThoughtSignature(
 									currentBlock.textSignature,
 									part.thoughtSignature,
 								);
-								stream.push({
-									type: "text_delta",
-									contentIndex: blockIndex(),
-									delta: normalizedText,
-									partial: output,
-								});
+								if (normalizedText.length > 0) {
+									currentBlock.text += normalizedText;
+									stream.push({
+										type: "text_delta",
+										contentIndex: blockIndex(),
+										delta: normalizedText,
+										partial: output,
+									});
+								}
 							}
 						}
 
@@ -403,6 +433,8 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			setProviderError(output, error);
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			combinedSignal.cleanup();
 		}
 	})();
 
@@ -684,4 +716,80 @@ function getGoogleBudget(
 	}
 
 	return -1;
+}
+
+function resolveStreamStallTimeoutMs(options?: GoogleVertexOptions): number {
+	if (options?.streamStallTimeoutMs !== undefined) {
+		if (!Number.isFinite(options.streamStallTimeoutMs) || options.streamStallTimeoutMs < 0) {
+			throw new Error(`Invalid streamStallTimeoutMs: ${String(options.streamStallTimeoutMs)}`);
+		}
+		return Math.floor(options.streamStallTimeoutMs);
+	}
+	const envValue = getProviderEnvValue("PI_VERTEX_STREAM_STALL_TIMEOUT_MS", options?.env);
+	if (envValue !== undefined) {
+		const trimmed = envValue.trim();
+		if (trimmed.length > 0) {
+			const parsed = Number(trimmed);
+			if (Number.isFinite(parsed) && parsed >= 0) {
+				return Math.floor(parsed);
+			}
+		}
+	}
+	return DEFAULT_VERTEX_STREAM_STALL_TIMEOUT_MS;
+}
+
+async function* iterateWithIdleWatchdog<T>(
+	iterable: AsyncIterable<T>,
+	timeoutMs: number,
+	onStall: (error: StreamStalledError) => void,
+	callerSignal?: AbortSignal,
+): AsyncGenerator<T> {
+	if (timeoutMs <= 0) {
+		yield* iterable;
+		return;
+	}
+	const iterator = iterable[Symbol.asyncIterator]();
+	let stalledError: StreamStalledError | undefined;
+	try {
+		for (;;) {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const nextPromise = iterator.next();
+			const stallPromise = new Promise<never>((_, reject) => {
+				timer = setTimeout(() => {
+					stalledError = new StreamStalledError(
+						timeoutMs,
+						`Google Vertex stream stalled after ${timeoutMs}ms without receiving data`,
+					);
+					onStall(stalledError);
+					reject(stalledError);
+				}, timeoutMs);
+				timer.unref?.();
+			});
+			let result: IteratorResult<T>;
+			try {
+				result = await Promise.race([nextPromise, stallPromise]);
+			} catch (error) {
+				// Avoid unhandled rejection if the underlying read rejects after stallPromise already won.
+				nextPromise.catch(() => {});
+				if (stalledError && !callerSignal?.aborted) {
+					throw stalledError;
+				}
+				throw error;
+			} finally {
+				if (timer !== undefined) {
+					clearTimeout(timer);
+				}
+			}
+			if (result.done) {
+				return;
+			}
+			yield result.value;
+		}
+	} finally {
+		if (stalledError) {
+			void iterator.return?.().catch(() => {});
+		} else {
+			await iterator.return?.().catch(() => {});
+		}
+	}
 }
