@@ -30,8 +30,8 @@ export interface CacheWarmingDecision {
 /** Streaming warming never continues past this long after the real request that started it. */
 export const CACHE_WARMING_MAX_AGE_MS = 60 * 60_000;
 
-/** Idle warming uses a shorter horizon because continuation estimates become less reliable with age. */
-export const CACHE_WARMING_MAX_IDLE_AGE_MS = 30 * 60_000;
+/** Idle warming uses a shorter horizon (15 minutes by default) so parked sessions stop warming. */
+export const CACHE_WARMING_MAX_IDLE_AGE_MS = 15 * 60_000;
 
 /** A refresh is sent only when it is expected to save at least this many dollars. */
 export const CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS = 0.05;

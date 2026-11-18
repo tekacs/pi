@@ -687,6 +687,12 @@
       "description": "Cache-warming profile. \"idle\" also warms between agent runs. Global only because each refresh costs money.",
       "default": "idle"
     },
+    "cacheWarmingMaxIdleMs": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Maximum duration in milliseconds to keep warming a parked idle session after its last real turn (default: 900000 / 15 minutes; 0 stops immediately on settle). Global only because each refresh costs money.",
+      "default": 900000
+    },
     "websocketConnectTimeoutMs": {
       "anyOf": [
         {

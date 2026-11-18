@@ -75,6 +75,8 @@ interface ActiveRun extends CacheWarmRequest {
 	/** Latest safe time to send this refresh, leaving half the original expiry margin. */
 	refreshDeadlineAt: number;
 	startedAt: number;
+	/** Baseline timestamp for the idle safety window, refreshed when an active turn settles. */
+	lastActivityAt: number;
 	controller: AbortController;
 	phase: "streaming" | "idle";
 	nextWarmAt: number;
@@ -82,6 +84,14 @@ interface ActiveRun extends CacheWarmRequest {
 	extensionOverride: boolean;
 	consecutiveMisses: number;
 	timer?: ReturnType<typeof setTimeout>;
+}
+
+function formatIdleLimitReason(maxIdleAgeMs: number): string {
+	if (maxIdleAgeMs <= 0) return "idle cache warming cutoff reached";
+	if (maxIdleAgeMs % 60_000 === 0) {
+		return `${maxIdleAgeMs / 60_000}-minute idle safety limit reached`;
+	}
+	return `${Math.round(maxIdleAgeMs / 1000)}-second idle safety limit reached`;
 }
 
 /**
@@ -97,6 +107,8 @@ export class CacheWarmer {
 	private readonly getMode: () => CacheWarmingMode;
 	/** Lets extensions override `event.action`; failures fall back to pi's decision. */
 	private readonly decide: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingAction>;
+	/** Maximum time after the last real turn that idle warming continues before stopping. */
+	private readonly getMaxIdleAgeMs: () => number;
 	/** Called with the persisted usage entry after each successful refresh. */
 	onWarmed?: (entry: UsageEntry) => void;
 
@@ -105,11 +117,13 @@ export class CacheWarmer {
 		sessionManager: Pick<SessionManager, "appendUsage" | "getBranch">,
 		getMode: () => CacheWarmingMode,
 		decide: (event: CacheWarmingDecisionEvent) => Promise<CacheWarmingAction> = async (event) => event.action,
+		getMaxIdleAgeMs: () => number = () => CACHE_WARMING_MAX_IDLE_AGE_MS,
 	) {
 		this.models = models;
 		this.sessionManager = sessionManager;
 		this.getMode = getMode;
 		this.decide = decide;
+		this.getMaxIdleAgeMs = getMaxIdleAgeMs;
 		this.inactive = { state: "inactive", reason: "waiting for first request" };
 	}
 
@@ -118,6 +132,8 @@ export class CacheWarmer {
 		const run = this.run;
 		if (!run) return this.inactive;
 		if (!run.isCurrent()) return { state: "inactive", reason: "conversation context changed" };
+		const idleLimitReason = this.getIdleCutoffReason(run, Date.now(), Date.now());
+		if (idleLimitReason) return { state: "inactive", reason: idleLimitReason };
 		const decision = this.evaluate(run);
 		const refreshing = run.timer === undefined;
 		if (!decision.economicsAvailable && !refreshing) {
@@ -159,13 +175,15 @@ export class CacheWarmer {
 			this.stop("cache lifetime unavailable");
 			return;
 		}
+		const now = Date.now();
 		this.run = {
 			...request,
 			isCurrent,
 			ttlMs,
 			delayMs,
 			refreshDeadlineAt: 0,
-			startedAt: Date.now(),
+			startedAt: now,
+			lastActivityAt: now,
 			controller: new AbortController(),
 			phase: "streaming",
 			nextWarmAt: 0,
@@ -182,10 +200,15 @@ export class CacheWarmer {
 			this.stop("agent run settled");
 			return;
 		}
+		const now = Date.now();
+		const wasStreaming = run.phase === "streaming";
 		run.phase = "idle";
-		const deadline = run.startedAt + CACHE_WARMING_MAX_IDLE_AGE_MS;
-		if (run.nextWarmAt > deadline || Date.now() >= deadline) {
-			this.stop("30-minute idle safety limit reached");
+		if (wasStreaming && this.resolveMaxIdleAgeMs() > 0) {
+			run.lastActivityAt = now;
+		}
+		const idleLimitReason = this.getIdleCutoffReason(run, now, run.nextWarmAt);
+		if (idleLimitReason) {
+			this.stop(idleLimitReason);
 		}
 	}
 
@@ -193,7 +216,7 @@ export class CacheWarmer {
 	onModeChanged(): void {
 		const run = this.run;
 		if (!run) return;
-		const reason = this.getModeStopReason(run);
+		const reason = this.getModeStopReason(run) ?? this.getIdleCutoffReason(run, Date.now(), run.nextWarmAt);
 		if (reason) this.stop(reason);
 	}
 
@@ -216,16 +239,24 @@ export class CacheWarmer {
 
 	private schedule(run: ActiveRun): void {
 		run.extensionOverride = false;
-		run.nextWarmAt = Date.now() + run.delayMs;
+		const now = Date.now();
+		run.nextWarmAt = now + run.delayMs;
 		// A timer can run late after sleep or event-loop blockage. Keep half of
 		// the planned pre-expiry margin for that delay and request dispatch; a
 		// late refresh is likely a full-price cache write, not a cache warm.
 		run.refreshDeadlineAt = run.nextWarmAt + Math.floor((run.ttlMs - run.delayMs) / 2);
-		const deadline =
-			run.startedAt + (run.phase === "idle" ? CACHE_WARMING_MAX_IDLE_AGE_MS : CACHE_WARMING_MAX_AGE_MS);
-		if (run.nextWarmAt > deadline || Date.now() >= deadline) {
-			this.stop(run.phase === "idle" ? "30-minute idle safety limit reached" : "one-hour safety limit reached");
-			return;
+		if (run.phase === "idle") {
+			const idleLimitReason = this.getIdleCutoffReason(run, now, run.nextWarmAt);
+			if (idleLimitReason) {
+				this.stop(idleLimitReason);
+				return;
+			}
+		} else {
+			const deadline = run.startedAt + CACHE_WARMING_MAX_AGE_MS;
+			if (run.nextWarmAt > deadline || now >= deadline) {
+				this.stop("one-hour safety limit reached");
+				return;
+			}
 		}
 		run.timer = setTimeout(() => void this.refresh(run), Math.max(0, run.nextWarmAt - Date.now()));
 		run.timer.unref?.();
@@ -298,9 +329,31 @@ export class CacheWarmer {
 		return true;
 	}
 
+	private resolveMaxIdleAgeMs(): number {
+		const configured = this.getMaxIdleAgeMs();
+		if (!Number.isFinite(configured) || configured < 0) {
+			return CACHE_WARMING_MAX_IDLE_AGE_MS;
+		}
+		return Math.floor(configured);
+	}
+
+	private getIdleCutoffReason(run: ActiveRun, now: number, targetTime: number): string | undefined {
+		if (run.phase !== "idle") return undefined;
+		const maxIdleAgeMs = this.resolveMaxIdleAgeMs();
+		const deadline = run.lastActivityAt + maxIdleAgeMs;
+		if (targetTime > deadline || now >= deadline) {
+			return formatIdleLimitReason(maxIdleAgeMs);
+		}
+		return undefined;
+	}
+
 	private validateRun(run: ActiveRun): boolean {
 		if (this.run !== run) return false;
-		const reason = this.getModeStopReason(run) ?? (!run.isCurrent() ? "conversation context changed" : undefined);
+		const now = Date.now();
+		const reason =
+			this.getModeStopReason(run) ??
+			(!run.isCurrent() ? "conversation context changed" : undefined) ??
+			this.getIdleCutoffReason(run, now, now);
 		if (!reason) return true;
 		this.stop(reason);
 		return false;

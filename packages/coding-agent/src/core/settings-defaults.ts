@@ -1,3 +1,4 @@
+import { CACHE_WARMING_MAX_IDLE_AGE_MS } from "@earendil-works/pi-ai";
 import { DEFAULT_MAX_AGENT_RETRY_DELAY_MS } from "@earendil-works/pi-ai/utils/retry";
 
 /** Runtime defaults shared by settings accessors and the published JSON Schema. */
@@ -59,6 +60,7 @@ export const SETTINGS_DEFAULTS = {
 		inlineBudget: 3000,
 	},
 	cacheWarming: "idle",
+	cacheWarmingMaxIdleMs: CACHE_WARMING_MAX_IDLE_AGE_MS,
 	tuiMode: "fullscreen",
 	fullscreenExitOutput: "transcript",
 	fullscreenScrollbar: "auto",

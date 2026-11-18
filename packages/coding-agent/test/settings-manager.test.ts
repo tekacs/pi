@@ -432,6 +432,39 @@ describe("SettingsManager", () => {
 			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("off");
 			expect(JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"))).toEqual({ cacheWarming: "off" });
 		});
+
+		it("defaults cacheWarmingMaxIdleMs to 15 minutes, ignores project settings, and lets env override global", async () => {
+			const originalEnv = process.env.PI_CACHE_WARMING_MAX_IDLE_MS;
+			delete process.env.PI_CACHE_WARMING_MAX_IDLE_MS;
+			try {
+				expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMaxIdleMs()).toBe(15 * 60_000);
+
+				writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ cacheWarmingMaxIdleMs: 60_000 }));
+				expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMaxIdleMs()).toBe(15 * 60_000);
+
+				const manager = SettingsManager.create(projectDir, agentDir);
+				manager.setCacheWarmingMaxIdleMs(300_000);
+				await manager.flush();
+				expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMaxIdleMs()).toBe(300_000);
+
+				// Environment variable overrides configured global setting (including 0).
+				process.env.PI_CACHE_WARMING_MAX_IDLE_MS = "120000";
+				expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMaxIdleMs()).toBe(120_000);
+
+				process.env.PI_CACHE_WARMING_MAX_IDLE_MS = "0";
+				expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMaxIdleMs()).toBe(0);
+
+				// Invalid env values fall back to the configured global setting.
+				process.env.PI_CACHE_WARMING_MAX_IDLE_MS = "-5";
+				expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMaxIdleMs()).toBe(300_000);
+
+				process.env.PI_CACHE_WARMING_MAX_IDLE_MS = "not-a-number";
+				expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMaxIdleMs()).toBe(300_000);
+			} finally {
+				if (originalEnv === undefined) delete process.env.PI_CACHE_WARMING_MAX_IDLE_MS;
+				else process.env.PI_CACHE_WARMING_MAX_IDLE_MS = originalEnv;
+			}
+		});
 	});
 
 	describe("externalEditor", () => {

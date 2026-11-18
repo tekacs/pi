@@ -87,6 +87,7 @@ function fakeRuntime(
 		decide?: (event: CacheWarmingDecisionEvent) => CacheWarmingAction | Promise<CacheWarmingAction>;
 		mode?: CacheWarmingMode;
 		branch?: SessionEntry[];
+		maxIdleAgeMs?: number;
 	} = {},
 ) {
 	const calls: Array<{ model: Model<Api>; options: ModelsSimpleStreamOptions | undefined }> = [];
@@ -94,7 +95,11 @@ function fakeRuntime(
 	const warmedEntries: UsageEntry[] = [];
 	const usageManager = SessionManager.inMemory();
 	const appendUsage = vi.fn(usageManager.appendUsage.bind(usageManager));
-	const state = { mode: options.mode ?? "idle", branch: options.branch ?? branchWithPrompt(100_000) };
+	const state = {
+		mode: options.mode ?? "idle",
+		branch: options.branch ?? branchWithPrompt(100_000),
+		maxIdleAgeMs: options.maxIdleAgeMs,
+	};
 	const warmer = new CacheWarmer(
 		{
 			streamSimple: (model, _context, streamOptions) => {
@@ -110,6 +115,7 @@ function fakeRuntime(
 			events.push(event);
 			return options.decide?.(event) ?? event.action;
 		},
+		state.maxIdleAgeMs === undefined ? undefined : () => state.maxIdleAgeMs!,
 	);
 	warmer.onWarmed = (entry) => warmedEntries.push(entry);
 	return { warmer, calls, events, warmedEntries, appendUsage, state };
@@ -425,6 +431,100 @@ describe("cache warming", () => {
 		expect(formatCacheWarmingUsage(entry.usage.cost.total, entry.note)).toBe(
 			"Cache warmed (extension override): $0.029497",
 		);
+	});
+
+	it("stops idle warming at the default 15-minute cutoff while keeping active streaming sessions warm and resuming on the next turn", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+
+		// Active streaming session keeps warming past 15 minutes (4 refreshes at 4.5m, 9m, 13.5m, 18m).
+		const active = fakeRuntime({ branch: branchWithPrompt(400_000) });
+		active.warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(20 * 60_000);
+		expect(active.calls).toHaveLength(4);
+		expect(active.warmer.status.state).toBe("scheduled");
+		active.warmer.cancel();
+
+		// Idle parked session warms only within the 15-minute idle cutoff (at 4.5m, 9m, 13.5m),
+		// then stops once the next warm (18m) would exceed 15m.
+		const parked = fakeRuntime({ branch: branchWithPrompt(400_000) });
+		parked.warmer.start(request(), current);
+		parked.warmer.onAgentSettled();
+		await vi.advanceTimersByTimeAsync(60 * 60_000);
+		expect(parked.calls).toHaveLength(3);
+		expect(parked.warmer.status).toEqual({
+			state: "inactive",
+			reason: "15-minute idle safety limit reached",
+		});
+
+		// Next real turn resumes warming automatically.
+		parked.warmer.start(request(), current);
+		expect(parked.warmer.status.state).toBe("scheduled");
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(parked.calls).toHaveLength(4);
+		parked.warmer.cancel();
+	});
+
+	it("respects custom idle cutoffs including zero and rejects late timers past the cutoff", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+
+		const custom = fakeRuntime({ branch: branchWithPrompt(400_000), maxIdleAgeMs: 10 * 60_000 });
+		custom.warmer.start(request(), current);
+		custom.warmer.onAgentSettled();
+		// 4.5m and 9m fit within 10m; 13.5m exceeds 10m.
+		await vi.advanceTimersByTimeAsync(30 * 60_000);
+		expect(custom.calls).toHaveLength(2);
+		expect(custom.warmer.status).toEqual({
+			state: "inactive",
+			reason: "10-minute idle safety limit reached",
+		});
+
+		const zeroIdle = fakeRuntime({ branch: branchWithPrompt(400_000), maxIdleAgeMs: 0 });
+		zeroIdle.warmer.start(request(), current);
+		zeroIdle.warmer.onAgentSettled();
+		expect(zeroIdle.warmer.status).toEqual({
+			state: "inactive",
+			reason: "idle cache warming cutoff reached",
+		});
+		await vi.advanceTimersByTimeAsync(10 * 60_000);
+		expect(zeroIdle.calls).toHaveLength(0);
+	});
+
+	it("measures the idle cutoff from when a long turn settles rather than when the turn started", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(0);
+
+		const longTurn = fakeRuntime({ branch: branchWithPrompt(400_000) });
+		longTurn.warmer.start(request(), current);
+
+		// Simulate an 18-minute active streaming turn (4 streaming warms at 4.5m, 9m, 13.5m, 18m).
+		await vi.advanceTimersByTimeAsync(18 * 60_000);
+		expect(longTurn.calls).toHaveLength(4);
+		expect(longTurn.warmer.status.state).toBe("scheduled");
+
+		// Settling at 18m refreshes the idle baseline so the 15-minute idle cutoff starts at 18m.
+		longTurn.warmer.onAgentSettled();
+		expect(longTurn.warmer.status.state).toBe("scheduled");
+
+		// Post-settle idle warms occur at 22.5m, 27m, and 31.5m (within 18m + 15m = 33m), then stop.
+		await vi.advanceTimersByTimeAsync(30 * 60_000);
+		expect(longTurn.calls).toHaveLength(7);
+		expect(longTurn.warmer.status).toEqual({
+			state: "inactive",
+			reason: "15-minute idle safety limit reached",
+		});
+
+		// With maxIdleAgeMs = 0, settling after an 18-minute turn still stops immediately.
+		const zeroAfterLongTurn = fakeRuntime({ branch: branchWithPrompt(400_000), maxIdleAgeMs: 0 });
+		zeroAfterLongTurn.warmer.start(request(), current);
+		await vi.advanceTimersByTimeAsync(18 * 60_000);
+		expect(zeroAfterLongTurn.calls).toHaveLength(4);
+		zeroAfterLongTurn.warmer.onAgentSettled();
+		expect(zeroAfterLongTurn.warmer.status).toEqual({
+			state: "inactive",
+			reason: "idle cache warming cutoff reached",
+		});
 	});
 });
 

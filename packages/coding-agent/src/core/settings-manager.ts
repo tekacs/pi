@@ -950,6 +950,31 @@ export class SettingsManager {
 		this.save();
 	}
 
+	/** Read from PI_CACHE_WARMING_MAX_IDLE_MS env override or global settings because warming costs money. */
+	getCacheWarmingMaxIdleMs(): number {
+		const envValue = process.env.PI_CACHE_WARMING_MAX_IDLE_MS?.trim();
+		if (envValue) {
+			const parsed = Number(envValue);
+			if (Number.isFinite(parsed) && parsed >= 0) {
+				return Math.floor(parsed);
+			}
+		}
+		const configured = this.globalSettings.cacheWarmingMaxIdleMs;
+		if (typeof configured === "number" && Number.isFinite(configured) && configured >= 0) {
+			return Math.floor(configured);
+		}
+		return SETTINGS_DEFAULTS.cacheWarmingMaxIdleMs;
+	}
+
+	setCacheWarmingMaxIdleMs(maxIdleMs: number): void {
+		if (!Number.isFinite(maxIdleMs) || maxIdleMs < 0) {
+			throw new Error(`Invalid cacheWarmingMaxIdleMs setting: ${String(maxIdleMs)}`);
+		}
+		this.globalSettings.cacheWarmingMaxIdleMs = Math.floor(maxIdleMs);
+		this.markModified("cacheWarmingMaxIdleMs");
+		this.save();
+	}
+
 	getProviderRetrySettings(): { timeoutMs?: number; maxRetries?: number; maxRetryDelayMs: number } {
 		return {
 			timeoutMs: this.settings.retry?.provider?.timeoutMs,

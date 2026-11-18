@@ -418,6 +418,14 @@ export const SettingsSchema = Type.Object(
 				default: SETTINGS_DEFAULTS.cacheWarming,
 			}),
 		),
+		cacheWarmingMaxIdleMs: Type.Optional(
+			Type.Number({
+				minimum: 0,
+				description:
+					"Maximum duration in milliseconds to keep warming a parked idle session after its last real turn (default: 900000 / 15 minutes; 0 stops immediately on settle). Global only because each refresh costs money.",
+				default: SETTINGS_DEFAULTS.cacheWarmingMaxIdleMs,
+			}),
+		),
 		websocketConnectTimeoutMs: Type.Optional(
 			timeoutSetting({
 				description: 'WebSocket connect or open handshake timeout in milliseconds; 0 or "disabled" disables it.',
