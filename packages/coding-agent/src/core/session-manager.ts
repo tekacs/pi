@@ -33,7 +33,7 @@ import { createInterface } from "readline";
 import { StringDecoder } from "string_decoder";
 import { APP_NAME, getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, pathsEqual, resolvePath } from "../utils/paths.ts";
-import { applyContextProjections } from "./context-projection.ts";
+import { applyContextProjections, getLatestChangedProjectionIndex } from "./context-projection.ts";
 import {
 	type BashExecutionMessage,
 	type CustomMessage,
@@ -581,6 +581,21 @@ export function buildSessionProjection(
 	for (const entry of contextEntries) {
 		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
 	}
+	// Usage measures the prefix as it existed when the provider answered. A later
+	// edit invalidates responses between its target and the edit, not earlier
+	// responses (in particular, not the baseline before an omitted retry).
+	const changedFrame = getLatestChangedProjectionIndex(path);
+	const positions = new Map(path.map((entry, index) => [entry.id, index]));
+	const stale = new Set<string>();
+	let editedFrom = Infinity;
+	for (let i = path.length - 1; i >= 0; i--) {
+		const entry = path[i];
+		if (entry.type === "compaction") editedFrom = 0;
+		if (entry.type === "context_edit") editedFrom = Math.min(editedFrom, positions.get(entry.targetId) ?? Infinity);
+		if (entry.type === "message" && entry.message.role === "assistant" && (i <= changedFrame || i >= editedFrom)) {
+			stale.add(entry.id);
+		}
+	}
 	const projectedEntries = contextEntries.map(
 		(sourceEntry, index): ProjectedSessionEntry => ({
 			sourceEntry,
@@ -590,9 +605,17 @@ export function buildSessionProjection(
 			messages:
 				sourceEntry.type === "compaction" && index > 0
 					? []
-					: projectContextEntry(sourceEntry, edits.get(sourceEntry.id)).map((message) =>
-							sourceEntry[CACHE_CHECKPOINT] ? { ...message, [CACHE_CHECKPOINT]: true as const } : message,
-						),
+					: projectContextEntry(sourceEntry, edits.get(sourceEntry.id)).map((message) => {
+							if (
+								message.role === "assistant" &&
+								(stale.has(sourceEntry.id) ||
+									!positions.has(sourceEntry.id) ||
+									path[positions.get(sourceEntry.id)!].type !== "message")
+							) {
+								message = { ...message, usage: { ...message.usage, contextTokens: 0 } };
+							}
+							return sourceEntry[CACHE_CHECKPOINT] ? { ...message, [CACHE_CHECKPOINT]: true as const } : message;
+						}),
 		}),
 	);
 	return {

@@ -52,7 +52,7 @@ export function isProjectionEntry(entry: SessionEntry): entry is CustomEntry<Con
 
 /**
  * Index of the newest accepted `pi.context-projection` frame in `entries`, or -1 when none
- * applies or when every latest frame duplicates its predecessor's fingerprint/directives.
+ * applies. Repeating a frame preserves the boundary of the original change.
  */
 export function getLatestChangedProjectionIndex(entries: SessionEntry[]): number {
 	const history = new Map<string, ProjectionVersion[]>();
@@ -73,9 +73,12 @@ export function getLatestChangedProjectionIndex(entries: SessionEntry[]): number
 		.map((versions) => versions.at(-1)!)
 		.sort((left, right) => right.index - left.index);
 
-	for (const frame of latestFrames) {
-		const versions = history.get(frame.data.key) ?? [];
-		const previous = versions.at(-2);
+	for (const latest of latestFrames) {
+		const versions = history.get(latest.data.key)!;
+		let start = versions.length - 1;
+		while (start > 0 && signature(versions[start - 1].data) === signature(latest.data)) start--;
+		const frame = versions[start];
+		const previous = versions[start - 1];
 		const changed = !previous || signature(previous.data) !== signature(frame.data);
 		const previousEffective =
 			previous?.data.directives.some(

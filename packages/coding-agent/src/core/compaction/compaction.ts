@@ -24,7 +24,6 @@ import type {
 	Usage,
 } from "@earendil-works/pi-ai/compat";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
-import { getLatestChangedProjectionIndex } from "../context-projection.ts";
 import { convertToLlm } from "../messages.ts";
 import {
 	buildSessionProjection,
@@ -232,44 +231,10 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
  */
 export function estimateProjectedContextTokens(
 	projection: SessionProjection,
-	branchEntries: SessionEntry[],
+	_branchEntries: SessionEntry[],
 ): ContextUsageEstimate {
 	const estimate = estimateContextTokens(projection.messages);
-	if (estimate.lastUsageIndex !== null) {
-		let projectedMessageIndex = 0;
-		let usageEntryId: string | undefined;
-		for (const entry of projection.entries) {
-			const nextMessageIndex = projectedMessageIndex + entry.messages.length;
-			if (estimate.lastUsageIndex < nextMessageIndex) {
-				usageEntryId = entry.sourceEntry.id;
-				break;
-			}
-			projectedMessageIndex = nextMessageIndex;
-		}
-
-		const positions = new Map(branchEntries.map((entry, index) => [entry.id, index]));
-		const usageEntryIndex = usageEntryId === undefined ? -1 : (positions.get(usageEntryId) ?? -1);
-		let latestInvalidatingEntryIndex = getLatestChangedProjectionIndex(branchEntries);
-		for (let i = branchEntries.length - 1; i > latestInvalidatingEntryIndex; i--) {
-			const entry = branchEntries[i];
-			if (entry.type === "compaction") {
-				latestInvalidatingEntryIndex = i;
-				break;
-			}
-			if (entry.type !== "context_edit") continue;
-			const targetIndex = positions.get(entry.targetId);
-			if (entry.replacement === null && targetIndex !== undefined && targetIndex > usageEntryIndex) {
-				const target = branchEntries[targetIndex];
-				if (target?.type === "message") {
-					if (target.message.role === "assistant" && getAssistantUsage(target.message) === undefined) continue;
-					if (target.message.role === "toolResult") continue;
-				}
-			}
-			latestInvalidatingEntryIndex = i;
-			break;
-		}
-		if (usageEntryIndex > latestInvalidatingEntryIndex) return estimate;
-	}
+	if (estimate.lastUsageIndex !== null) return estimate;
 
 	const currentSystem = getCurrentSystemMessage(projection.messages);
 	let tokens = currentSystem ? estimateTokens(currentSystem) : 0;

@@ -205,6 +205,10 @@ describe("session context edits", () => {
 		const assistantId = session.appendMessage(response);
 		session.appendContextEdit(largeUserId, null);
 
+		expect(session.buildSessionContext().messages[0]).toMatchObject({
+			usage: { totalTokens: 10_001, contextTokens: 0 },
+		});
+		expect(response.usage.contextTokens).toBeUndefined();
 		const editedEstimate = estimateProjectedContextTokens(session.buildSessionProjection(), session.getBranch());
 		expect(editedEstimate.usageTokens).toBe(0);
 		expect(editedEstimate.tokens).toBeLessThan(100);
