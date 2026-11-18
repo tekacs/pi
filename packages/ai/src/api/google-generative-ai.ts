@@ -428,38 +428,39 @@ function getGoogleBudget(
 	level: ResolvedGoogleThinkingLevel,
 	customBudgets?: ThinkingBudgets,
 ): number {
-	if (customBudgets?.[level] !== undefined) {
-		return customBudgets[level]!;
+	const budgetLevel: keyof ThinkingBudgets = level === "xhigh" ? "high" : level;
+	if (customBudgets?.[budgetLevel] !== undefined) {
+		return customBudgets[budgetLevel]!;
 	}
 
 	if (model.id.includes("2.5-pro")) {
-		const budgets: Record<ResolvedGoogleThinkingLevel, number> = {
+		const budgets: Record<keyof ThinkingBudgets, number> = {
 			minimal: 128,
 			low: 2048,
 			medium: 8192,
 			high: 32768,
 		};
-		return budgets[level];
+		return budgets[budgetLevel];
 	}
 
 	if (model.id.includes("2.5-flash-lite")) {
-		const budgets: Record<ResolvedGoogleThinkingLevel, number> = {
+		const budgets: Record<keyof ThinkingBudgets, number> = {
 			minimal: 512,
 			low: 2048,
 			medium: 8192,
 			high: 24576,
 		};
-		return budgets[level];
+		return budgets[budgetLevel];
 	}
 
 	if (model.id.includes("2.5-flash")) {
-		const budgets: Record<ResolvedGoogleThinkingLevel, number> = {
+		const budgets: Record<keyof ThinkingBudgets, number> = {
 			minimal: 128,
 			low: 2048,
 			medium: 8192,
 			high: 24576,
 		};
-		return budgets[level];
+		return budgets[budgetLevel];
 	}
 
 	return -1;

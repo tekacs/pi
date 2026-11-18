@@ -104,6 +104,7 @@ describe("Google thinking level maps", () => {
 			low: "low",
 			medium: "medium",
 			high: "high",
+			xhigh: "xhigh",
 		} as const satisfies Partial<Record<ThinkingLevel, ThinkingLevel>>;
 		for (const [level, expected] of Object.entries(defaultExpectations)) {
 			expect(resolveGoogleThinkingLevel(googleModel("gemini-3.7-flash", {}), level as ThinkingLevel)).toBe(expected);
@@ -114,10 +115,12 @@ describe("Google thinking level maps", () => {
 			low: "low",
 			medium: "medium",
 			high: "high",
+			xhigh: "xhigh",
 			MINIMAL: "minimal",
 			LOW: "low",
 			MEDIUM: "medium",
 			HIGH: "high",
+			XHIGH: "xhigh",
 		} as const;
 		for (const [mapped, expected] of Object.entries(mappedExpectations)) {
 			const model = googleModel("gemini-3.7-flash", { high: mapped, xhigh: mapped, max: mapped });
@@ -158,6 +161,18 @@ describe("Google thinking level maps", () => {
 		);
 
 		expect(payload.config?.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: "MEDIUM" });
+	});
+
+	it.each(googleAdapters)("sends native XHIGH thinkingLevel for Gemini 4 Neon/Hydrogen on $name", async ({ capture }) => {
+		for (const id of ["gemini-4-neon", "gemini-4-hydrogen"]) {
+			const payload = await capture(
+				id,
+				{ off: null, minimal: null, low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: null },
+				"xhigh",
+			);
+
+			expect(payload.config?.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: "XHIGH" });
+		}
 	});
 
 	it.each(googleAdapters)("uses discrete thinkingLevel for Gemini 4 Argon on $name", async ({ capture }) => {
